@@ -10,7 +10,8 @@ func dimensions(_ v: SIMD3<Float>) -> [Float] { [v.x, v.y, v.z] }
 struct OwnedRoom: Codable, Identifiable { let id: String; let name: String }
 struct Element: Codable { let id: String; let category: String; let dimensions: [Float]; let transform: [Float] }
 struct FrameRecord: Codable { let timestamp: Double; let image: String; let depth: String?; let confidence: String?; let width: Int; let height: Int; let depthWidth: Int?; let depthHeight: Int?; let intrinsics: [Float]; let transform: [Float] }
-struct Asset: Codable { let name: String; var mediaRef: String; let kind: String }
+struct Registration: Codable { let sessionId: String; var source = "arkit-calibrated"; var transform = matrix(matrix_identity_float4x4) }
+struct Asset: Codable { let name: String; var mediaRef: String; let kind: String; var registration: Registration? = nil; var reconstructionMethod: String? = nil }
 struct Manifest: Codable { var version = 1; let sessionId: String; var coordinateSystem = "arkit-right-handed-y-up-metres"; var elements: [Element]; var frames: [FrameRecord]; var assets: [Asset] }
 
 @MainActor final class CaptureModel: NSObject, ObservableObject, @preconcurrency RoomCaptureViewDelegate {
@@ -68,6 +69,7 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
     private var lastTimestamp: Double = -1
     private var frames: [FrameRecord] = []
     private var assets: [Asset] = []
+    private let splatBuilder = DepthSplatBuilder()
     private var manifest: Manifest?
     private(set) var directory: URL?
     override init() { super.init(); view.delegate = self }
@@ -79,6 +81,7 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
             let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(UUID().uuidString)
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             inspectionId = ""; manifest = nil; frameCount = 0; depthCount = 0; featureCount = 0; processing = false; directory = dir; frames = []; assets = []; startTime = nil; lastTimestamp = -1; ready = false
+            splatBuilder.reset()
             view.captureSession.run(configuration: RoomCaptureSession.Configuration())
             // Read the current frame without replacing RoomPlan's ARSession delegate.
             timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in Task { @MainActor in self?.recordFrame() } }
@@ -99,6 +102,7 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
         lastTimestamp = frame.timestamp
         let index = String(format: "%04d", frames.count), imageName = "frame-\(index).jpg"
         do {
+            splatBuilder.add(frame: frame)
             let image = CIImage(cvPixelBuffer: frame.capturedImage)
             guard let jpeg = context.jpegRepresentation(of: image, colorSpace: CGColorSpaceCreateDeviceRGB(), options: [:]) else { return }
             try jpeg.write(to: dir.appendingPathComponent(imageName))
@@ -132,12 +136,39 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
         guard error == nil, let dir = directory else { status = "RoomPlan could not finish this scan."; return }
         do {
             try processedResult.export(to: dir.appendingPathComponent("room.usdz"), exportOptions: .parametric)
-            assets.append(Asset(name: "room.usdz", mediaRef: "", kind: "usdz"))
+            // Keep the parametric export locally; the default cloud scene is a compact splat.
+            if try splatBuilder.write(to: dir.appendingPathComponent("room-preview.ply")) {
+                assets.append(Asset(name: "room-preview.ply", mediaRef: "", kind: "splat", registration: Registration(sessionId: processedResult.identifier.uuidString), reconstructionMethod: "lidar-initialized"))
+            }
             let surfaces = processedResult.walls + processedResult.doors + processedResult.windows + processedResult.openings + processedResult.floors
             let elements = surfaces.map { Element(id: $0.identifier.uuidString, category: String(describing: $0.category), dimensions: dimensions($0.dimensions), transform: matrix($0.transform)) } + processedResult.objects.map { Element(id: $0.identifier.uuidString, category: String(describing: $0.category), dimensions: dimensions($0.dimensions), transform: matrix($0.transform)) }
-            manifest = Manifest(sessionId: processedResult.identifier.uuidString, elements: elements, frames: frames, assets: assets)
+            // Retain the full calibrated capture on the phone for later training/export.
+            let original = Manifest(sessionId: processedResult.identifier.uuidString, elements: elements, frames: frames, assets: assets + [Asset(name: "room.usdz", mediaRef: "", kind: "usdz")])
+            try JSONEncoder().encode(original).write(to: dir.appendingPathComponent("original-manifest.json"))
+            // Twenty-four evenly spaced evidence samples bound upload cost without changing their timestamps.
+            let count = min(24, frames.count)
+            let indices = count > 1 ? (0..<count).map { $0 * (frames.count - 1) / (count - 1) } : Array(0..<count)
+            var evidence: [FrameRecord] = []
+            var cloudAssets = assets.filter { $0.kind == "splat" }
+            for i in indices {
+                let f = frames[i], name = "evidence-" + f.image
+                guard let source = CIImage(contentsOf: dir.appendingPathComponent(f.image)) else { throw CocoaError(.fileReadCorruptFile) }
+                let scale = min(1, 1280 / max(source.extent.width, source.extent.height))
+                let image = source.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+                guard let jpeg = context.jpegRepresentation(of: image, colorSpace: CGColorSpaceCreateDeviceRGB(), options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.78]) else { throw CocoaError(.fileWriteUnknown) }
+                try jpeg.write(to: dir.appendingPathComponent(name))
+                // Use the actual encoded dimensions when updating the camera calibration.
+                guard let encoded = CIImage(data: jpeg) else { throw CocoaError(.fileReadCorruptFile) }
+                let width = Int(encoded.extent.width), height = Int(encoded.extent.height)
+                var intrinsics = f.intrinsics
+                for column in 0..<3 { intrinsics[column * 3] *= Float(width) / Float(f.width); intrinsics[column * 3 + 1] *= Float(height) / Float(f.height) }
+                evidence.append(FrameRecord(timestamp: f.timestamp, image: name, depth: f.depth, confidence: f.confidence, width: width, height: height, depthWidth: f.depthWidth, depthHeight: f.depthHeight, intrinsics: intrinsics, transform: f.transform))
+                cloudAssets.append(Asset(name: name, mediaRef: "", kind: "image"))
+                cloudAssets.append(contentsOf: assets.filter { $0.name == f.depth || $0.name == f.confidence })
+            }
+            manifest = Manifest(sessionId: processedResult.identifier.uuidString, elements: elements, frames: evidence, assets: cloudAssets)
             try JSONEncoder().encode(manifest).write(to: dir.appendingPathComponent("manifest.json"))
-            ready = true; status = "Captured \(elements.count) elements, \(frames.count) calibrated images. Depth available for \(frames.filter { $0.depth != nil }.count) frames."
+            ready = true; status = "Ready: \(evidence.count) evidence samples and \(splatBuilder.count) LiDAR splats. Full-resolution capture stays on this phone."
         } catch { status = "Could not export the captured geometry." }
     }
     private func httpFailure(_ response: URLResponse, data: Data) -> NSError {
@@ -194,24 +225,108 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
             return (try JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
         }
         do {
-            for i in m.assets.indices {
-                status = "Uploading private asset \(i + 1)/\(m.assets.count)…"
-                let asset = m.assets[i]
-                if asset.mediaRef.hasPrefix("gridfs:") { continue }
+            let pending = m.assets.indices.filter { !m.assets[$0].mediaRef.hasPrefix("gridfs:") }
+            let totalBytes = m.assets.reduce(0) { sum, asset in sum + ((try? dir.appendingPathComponent(asset.name).resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) }
+            var completedCount = m.assets.count - pending.count
+            // Four independent assets at a time. Chunks within each asset remain ordered.
+            var uploadError: Error?
+            await withTaskGroup(of: Result<(Int, String), Error>.self) { group in
+                var next = 0
+                func enqueue(_ i: Int) {
+                    let asset = m.assets[i]
+                    group.addTask { @MainActor in
+                        do {
                 let data = try Data(contentsOf: dir.appendingPathComponent(asset.name)), contentType = asset.kind == "image" ? "image/jpeg" : asset.kind == "usdz" ? "model/vnd.usdz+zip" : "application/octet-stream"
                 let initData = try JSONSerialization.data(withJSONObject: ["filename": asset.name, "contentType": contentType, "size": data.count])
                 let upload = try await request(uploadPath, data: initData)
                 guard let id = upload["uploadId"] as? String, let chunkSize = upload["chunkSize"] as? Int else { throw CocoaError(.fileWriteUnknown) }
                 for offset in stride(from: 0, to: data.count, by: chunkSize) {
                     var req = URLRequest(url: URL(string: "\(uploadPath)?uploadId=\(id)&part=\(offset / chunkSize)", relativeTo: base.appendingPathComponent("/"))!); req.httpMethod = "PATCH"; req.httpBody = data.subdata(in: offset..<min(data.count, offset + chunkSize)); req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type"); req.setValue(base.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")), forHTTPHeaderField: "Origin"); for (key, value) in cookieHeader { req.setValue(value, forHTTPHeaderField: key) }
-                    let (responseBody, response) = try await session.data(for: req); guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw httpFailure(response, data: responseBody) }
+                    let (responseBody, response) = try await session.data(for: req); guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw self.httpFailure(response, data: responseBody) }
                 }
                 let completed = try await request(uploadPath, data: JSONSerialization.data(withJSONObject: ["action": "complete", "uploadId": id]))
-                guard let ref = completed["url"] as? String else { throw CocoaError(.fileWriteUnknown) }; m.assets[i].mediaRef = ref; manifest = m
-                try JSONEncoder().encode(m).write(to: dir.appendingPathComponent("manifest.json"))
+                        guard let ref = completed["url"] as? String else { throw CocoaError(.fileWriteUnknown) }
+                        return .success((i, ref))
+                        } catch { return .failure(error) }
+                    }
+                }
+                while next < min(4, pending.count) { enqueue(pending[next]); next += 1 }
+                for await result in group {
+                    guard case .success(let (i, ref)) = result else {
+                        if case .failure(let error) = result { uploadError = error }; continue
+                    }
+                    m.assets[i].mediaRef = ref; manifest = m; completedCount += 1
+                    do { try JSONEncoder().encode(m).write(to: dir.appendingPathComponent("manifest.json"), options: .atomic) } catch { uploadError = error }
+                    status = "Uploading \(completedCount)/\(m.assets.count) files · \(totalBytes / 1024 / 1024) MB total"
+                    if uploadError == nil, next < pending.count { enqueue(pending[next]); next += 1 }
+                }
             }
+            if let uploadError { throw uploadError }
             _ = try await request(pairedSession.isEmpty ? "api/inspections/\(inspectionId)/spatial" : "api/live/\(pairedSession)/spatial", data: JSONEncoder().encode(m))
             status = "Capture saved. Open this inspection's Spatial review in Dwelld."; manifest = m
         } catch { status = "Upload: \(error.localizedDescription). Local capture is retained; retry resumes saved assets." }
+    }
+}
+
+/// A bounded, depth-initialized Gaussian preview, not a photometrically trained reconstruction.
+/// Every center and color comes from a high-confidence LiDAR sample and its calibrated RGB frame.
+private final class DepthSplatBuilder {
+    private struct Sample { let point: SIMD3<Float>; let color: SIMD3<Float>; let radius: Float }
+    private var samples: [SIMD3<Int32>: Sample] = [:]
+    var count: Int { samples.count }
+    func reset() { samples.removeAll(keepingCapacity: true) }
+    func add(frame: ARFrame) {
+        guard case .normal = frame.camera.trackingState,
+              let depth = frame.sceneDepth ?? frame.smoothedSceneDepth,
+              let confidence = depth.confidenceMap else { return }
+        let map = depth.depthMap, rgb = frame.capturedImage
+        guard CVPixelBufferGetPlaneCount(rgb) == 2 else { return }
+        for buffer in [map, confidence, rgb] { CVPixelBufferLockBaseAddress(buffer, .readOnly) }
+        defer { for buffer in [map, confidence, rgb] { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) } }
+        guard let db = CVPixelBufferGetBaseAddress(map), let cb = CVPixelBufferGetBaseAddress(confidence),
+              let yb = CVPixelBufferGetBaseAddressOfPlane(rgb, 0), let uvb = CVPixelBufferGetBaseAddressOfPlane(rgb, 1) else { return }
+        let width = CVPixelBufferGetWidth(map), height = CVPixelBufferGetHeight(map)
+        let rgbWidth = CVPixelBufferGetWidth(rgb), rgbHeight = CVPixelBufferGetHeight(rgb)
+        let k = frame.camera.intrinsics, transform = frame.camera.transform
+        let sx = Float(rgbWidth) / Float(width), sy = Float(rgbHeight) / Float(height)
+        let videoRange = CVPixelBufferGetPixelFormatType(rgb) == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+        for y in stride(from: 1, to: height - 1, by: 3) {
+            let row = db.advanced(by: y * CVPixelBufferGetBytesPerRow(map)).assumingMemoryBound(to: Float.self)
+            let confidenceRow = cb.advanced(by: y * CVPixelBufferGetBytesPerRow(confidence)).assumingMemoryBound(to: UInt8.self)
+            for x in stride(from: 1, to: width - 1, by: 3) {
+                let z = row[x]
+                guard confidenceRow[x] == 2, z.isFinite, z > 0.2, z < 6 else { continue }
+                // Avoid spreading foreground colors across depth discontinuities.
+                guard abs(row[x - 1] - z) < 0.08, abs(row[x + 1] - z) < 0.08 else { continue }
+                let u = (Float(x) + 0.5) * sx, v = (Float(y) + 0.5) * sy
+                let p = transform * SIMD4<Float>((u - k.columns.2.x) * z / k.columns.0.x, -(v - k.columns.2.y) * z / k.columns.1.y, -z, 1)
+                let point = SIMD3<Float>(p.x, p.y, p.z)
+                guard point.x.isFinite, point.y.isFinite, point.z.isFinite else { continue }
+                let cell = SIMD3<Int32>(Int32(floor(point.x / 0.025)), Int32(floor(point.y / 0.025)), Int32(floor(point.z / 0.025)))
+                guard samples[cell] == nil, samples.count < 150000 else { continue }
+                let px = min(rgbWidth - 1, Int(u)), py = min(rgbHeight - 1, Int(v))
+                let rawY = Float(yb.advanced(by: py * CVPixelBufferGetBytesPerRowOfPlane(rgb, 0) + px).load(as: UInt8.self))
+                let uv = uvb.advanced(by: (py / 2) * CVPixelBufferGetBytesPerRowOfPlane(rgb, 1) + (px / 2) * 2).assumingMemoryBound(to: UInt8.self)
+                let luma = videoRange ? (rawY - 16) / 219 : rawY / 255
+                let chromaScale: Float = videoRange ? 224 : 255
+                let blue = (Float(uv[0]) - 128) / chromaScale, red = (Float(uv[1]) - 128) / chromaScale
+                let color = SIMD3<Float>(luma + 1.402 * red, luma - 0.344136 * blue - 0.714136 * red, luma + 1.772 * blue)
+                samples[cell] = Sample(point: point, color: simd_clamp(color, SIMD3<Float>(repeating: 0), SIMD3<Float>(repeating: 1)), radius: min(0.035, max(0.008, z * sx * 1.2 / k.columns.0.x)))
+            }
+        }
+    }
+    func write(to url: URL) throws -> Bool {
+        guard !samples.isEmpty else { return false }
+        let fields = ["x", "y", "z", "f_dc_0", "f_dc_1", "f_dc_2", "opacity", "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3"]
+        var data = Data(("ply\nformat binary_little_endian 1.0\ncomment Dwelld LiDAR-initialized preview; not photometrically optimized\nelement vertex \(samples.count)\n" + fields.map { "property float \($0)\n" }.joined() + "end_header\n").utf8)
+        data.reserveCapacity(data.count + samples.count * 56)
+        for sample in samples.values {
+            let dc = (sample.color - SIMD3<Float>(repeating: 0.5)) / 0.2820947918
+            let scale = log(sample.radius)
+            let values: [Float] = [sample.point.x, sample.point.y, sample.point.z, dc.x, dc.y, dc.z, 2.2, scale, scale, scale, 1, 0, 0, 0]
+            for value in values { var bits = value.bitPattern.littleEndian; withUnsafeBytes(of: &bits) { data.append(contentsOf: $0) } }
+        }
+        try data.write(to: url, options: .atomic)
+        return true
     }
 }

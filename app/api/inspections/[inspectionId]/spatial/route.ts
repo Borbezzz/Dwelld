@@ -52,7 +52,13 @@ export async function PATCH(request: Request, { params }: Context) {
     if (!capture) return NextResponse.json({ error: "Import a capture first" }, { status: 409 });
     let aligned;
     try { aligned = registration(b.registration, capture.manifest.sessionId); } catch { return NextResponse.json({ error: "Invalid registration for this scan session" }, { status: 400 }); }
-    const result = await db.collection("spatialCaptures").updateOne({ inspectionId: inspection._id, "manifest.assets.name": { $ne: b.name }, "manifest.assets.kind": { $ne: "splat" } }, { $push: { "manifest.assets": { name: b.name, mediaRef: b.mediaRef, kind: "splat", ...(aligned ? { registration: aligned } : {}) } }, $set: { reconstructionAddedAt: new Date() } } as never);
+    const previous = capture.manifest.assets.find((a: {kind:string}) => a.kind === "splat");
+    if (previous && previous.reconstructionMethod !== "lidar-initialized") return NextResponse.json({error:"A trained reconstruction already exists"},{status:409});
+    const asset = {name:b.name,mediaRef:b.mediaRef,kind:"splat",reconstructionMethod:"trained",...(aligned ? {registration:aligned} : {})};
+    // Replace only an untrained preview; keep its reference in history and preserve the scan origin.
+    const result = previous
+      ? await db.collection("spatialCaptures").updateOne({inspectionId:inspection._id,"manifest.assets":{$elemMatch:{name:previous.name,mediaRef:previous.mediaRef,reconstructionMethod:"lidar-initialized"}},"manifest.assets.name":{$ne:b.name}},{$set:{"manifest.assets.$":asset,reconstructionAddedAt:new Date()},$push:{reconstructionHistory:previous}} as never)
+      : await db.collection("spatialCaptures").updateOne({ inspectionId: inspection._id, "manifest.assets.name": { $ne: b.name }, "manifest.assets.kind": { $ne: "splat" } }, { $push: { "manifest.assets": asset }, $set: { reconstructionAddedAt: new Date() } } as never);
     if (!result.modifiedCount) return NextResponse.json({ error: "Capture missing or a reconstruction already exists" }, { status: 409 });
     return NextResponse.json({ saved: true });
   } catch (e) { return errorResponse(e, "spatial.reconstruction"); }

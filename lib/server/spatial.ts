@@ -30,6 +30,6 @@ export function validateManifest(raw: unknown): SpatialManifest {
     version: 1, sessionId: m.sessionId, coordinateSystem: m.coordinateSystem,
     elements: m.elements.map(e => ({ id: e.id, category: e.category, dimensions: [...e.dimensions] as Vec3, transform: [...e.transform] })),
     frames: m.frames.map(f => ({ timestamp: f.timestamp, image: f.image, ...(f.depth ? { depth: f.depth, depthWidth: f.depthWidth, depthHeight: f.depthHeight } : {}), ...(f.confidence ? { confidence: f.confidence } : {}), width: f.width, height: f.height, intrinsics: [...f.intrinsics], transform: [...f.transform] })),
-    assets: m.assets.map(a => ({ name: a.name, mediaRef: a.mediaRef, kind: a.kind, ...(a.kind === "splat" && a.registration ? { registration: registration(a.registration, m.sessionId) } : {}) })),
+    assets: m.assets.map(a => ({ name: a.name, mediaRef: a.mediaRef, kind: a.kind, ...(a.kind === "splat" && a.reconstructionMethod === "lidar-initialized" ? { reconstructionMethod: "lidar-initialized" as const } : {}), ...(a.kind === "splat" && a.registration ? { registration: registration(a.registration, m.sessionId) } : {}) })),
   };
 }
