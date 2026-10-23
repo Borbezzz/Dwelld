@@ -16,6 +16,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ ins
     const serializedFindings = findings.map((f) => ({
       id: String(f._id), kind: f.kind, label: f.label, description: f.description,
       timestampSeconds: f.timestampSeconds, evidenceFrameUrl: f.evidenceFrameUrl,
+      detectionSource: f.detectionSource === "yolo" || f.detectionSource === "gemini" ? f.detectionSource : undefined,
       boundingBox: f.boundingBox ?? null, point: f.point ?? null, source: f.source ?? "ai", damageType: f.damageType ?? null, reviewStatus: f.reviewStatus, uncertain: !f.boundingBox && !f.point,
       objectId: f.objectId ? String(f.objectId) : null, objectLabel: f.objectLabel ?? null,
     }));
@@ -25,6 +26,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ ins
         createdAt: new Date(inspection.createdAt).toISOString(),
         videoUrl: "/api/inspections/" + String(inspection._id) + "/video",
         durationSeconds: inspection.durationSeconds ?? null,
+        analysisWarnings: inspection.analysisWarnings ?? [],
         error: inspection.status === "failed" ? "Video analysis failed. Check service configuration and retry with a supported video." : null,
       },
       findings: serializedFindings,

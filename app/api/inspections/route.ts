@@ -1,4 +1,5 @@
 import { ObjectId } from "mongodb";
+import { parseMediaId, getMediaFile } from "@/lib/server/media";
 import { after, NextResponse } from "next/server";
 import { getDb, ensureIndexes, parseObjectId } from "@/lib/server/db";
 import { analyzeVideo, validateDetectionFrames } from "@/lib/server/inspection";
@@ -46,17 +47,12 @@ export async function POST(request: Request) {
     if (!["video/mp4", "video/webm", "video/quicktime", "video/x-msvideo", "video/mpeg"].includes(mimeType)) {
       return NextResponse.json({ error: "Unsupported video format" }, { status: 415 });
     }
-    try {
-      const source = new URL(videoUrl);
-      if (source.protocol !== "https:" || !source.hostname.endsWith(".private.blob.vercel-storage.com") ||
-          source.username || source.password || source.port || source.search || source.hash || source.pathname.length <= 1) throw new Error();
-      decodeURIComponent(source.pathname);
-    } catch {
-      return NextResponse.json({ error: "Video URL must refer to a private Vercel Blob upload" }, { status: 400 });
+    if (!parseMediaId(videoUrl)) return NextResponse.json({ error: "Video must refer to a MongoDB media upload" }, { status: 400 });
+    if (!process.env.GEMINI_API_KEY) {
+      return NextResponse.json({ error: "Video inspection is unavailable: Gemini is not configured" }, { status: 503 });
     }
-    if (!process.env.GEMINI_API_KEY || !process.env.BLOB_READ_WRITE_TOKEN) {
-      return NextResponse.json({ error: "Video inspection is unavailable: Gemini or media storage is not configured" }, { status: 503 });
-    }
+    const media = await getMediaFile(videoUrl);
+    if (!media || media.metadata?.contentType !== mimeType) return NextResponse.json({ error: "Uploaded video not found or content type mismatch" }, { status: 400 });
     let detectionFrames;
     try { detectionFrames = validateDetectionFrames(body.detectionFrames); }
     catch { return NextResponse.json({ error: "Invalid browser detection frames" }, { status: 400 }); }
@@ -88,7 +84,7 @@ export async function POST(request: Request) {
           source: "ai", reviewStatus: "pending", reviewHistory: [], createdAt: new Date(),
         }));
         if (docs.length) await db.collection("findings").insertMany(docs);
-        await inspections.updateOne({ _id: inspectionId }, { $set: { status: "completed", durationSeconds: result.durationSeconds, completedAt: new Date() } });
+        await inspections.updateOne({ _id: inspectionId }, { $set: { status: result.warnings.length ? "partial" : "completed", analysisWarnings: result.warnings, durationSeconds: result.durationSeconds, completedAt: new Date() } });
       } catch (error) {
         const message = "Video analysis failed. Check service configuration and retry with a supported video.";
         await inspections.updateOne({ _id: inspectionId }, { $set: { status: "failed", error: message, failedAt: new Date() } });

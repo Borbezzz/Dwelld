@@ -1,10 +1,10 @@
 "use client";
 import Link from "next/link";
-import { upload } from "@vercel/blob/client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowLeft, Camera, Circle, CloudUpload, FileVideo2, LoaderCircle, Pause, Play, RotateCcw, ShieldCheck, Sparkles, StopCircle, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { detectVideoFrames } from "@/lib/client/video-detection";
+import { MAX_VIDEO_BYTES, uploadVideo } from "@/lib/client/upload-video";
 import type { Room } from "@/lib/types";
 
 export default function CaptureRoom({ roomId }: { roomId: string }) {
@@ -34,6 +34,7 @@ export default function CaptureRoom({ roomId }: { roomId: string }) {
   }, [camera]);
   const setVideoFile = (next: File) => {
     if (!next.size || !next.type.startsWith("video/")) { setError("Choose a non-empty video file."); return; }
+    if (next.size > MAX_VIDEO_BYTES) { setError("Choose a video smaller than 100 MB."); return; }
     setFile(next); setPreview(URL.createObjectURL(next)); setError("");
   };
   async function startCamera() {
@@ -72,7 +73,7 @@ export default function CaptureRoom({ roomId }: { roomId: string }) {
       const detectionFrames = await detectVideoFrames(file, updateProgress, controller.signal);
       controller.signal.throwIfAborted();
       updateProgress("Uploading your walkthrough…");
-      const asset=await upload(file.name,file,{access:"private",handleUploadUrl:"/api/uploads",abortSignal:controller.signal,onUploadProgress:event=>updateProgress(`Uploading video · ${Math.round(event.percentage)}%`)});
+      const asset=await uploadVideo(file,{signal:controller.signal,onProgress:percentage=>updateProgress(`Uploading video · ${percentage}%`)});
       controller.signal.throwIfAborted();
       updateProgress("Preparing your damage review…");
       const {inspection}=await api.createInspection(roomId,asset.url,asset.contentType,detectionFrames);
@@ -81,12 +82,12 @@ export default function CaptureRoom({ roomId }: { roomId: string }) {
       if (mountedRef.current) {setError(e instanceof Error?e.message:"Could not start your inspection.");setBusy(false);setProgress("");}
     } finally { analysisRef.current = null; }
   },[file,roomId]);
-  return <main className="capture-page"><header className="capture-top"><Link href="/" className="brand"><span className="brand-mark">d.</span><span>dwelld<span className="brand-period">.</span></span></Link><div className="secure-note"><ShieldCheck size={15}/> Your footage stays yours</div></header><div className="capture-wrap"><Link href="/" className="back-link"><ArrowLeft size={15}/> All spaces</Link><div className="capture-title"><div><p className="eyebrow">{room?.name || "YOUR ROOM"}</p><h1>Let’s take a look<br/>around.</h1><p className="lead">A slow walkthrough gives you a record you can come back to. Try to capture each wall, the floor, and anything you want to remember.</p></div><div className="step-badge"><span>01</span> RECORD YOUR ROOM</div></div>
+  return <main className="capture-page"><header className="capture-top"><Link href="/" className="brand"><span className="brand-mark">d.</span><span>dwelld<span className="brand-period">.</span></span></Link><div className="secure-note"><ShieldCheck size={15}/> Controlled demo</div></header><div className="capture-wrap"><Link href="/" className="back-link"><ArrowLeft size={15}/> All spaces</Link><div className="capture-title"><div><p className="eyebrow">{room?.name || "YOUR ROOM"}</p><h1>Let’s take a look<br/>around.</h1><p className="lead">A slow walkthrough gives you a record you can come back to. Analysis samples up to three frames, so it may miss areas. Use only authorised demo footage: tenant access controls are not enabled.</p></div><div className="step-badge"><span>01</span> RECORD YOUR ROOM</div></div>
   {error && <div className="notice error-notice">{error}</div>}
-  {!preview && !camera && <div className="capture-grid"><button className="capture-option capture-record" onClick={startCamera}><span className="option-icon"><Camera size={21}/></span><span className="option-title">Record a walkthrough</span><span className="option-copy">Use your camera for a walkthrough of up to 2 minutes.</span><span className="option-cta">Open camera <ArrowLeft className="option-arrow" size={16}/></span><span className="record-illustration"><i/><i/><b/></span></button><label className="capture-option capture-upload"><input type="file" accept="video/*" className="sr-only" onChange={e=>{const f=e.currentTarget.files?.[0];if(f)setVideoFile(f);}}/><span className="option-icon upload-icon"><CloudUpload size={21}/></span><span className="option-title">Upload a video</span><span className="option-copy">Already filmed? Choose a video up to 2 minutes long.</span><span className="option-cta">Choose video <ArrowLeft className="option-arrow" size={16}/></span><span className="upload-illustration"><FileVideo2 size={40}/><span>MP4 · MOV · WEBM</span></span></label></div>}
+  {!preview && !camera && <div className="capture-grid"><button className="capture-option capture-record" onClick={startCamera}><span className="option-icon"><Camera size={21}/></span><span className="option-title">Record a walkthrough</span><span className="option-copy">Use your camera for a walkthrough of up to 2 minutes.</span><span className="option-cta">Open camera <ArrowLeft className="option-arrow" size={16}/></span><span className="record-illustration"><i/><i/><b/></span></button><label className="capture-option capture-upload"><input type="file" accept="video/*" className="sr-only" onChange={e=>{const f=e.currentTarget.files?.[0];if(f)setVideoFile(f);}}/><span className="option-icon upload-icon"><CloudUpload size={21}/></span><span className="option-title">Upload a video</span><span className="option-copy">Already filmed? Choose a video up to 2 minutes long and 100 MB.</span><span className="option-cta">Choose video <ArrowLeft className="option-arrow" size={16}/></span><span className="upload-illustration"><FileVideo2 size={40}/><span>MP4 · MOV · WEBM</span></span></label></div>}
   {camera && <div className="video-stage"><video ref={videoRef} muted playsInline autoPlay onClick={e=>void e.currentTarget.play()}/><div className="camera-hud"><span className="live-dot">● CAMERA LIVE</span><button onClick={stopCamera}><X size={17}/></button></div>{!recording ? <button className="record-control" onClick={startRecording}><Circle size={24} fill="currentColor"/> Start recording</button> : <button className="record-control is-recording" onClick={stopRecording}><StopCircle size={22}/> Stop · {Math.floor(elapsed/60)}:{String(elapsed%60).padStart(2,"0")}</button>}</div>}
   {preview && !camera && <div className="video-stage preview-stage"><video src={preview} controls playsInline/><button className="remove-video" disabled={busy} onClick={clearVideo}><X size={15}/> Remove video</button><div className="preview-file"><FileVideo2 size={17}/><span>{file?.name}</span><small>{file ? `${(file.size/1024/1024).toFixed(1)} MB` : ""}</small></div></div>}
-  {preview && <div className="submit-row"><div className="privacy-copy"><ShieldCheck size={16}/><span>Stored securely as evidence for your room record.</span></div><button className="button button-dark submit-button" disabled={busy} onClick={()=>void submit()}>{busy?<><LoaderCircle className="spin" size={17}/> {progress || "Preparing inspection…"}</>:<><Sparkles size={17}/> Analyse this video</>}</button></div>}
+  {preview && <div className="submit-row"><div className="privacy-copy"><ShieldCheck size={16}/><span>Media stored in MongoDB. Demo has no tenant access controls.</span></div><button className="button button-dark submit-button" disabled={busy} onClick={()=>void submit()}>{busy?<><LoaderCircle className="spin" size={17}/> {progress || "Preparing inspection…"}</>:<><Sparkles size={17}/> Analyse this video</>}</button></div>}
   {busy&&<p role="status" aria-live="polite" className="privacy-copy">{progress}</p>}
   <div className="capture-tips"><span><span className="tip-number">1</span> Move slowly</span><span><span className="tip-number">2</span> Keep the room well lit</span><span><span className="tip-number">3</span> Show any marks up close</span></div></div></main>;
 }

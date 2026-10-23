@@ -1,7 +1,7 @@
-import { get as getBlob, put, del } from "@vercel/blob";
+import { readMedia, writeMedia, deleteMedia, parseMediaId } from "./media";
 import { createHash } from "node:crypto";
 import { openVideoFrames } from "./video-frames";
-import { inspectObjectDamage, inspectSurfaceDamage, validBox, type Box, type DamageObservation } from "./damage";
+import { inspectObjectDamage, inspectSurfaceDamage, inspectUnsupportedFurniture, validBox, type Box, type DamageObservation } from "./damage";
 export type { Box } from "./damage";
 
 export type ClientDetection = { objectId: string; label: string; boundingBox: Box; classId?: number; confidence?: number };
@@ -11,6 +11,7 @@ export type AnalyzedFinding = {
   boundingBox: Box | null; originalVideoBoundingBox: Box | null;
   localizationStatus: "localized" | "uncertain"; objectLabel: string | null;
   evidenceFrameUrl: string | null; reviewStatus: "unreviewed";
+  detectionSource: "yolo" | "gemini";
   detectionId: string; parentDetectionId: string | null; classId?: number; confidence?: number;
 };
 
@@ -42,13 +43,33 @@ export function validateClientFrames(value: unknown, durationSeconds = Infinity)
 }
 
 /** Single-image entry point. Detections are actual browser YOLO output, never fabricated. */
-export async function analyzeDetectedImage(image: Buffer, detections: ClientDetection[], timestampSeconds = 0, frameKey = "image"): Promise<AnalyzedFinding[]> {
+export async function analyzeDetectedImage(image: Buffer, detections: ClientDetection[], timestampSeconds = 0, frameKey = "image", warnings: string[] = [], deadlineMs = Date.now() + 240_000): Promise<AnalyzedFinding[]> {
+  async function runScope<T>(label: string, work: () => Promise<T>): Promise<T | null> {
+    if (deadlineMs - Date.now() < 45_000) {
+      warnings.push(`Frame ${timestampSeconds}s: ${label} was not analyzed because the analysis time budget was reached.`);
+      return null;
+    }
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try { return await work(); }
+      catch (error) {
+        // Inspect only for classification. Never expose provider responses or credentials.
+        const candidate = error as { status?: number; code?: number | string; message?: string } | null;
+        const status = candidate?.status ?? candidate?.code;
+        const transient = [429, 503, 504, "429", "503", "504"].includes(status ?? "")
+          || /DEADLINE_EXCEEDED|RESOURCE_EXHAUSTED|timeout|timed out|\b(?:429|503|504)\b/i.test(candidate?.message || "");
+        if (attempt === 0 && transient && deadlineMs - Date.now() > 90_000) continue;
+        warnings.push(`Frame ${timestampSeconds}s: ${label} could not be analyzed${transient ? " because the AI service timed out or was temporarily unavailable" : " because the AI response or analysis was unsuccessful"}. Damage assessment is incomplete.`);
+        return null;
+      }
+    }
+    return null;
+  }
   const validated = validateClientFrames([{ timestampSeconds, detections }])[0];
   if (image.length > 30 * 1024 * 1024) throw new Error("Evidence frame exceeds 30 MB");
   const findings: AnalyzedFinding[] = [];
   const base = { timestampSeconds, originalVideoBoundingBox: null, evidenceFrameUrl: null, reviewStatus: "unreviewed" as const };
   function damageFinding(observation: DamageObservation, parentDetectionId: string | null, objectLabel: string | null, index: number): AnalyzedFinding {
-    return { ...base, kind: "damage", label: observation.type, description: observation.description, boundingBox: observation.boundingBox,
+    return { ...base, detectionSource: "gemini", kind: "damage", label: observation.type, description: observation.description, boundingBox: observation.boundingBox,
       localizationStatus: observation.boundingBox ? "localized" : "uncertain", objectLabel, parentDetectionId,
       detectionId: `${frameKey}_damage_${parentDetectionId || "surface"}_${index}` };
   }
@@ -57,44 +78,38 @@ export async function analyzeDetectedImage(image: Buffer, detections: ClientDete
     const batch = validated.detections.slice(offset, offset + 4);
     const results = await Promise.all(batch.map(async (d) => {
       const id = `${frameKey}_${d.objectId}`;
-      const object: AnalyzedFinding = { ...base, kind: "object", label: d.label, description: `${d.label} detected by the browser object model.`, boundingBox: d.boundingBox,
+      const object: AnalyzedFinding = { ...base, detectionSource: "yolo", kind: "object", label: d.label, description: `${d.label} detected by the browser object model.`, boundingBox: d.boundingBox,
         localizationStatus: "localized", objectLabel: null, detectionId: id, parentDetectionId: null, classId: d.classId, confidence: d.confidence };
-      const damage = await inspectObjectDamage(image, d.label, d.boundingBox);
-      return [object, ...damage.map((item, index) => damageFinding(item, id, d.label, index))];
+      const damage = await runScope(`damage on ${d.label}`, () => inspectObjectDamage(image, d.label, d.boundingBox));
+      return [object, ...(damage || []).map((item, index) => damageFinding(item, id, d.label, index))];
     }));
     findings.push(...results.flat());
   }
-  const surfaces = await inspectSurfaceDamage(image);
-  findings.push(...surfaces.map((item, index) => damageFinding(item, null, null, index)));
+  const supplemental = await runScope("supplementary furniture detection", () => inspectUnsupportedFurniture(image, validated.detections.map((d) => d.boundingBox))) || [];
+  const supplementalFindings = await Promise.all(supplemental.map(async (d, index) => {
+    const id = `${frameKey}_gemini_${index}`;
+    const object: AnalyzedFinding = { ...base, detectionSource: "gemini", kind: "object", label: d.label,
+      description: `${d.description} (Gemini-assisted observation; requires review.)`, boundingBox: d.boundingBox,
+      localizationStatus: "localized", objectLabel: null, detectionId: id, parentDetectionId: null };
+    const damage = await runScope(`damage on ${d.label}`, () => inspectObjectDamage(image, d.label, d.boundingBox));
+    return [object, ...(damage || []).map((item, damageIndex) => damageFinding(item, id, d.label, damageIndex))];
+  }));
+  findings.push(...supplementalFindings.flat());
+  const surfaces = await runScope("room surface damage", () => inspectSurfaceDamage(image));
+  findings.push(...(surfaces || []).map((item, index) => damageFinding(item, null, null, index)));
   return findings;
 }
 
-export async function analyzeVideo(videoUrl: string, mimeType: string, clientFrames: unknown): Promise<{ durationSeconds: number; findings: AnalyzedFinding[] }> {
+export async function analyzeVideo(videoUrl: string, mimeType: string, clientFrames: unknown): Promise<{ durationSeconds: number; findings: AnalyzedFinding[]; warnings: string[]; incomplete: boolean }> {
+  const deadlineMs = Date.now() + 240_000;
+  const warnings: string[] = [];
   if (!process.env.GEMINI_API_KEY) throw new Error("Gemini damage analysis requires GEMINI_API_KEY");
   const requested = validateClientFrames(clientFrames);
   const normalizedMimeType = mimeType.split(";")[0].trim().toLowerCase();
   if (!new Set(["video/mp4", "video/webm", "video/quicktime", "video/x-msvideo", "video/mpeg"]).has(normalizedMimeType)) throw new Error("Unsupported video format");
-  let pathname: string;
-  try {
-    const url = new URL(videoUrl);
-    if (url.protocol !== "https:" || !url.hostname.endsWith(".private.blob.vercel-storage.com")) throw new Error();
-    pathname = decodeURIComponent(url.pathname.slice(1));
-  } catch { throw new Error("Video URL must refer to a private Vercel Blob upload"); }
-  const blob = await getBlob(pathname, { access: "private" });
-  if (!blob || blob.statusCode !== 200) throw new Error("Could not retrieve the uploaded inspection video");
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  const reader = blob.stream.getReader();
-  try {
-    while (true) {
-      const { done, value: chunk } = await reader.read();
-      if (done) break;
-      size += chunk.byteLength;
-      if (size > 100 * 1024 * 1024) throw new Error("Video exceeds the 100 MB analysis limit");
-      chunks.push(chunk);
-    }
-  } finally { await reader.cancel().catch(() => undefined); reader.releaseLock(); }
-  const frames = await openVideoFrames(Buffer.concat(chunks));
+  if (!parseMediaId(videoUrl)) throw new Error("Video must refer to a MongoDB media upload");
+  const video = await readMedia(videoUrl, 100 * 1024 * 1024);
+  const frames = await openVideoFrames(video);
   const storedFrames: string[] = [];
   try {
     const selected = validateClientFrames(requested, frames.durationSeconds);
@@ -105,16 +120,16 @@ export async function analyzeVideo(videoUrl: string, mimeType: string, clientFra
       const imageHash = createHash("sha256").update(image).digest("hex");
       if (seenFrames.has(imageHash)) continue;
       seenFrames.add(imageHash);
-      const key = createHash("sha256").update(`${pathname}:${frame.timestampSeconds}`).digest("hex").slice(0, 16);
-      const observations = await analyzeDetectedImage(image, frame.detections, frame.timestampSeconds, key);
+      const key = createHash("sha256").update(`${videoUrl}:${frame.timestampSeconds}`).digest("hex").slice(0, 16);
+      const observations = await analyzeDetectedImage(image, frame.detections, frame.timestampSeconds, key, warnings, deadlineMs);
       if (observations.length === 0) continue;
-      const stored = await put(`evidence/${crypto.randomUUID()}.png`, image, { access: "private", contentType: "image/png" });
-      storedFrames.push(stored.url);
-      findings.push(...observations.map((item) => ({ ...item, evidenceFrameUrl: stored.url })));
+      const stored = await writeMedia(image, `evidence/${crypto.randomUUID()}.png`, "image/png");
+      storedFrames.push(stored);
+      findings.push(...observations.map((item) => ({ ...item, evidenceFrameUrl: stored })));
     }
-    return { durationSeconds: frames.durationSeconds, findings };
+    return { durationSeconds: frames.durationSeconds, findings, warnings, incomplete: warnings.length > 0 };
   } catch (error) {
-    await Promise.all(storedFrames.map((url) => del(url).catch(() => undefined)));
+    await Promise.all(storedFrames.map((url) => deleteMedia(url).catch(() => undefined)));
     throw error;
   } finally { await frames.close(); }
 }

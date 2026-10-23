@@ -18,7 +18,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ ins
       return NextResponse.json({ error: "Provide a description, evidence finding, and point within the frame" }, { status: 400 });
     }
     const db = await getDb();
-    const inspection = await db.collection("inspections").findOne({ _id: inspectionId, status: "completed" });
+    const inspection = await db.collection("inspections").findOne({ _id: inspectionId, status: { $in: ["completed", "partial"] } });
     const evidence = await db.collection("findings").findOne({ _id: evidenceId, inspectionId });
     if (!inspection || !evidence?.evidenceFrameUrl) return NextResponse.json({ error: "Saved evidence frame not found" }, { status: 404 });
     const objectId = body.objectId == null ? null : typeof body.objectId === "string" ? parseObjectId(body.objectId) : null;

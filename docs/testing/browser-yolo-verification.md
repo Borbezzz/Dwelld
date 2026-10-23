@@ -8,6 +8,6 @@ A three-second MP4 generated from the furnished-room photograph exercised browse
 
 Live MongoDB/API checks verified manual damage-marker creation with an exact parent object link, persisted coordinates when reopening the inspection, and HTTP 400 rejection for an out-of-range coordinate. Temporary records were removed.
 
-The complete private Blob upload, original-video extraction, Gemini analysis and persisted evidence-delivery flow remains unverified because `BLOB_READ_WRITE_TOKEN` is missing. Browser camera/WebM capture has not received an end-to-end test. Identical extracted frames are skipped, but physical object identity across moving camera views is not resolved. Large jobs may exceed the deployment's function duration limit.
+This earlier verification preceded the user’s MongoDB-only storage decision. Current media tests use GridFS; see `mongodb-media-verification.md`. Browser camera/WebM capture has not received an end-to-end test. Identical extracted frames are skipped, but physical object identity across moving camera views is not resolved. Large jobs may exceed the deployment's function duration limit.
 
 The shipped Ultralytics model uses AGPL-3.0 or separately purchased Enterprise terms. Review those obligations before proprietary distribution; the application's license has not been changed. ONNX Runtime Web uses MIT terms.

@@ -1,0 +1,17 @@
+{
+  "status": "completed",
+  "elapsedSeconds": 144,
+  "warnings": [],
+  "objects": 8,
+  "damage": 0,
+  "sources": {
+    "yolo": 7,
+    "gemini": 1
+  },
+  "frames": 1,
+  "confirmed": 1,
+  "reviewHistoryEntries": 1,
+  "videoMatches": true,
+  "evidenceHTTP": 200,
+  "evidenceType": "image/png"
+}
