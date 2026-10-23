@@ -1,0 +1,15 @@
+import {after} from 'next/server';
+import {authenticateLive,liveCollections,liveFailure,LiveError} from '@/lib/server/live-sessions';
+import {readJsonBody} from '@/lib/server/request-body';
+import {validateManifest} from '@/lib/server/spatial';
+import {getMediaFile} from '@/lib/server/media';
+import {analyzeSpatialInspection} from '@/lib/server/spatial-analysis';
+export const runtime='nodejs';export const maxDuration=300;
+type Context={params:Promise<{sessionId:string}>};
+export async function PUT(request:Request,{params}:Context){try{const {session}=await authenticateLive(request,(await params).sessionId,'phone');if(session.status==='saved')return Response.json({saved:true});const b=await readJsonBody(request,200*1024);if(!['ready','scanning','processing','uploading'].includes(b.stage)||!Number.isInteger(b.frames)||b.frames<0||b.frames>600||!Number.isInteger(b.depthFrames)||b.depthFrames<0||b.depthFrames>b.frames)throw new LiveError('Invalid scan progress');if(b.preview!==undefined&&(typeof b.preview!=='string'||b.preview.length>180000||!/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(b.preview)))throw new LiveError('Invalid preview');const {sessions}=await liveCollections();await sessions.updateOne({_id:session._id},{$set:{nativeCapture:true,...(b.preview?{nativePreview:b.preview}:{}),nativeProgress:{stage:b.stage,frames:b.frames,depthFrames:b.depthFrames},status:b.stage==='scanning'?'recording':'connected'}});return Response.json({stopRequested:!!session.stopRequested});}catch(e){return liveFailure(e)}}
+export async function POST(request:Request,{params}:Context){try{const {session}=await authenticateLive(request,(await params).sessionId,'phone');const {db,sessions}=await liveCollections();const manifest=validateManifest(await readJsonBody(request,2*1024*1024));const inspectionId=session.inspectionId||session._id;
+ for(const asset of manifest.assets){const file=await getMediaFile(asset.mediaRef);if(file?.metadata?.ownerId!==session.ownerId||file.metadata.liveSessionId!==String(session._id))throw new LiveError('Asset does not belong to this paired scan',403);}
+ await db.collection('spatialCaptures').createIndex({inspectionId:1},{unique:true});const existing=await db.collection('spatialCaptures').findOne({inspectionId});if(existing&&JSON.stringify(existing.manifest)!==JSON.stringify(manifest))throw new LiveError('This session already contains a different scan',409);
+ if(!existing){await db.collection('inspections').updateOne({_id:inspectionId},{$setOnInsert:{ownerId:session.ownerId,roomId:session.roomId,type:session.type||'move-in',captureSource:'native-lidar',status:'processing',createdAt:new Date()}},{upsert:true});await db.collection('spatialCaptures').insertOne({inspectionId,ownerId:session.ownerId,roomId:session.roomId,manifest,createdAt:new Date()});const inspection=await db.collection('inspections').findOne({_id:inspectionId});if(inspection)after(()=>analyzeSpatialInspection(inspection,manifest));}
+ await sessions.updateOne({_id:session._id},{$set:{nativeCapture:true,status:'saved',inspectionId}});return Response.json({saved:true,inspectionId:String(inspectionId)});
+ }catch(e){return liveFailure(e)}}

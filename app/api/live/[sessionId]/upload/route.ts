@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 const CHUNK_SIZE = 2 * 1024 * 1024;
 const MAX_BYTES = 100 * 1024 * 1024;
-const TYPES = ["video/mp4", "video/webm", "video/quicktime", "video/x-msvideo", "video/mpeg"];
+const TYPES = ["video/mp4", "video/webm", "video/quicktime", "video/x-msvideo", "video/mpeg", "image/jpeg", "application/octet-stream", "model/vnd.usdz+zip"];
 type Upload = { sessionId: ObjectId; _id: ObjectId; filename: string; contentType: string; size: number; expiresAt: Date; status: "uploading" | "finalizing" | "complete"; lockId?: string; lockedAt?: Date; url?: string };
 type Part = { uploadId: ObjectId; part: number; data: Binary; digest: string; size: number; expiresAt: Date };
 async function collections() {
@@ -40,7 +40,7 @@ export async function POST(request: Request, {params}:{params:Promise<{sessionId
       if (!id) return failure("Invalid upload ID");
       const existing = await uploads.findOne({ _id: id, sessionId: session._id, expiresAt: { $gt: new Date() } });
       if (!existing) return failure("Upload not found or expired", 404);
-      if (existing.status === "complete") {const {sessions}=await liveCollections();await sessions.updateOne({_id:session._id},{$set:{sourceUrl:existing.url,videoMimeType:existing.contentType}});return NextResponse.json({ url: existing.url, videoUrl: existing.url, contentType: existing.contentType });}
+      if (existing.status === "complete") {const {sessions}=await liveCollections();if(existing.contentType.startsWith("video/"))await sessions.updateOne({_id:session._id},{$set:{sourceUrl:existing.url,videoMimeType:existing.contentType}});return NextResponse.json({ url: existing.url, videoUrl: existing.url, contentType: existing.contentType });}
       const lockId = randomUUID();
       // Recover a finalization abandoned by a terminated function after its maximum duration.
       const upload = await uploads.findOneAndUpdate({ _id: id, $or: [{ status: "uploading" }, { status: "finalizing", lockedAt: { $lt: new Date(Date.now() - 360_000) } }] }, { $set: { status: "finalizing", lockId, lockedAt: new Date() } }, { returnDocument: "after" });
@@ -64,12 +64,12 @@ export async function POST(request: Request, {params}:{params:Promise<{sessionId
         }
         if (bytes !== upload!.size) throw new Error("Invalid upload length");
       }
-      cleanupRef = await writeMedia(Readable.from(chunks()), upload.filename, upload.contentType);
+      cleanupRef = await writeMedia(Readable.from(chunks()), upload.filename, upload.contentType, {ownerId:session.ownerId,liveSessionId:String(session._id)});
       const result = await uploads.updateOne({ _id: id, lockId }, { $set: { status: "complete", url: cleanupRef }, $unset: { lockId: "", lockedAt: "" } });
       if (!result.modifiedCount) throw new Error("Upload finalization expired");
       const url = cleanupRef; cleanupRef = undefined; unlock = undefined;
       await parts.deleteMany({ uploadId: id });
-      const {sessions}=await liveCollections(); await sessions.updateOne({_id:session._id},{$set:{sourceUrl:url,videoMimeType:upload.contentType}});
+      const {sessions}=await liveCollections(); if(upload.contentType.startsWith("video/"))await sessions.updateOne({_id:session._id},{$set:{sourceUrl:url,videoMimeType:upload.contentType}});
       return NextResponse.json({ url, videoUrl: url, contentType: upload.contentType }, { status: 201 });
     }
     const contentType = typeof body.contentType === "string" ? body.contentType.split(";")[0].trim().toLowerCase() : "";

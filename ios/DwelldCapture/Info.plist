@@ -7,6 +7,7 @@
 <key>CFBundleName</key><string>$(PRODUCT_NAME)</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>1.0</string>
+<key>CFBundleURLTypes</key><array><dict><key>CFBundleURLName</key><string>com.dwelld.capture</string><key>CFBundleURLSchemes</key><array><string>dwelld</string></array></dict></array>
 <key>CFBundleVersion</key><string>1</string>
 <key>NSCameraUsageDescription</key><string>Capture measured room geometry and photographs for your private inspection.</string>
 <key>UILaunchScreen</key><dict/>

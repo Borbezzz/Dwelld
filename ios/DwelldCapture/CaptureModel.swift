@@ -15,6 +15,41 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
 
 @MainActor final class CaptureModel: NSObject, ObservableObject, @preconcurrency RoomCaptureViewDelegate {
     @Published var status = "Start a scan. Sign in and choose a room when you are ready to upload."
+    @Published var pairedSession = ""
+    private var phoneToken = ""
+    private var progressInFlight = false
+    private let pairedBase = URL(string: "https://dwelld.vercel.app")!
+    func pair(url: URL) async {
+        guard !scanning, !uploading, !processing else { status = "Finish the current capture before pairing."; return }
+        guard url.scheme == "dwelld", url.host == "pair", let parts = URLComponents(url: url, resolvingAgainstBaseURL: false), let session = parts.queryItems?.first(where: {$0.name == "session"})?.value, session.range(of: "^[a-f0-9]{24}$", options: .regularExpression) != nil, let token = parts.queryItems?.first(where: {$0.name == "token"})?.value, token.range(of: "^[A-Za-z0-9_-]{32,128}$", options: .regularExpression) != nil else { status = "Invalid pairing link. Scan a new QR code."; return }
+        let phone = UUID().uuidString.replacingOccurrences(of: "-", with: "") + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        do {
+            var request = URLRequest(url: pairedBase.appendingPathComponent("api/live/\(session)/pair")); request.httpMethod = "POST"; request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: ["pairingToken": token, "phoneToken": phone, "deviceId": UUID().uuidString])
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw httpFailure(response, data: data) }
+            phoneToken = phone; pairedSession = session; inspectionId = ""
+            status = "Connected to your laptop’s room. Tap Start scan."
+            await publishProgress(stage: "ready")
+        } catch { status = "Pairing: \(error.localizedDescription)" }
+    }
+    private func publishProgress(stage: String) async {
+        guard !pairedSession.isEmpty, !progressInFlight else { return }; progressInFlight = true; defer { progressInFlight = false }
+        do {
+            var request = URLRequest(url: pairedBase.appendingPathComponent("api/live/\(pairedSession)/spatial")); request.httpMethod = "PUT"; request.timeoutInterval = 10
+            request.setValue("Bearer \(phoneToken)", forHTTPHeaderField: "Authorization"); request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            var progress: [String: Any] = ["stage": stage, "frames": frameCount, "depthFrames": depthCount]
+            if scanning, let frame = view.captureSession.arSession.currentFrame {
+                let original = CIImage(cvPixelBuffer: frame.capturedImage).oriented(.right)
+                let scale = min(1, 480 / original.extent.width)
+                let image = original.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+                if let jpeg = context.jpegRepresentation(of: image, colorSpace: CGColorSpaceCreateDeviceRGB(), options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.5]), jpeg.count < 130000 { progress["preview"] = "data:image/jpeg;base64," + jpeg.base64EncodedString() }
+            }
+            request.httpBody = try JSONSerialization.data(withJSONObject: progress)
+            let (data, response) = try await URLSession.shared.data(for: request)
+            if let http = response as? HTTPURLResponse, http.statusCode == 200, let body = try JSONSerialization.jsonObject(with: data) as? [String: Any], body["stopRequested"] as? Bool == true, scanning { stop() }
+        } catch { /* Capture continues locally if the laptop connection drops. */ }
+    }
     @Published var tracking = "Camera idle"
     @Published var frameCount = 0
     @Published var depthCount = 0
@@ -77,6 +112,7 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
             }
             frames.append(FrameRecord(timestamp: frame.timestamp - (startTime ?? frame.timestamp), image: imageName, depth: depthName, confidence: confidenceName, width: CVPixelBufferGetWidth(frame.capturedImage), height: CVPixelBufferGetHeight(frame.capturedImage), depthWidth: depthData.map { CVPixelBufferGetWidth($0.depthMap) }, depthHeight: depthData.map { CVPixelBufferGetHeight($0.depthMap) }, intrinsics: matrix(frame.camera.intrinsics), transform: matrix(frame.camera.transform)))
         frameCount = frames.count; depthCount = frames.filter { $0.depth != nil }.count
+        if frameCount % 4 == 0 { Task { await publishProgress(stage: "scanning") } }
         } catch { stop(); status = "Local evidence write failed. Capture stopped." }
     }
     private func writePixels(_ pixel: CVPixelBuffer, bytesPerPixel: Int, to url: URL) throws {
@@ -136,16 +172,20 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
     }
     func upload(base: URL, roomId: String, type: String) async {
         guard !uploading, var m = manifest, let dir = directory else { status = "Finish a scan before uploading."; return }
-        guard !roomId.isEmpty else { status = "Sign in and choose a room before uploading."; return }
+        guard !roomId.isEmpty || !pairedSession.isEmpty else { status = "Sign in and choose a room before uploading."; return }
         uploading = true
         defer { uploading = false }
-        if inspectionId.isEmpty { await createInspection(base: base, roomId: roomId, type: type) }
-        guard !inspectionId.isEmpty else { return }
+        if inspectionId.isEmpty && pairedSession.isEmpty { await createInspection(base: base, roomId: roomId, type: type) }
+        guard !inspectionId.isEmpty || !pairedSession.isEmpty else { return }
         let inspectionId = self.inspectionId
+        let base = pairedSession.isEmpty ? base : pairedBase
+        let uploadPath = pairedSession.isEmpty ? "api/uploads" : "api/live/\(pairedSession)/upload"
+        await publishProgress(stage: "uploading")
         guard base.scheme == "https" else { status = "Use your HTTPS deployment for authenticated capture upload."; return }
         let cookies = await login.configuration.websiteDataStore.httpCookieStore.allCookies()
         let session = URLSession(configuration: .ephemeral)
-        let cookieHeader = HTTPCookie.requestHeaderFields(with: cookies.filter { base.host == $0.domain.trimmingCharacters(in: CharacterSet(charactersIn: ".")) || base.host?.hasSuffix("." + $0.domain.trimmingCharacters(in: CharacterSet(charactersIn: "."))) == true })
+        var cookieHeader = HTTPCookie.requestHeaderFields(with: cookies.filter { base.host == $0.domain.trimmingCharacters(in: CharacterSet(charactersIn: ".")) || base.host?.hasSuffix("." + $0.domain.trimmingCharacters(in: CharacterSet(charactersIn: "."))) == true })
+        if !pairedSession.isEmpty { cookieHeader = ["Authorization": "Bearer \(phoneToken)"] }
         func request(_ path: String, method: String = "POST", data: Data, type: String = "application/json") async throws -> [String: Any] {
             var req = URLRequest(url: base.appendingPathComponent(path)); req.httpMethod = method; req.httpBody = data; req.setValue(type, forHTTPHeaderField: "Content-Type"); req.setValue(base.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")), forHTTPHeaderField: "Origin")
             for (key, value) in cookieHeader { req.setValue(value, forHTTPHeaderField: key) }
@@ -160,17 +200,17 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
                 if asset.mediaRef.hasPrefix("gridfs:") { continue }
                 let data = try Data(contentsOf: dir.appendingPathComponent(asset.name)), contentType = asset.kind == "image" ? "image/jpeg" : asset.kind == "usdz" ? "model/vnd.usdz+zip" : "application/octet-stream"
                 let initData = try JSONSerialization.data(withJSONObject: ["filename": asset.name, "contentType": contentType, "size": data.count])
-                let upload = try await request("api/uploads", data: initData)
+                let upload = try await request(uploadPath, data: initData)
                 guard let id = upload["uploadId"] as? String, let chunkSize = upload["chunkSize"] as? Int else { throw CocoaError(.fileWriteUnknown) }
                 for offset in stride(from: 0, to: data.count, by: chunkSize) {
-                    var req = URLRequest(url: URL(string: "api/uploads?uploadId=\(id)&part=\(offset / chunkSize)", relativeTo: base.appendingPathComponent("/"))!); req.httpMethod = "PATCH"; req.httpBody = data.subdata(in: offset..<min(data.count, offset + chunkSize)); req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type"); req.setValue(base.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")), forHTTPHeaderField: "Origin"); for (key, value) in cookieHeader { req.setValue(value, forHTTPHeaderField: key) }
+                    var req = URLRequest(url: URL(string: "\(uploadPath)?uploadId=\(id)&part=\(offset / chunkSize)", relativeTo: base.appendingPathComponent("/"))!); req.httpMethod = "PATCH"; req.httpBody = data.subdata(in: offset..<min(data.count, offset + chunkSize)); req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type"); req.setValue(base.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")), forHTTPHeaderField: "Origin"); for (key, value) in cookieHeader { req.setValue(value, forHTTPHeaderField: key) }
                     let (responseBody, response) = try await session.data(for: req); guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw httpFailure(response, data: responseBody) }
                 }
-                let completed = try await request("api/uploads", data: JSONSerialization.data(withJSONObject: ["action": "complete", "uploadId": id]))
+                let completed = try await request(uploadPath, data: JSONSerialization.data(withJSONObject: ["action": "complete", "uploadId": id]))
                 guard let ref = completed["url"] as? String else { throw CocoaError(.fileWriteUnknown) }; m.assets[i].mediaRef = ref; manifest = m
                 try JSONEncoder().encode(m).write(to: dir.appendingPathComponent("manifest.json"))
             }
-            _ = try await request("api/inspections/\(inspectionId)/spatial", data: JSONEncoder().encode(m))
+            _ = try await request(pairedSession.isEmpty ? "api/inspections/\(inspectionId)/spatial" : "api/live/\(pairedSession)/spatial", data: JSONEncoder().encode(m))
             status = "Capture saved. Open this inspection's Spatial review in Dwelld."; manifest = m
         } catch { status = "Upload: \(error.localizedDescription). Local capture is retained; retry resumes saved assets." }
     }

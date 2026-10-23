@@ -22,13 +22,15 @@ struct CaptureScreen: View {
     var body: some View {
         VStack(spacing: 8) {
             Text("Dwelld LiDAR capture").font(.headline)
+            if model.pairedSession.isEmpty {
             DisclosureGroup("Advanced server address") { TextField("HTTPS Dwelld address", text: $host).textInputAutocapitalization(.never).autocorrectionDisabled().textFieldStyle(.roundedBorder) }
             Picker("Room", selection: $roomId) { Text("Choose room").tag(""); ForEach(model.rooms) { Text($0.name).tag($0.id) } }
             HStack { TextField("New room name", text: $newRoomName).textFieldStyle(.roundedBorder); Button("Add room") { if let url = URL(string: host) { Task { await model.createRoom(base: url, name: newRoomName) } } }.disabled(newRoomName.trimmingCharacters(in: .whitespaces).isEmpty || model.uploading) }
             Picker("Inspection", selection: $inspectionType) { Text("Move-in").tag("move-in"); Text("Move-out").tag("move-out") }.pickerStyle(.segmented)
             Button("Refresh rooms") { if let url = URL(string: host) { Task { await model.loadRooms(base: url) } } }
+            } else { Text("Connected to laptop inspection").font(.subheadline) }
             HStack {
-                Button("Sign in") { login = true }.disabled(URL(string: host)?.scheme != "https")
+                if model.pairedSession.isEmpty { Button("Sign in") { login = true }.disabled(URL(string: host)?.scheme != "https") }
                 Button(model.scanning ? "Finish scan" : "Start scan") { if model.scanning { model.stop() } else { model.start() } }.disabled(model.uploading || model.processing)
                 Button("Upload") { if let url = URL(string: host) { Task { await model.upload(base: url, roomId: roomId, type: inspectionType) } } }.disabled(!model.ready || model.scanning || model.uploading)
             }.buttonStyle(.bordered)
@@ -44,7 +46,7 @@ struct CaptureScreen: View {
             Text(model.status).font(.caption).accessibilityIdentifier("captureStatus")
             if let directory = model.directory, model.ready { ShareLink("Export local capture folder", item: directory) }
             Text("Images and depth remain on this device until you upload or share. A LiDAR device is required; simulator geometry is never generated.").font(.caption2)
-        }.padding().sheet(isPresented: $login) {
+        }.padding().onOpenURL { url in Task { await model.pair(url: url) } }.sheet(isPresented: $login) {
             if let url = URL(string: host)?.appendingPathComponent("sign-in") { VStack { Button("Done") { login = false; if let base = URL(string: host) { Task { await model.loadRooms(base: base) } } }; LoginView(webView: model.login, url: url) } }
         }
     }
