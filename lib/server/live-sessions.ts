@@ -3,7 +3,7 @@ import { ObjectId } from "mongodb";
 import { getDb, parseObjectId } from "./db";
 import type { InspectionSession, LiveRole, LiveStatus, LiveObject, LiveFinding } from "@/lib/live/types";
 export class LiveError extends Error { constructor(message: string, public status = 400) { super(message); } }
-export type SessionDoc = { _id: ObjectId; roomId: ObjectId; desktopHash: string; pairingHash: string; phoneHash?: string; deviceId?: string; createdAt: Date; expiresAt: Date; pairingExpiresAt: Date; status: LiveStatus; phoneLastSeenAt?: Date; desktopLastSeenAt?: Date; stopRequested?: boolean; inspectionId?: ObjectId; sourceUrl?: string; videoMimeType?: string; manualUntil?: Date; manualLeaseId?: string; analysisInFlight?: boolean; analysisAfter?: Date };
+export type SessionDoc = { _id: ObjectId; signalSequence?: number; roomId: ObjectId; desktopHash: string; pairingHash: string; phoneHash?: string; deviceId?: string; createdAt: Date; expiresAt: Date; pairingExpiresAt: Date; status: LiveStatus; phoneLastSeenAt?: Date; desktopLastSeenAt?: Date; stopRequested?: boolean; inspectionId?: ObjectId; sourceUrl?: string; videoMimeType?: string; manualUntil?: Date; manualLeaseId?: string; analysisInFlight?: boolean; analysisAfter?: Date };
 export const hashToken = (token: string) => createHash("sha256").update(token).digest("hex");
 export const validToken = (v: unknown): v is string => typeof v === "string" && /^[a-zA-Z0-9_-]{32,128}$/.test(v);
 export const validEventId = (v: unknown): v is string => typeof v === "string" && /^[a-zA-Z0-9_-]{8,100}$/.test(v);
@@ -45,6 +45,6 @@ export async function recordLiveAnalysis(session:SessionDoc,observationId:string
 }
 export async function getLiveState(session:SessionDoc,role:LiveRole,_after:string|null) {
  const {db}=await liveCollections();
- const [objects,findings,signals]=await Promise.all([db.collection("liveObjects").find({sessionId:session._id},{projection:{_id:0,sessionId:0}}).limit(100).toArray(),db.collection("liveFindings").find({sessionId:session._id},{projection:{_id:0,sessionId:0}}).limit(200).toArray(),db.collection("liveSignals").find({sessionId:session._id,to:role}).sort({createdAt:-1,_id:-1}).limit(200).toArray()]);
+ const [objects,findings,signals]=await Promise.all([db.collection("liveObjects").find({sessionId:session._id},{projection:{_id:0,sessionId:0}}).limit(100).toArray(),db.collection("liveFindings").find({sessionId:session._id},{projection:{_id:0,sessionId:0}}).limit(200).toArray(),db.collection("liveSignals").find({sessionId:session._id,to:role}).sort({sequence:-1,createdAt:-1,_id:-1}).limit(200).toArray()]);
  return {session:safeSession(session),objects:objects as unknown as LiveObject[],findings,signals:signals.reverse().map(s=>({id:String(s._id),eventId:s.eventId,type:s.type,data:s.data,from:s.from}))};
 }

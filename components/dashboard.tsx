@@ -1,28 +1,80 @@
 "use client";
+
 import Link from "next/link";
+import { useEffect, useState, type FormEvent } from "react";
+import { ArrowUpRight, ArrowRight, LoaderCircle } from "lucide-react";
 import FindingsSearch from "./findings-search";
-import { useEffect, useState } from "react";
-import { ArrowUpRight, Plus, ArrowRight, Search, BedDouble, Clock3, ShieldCheck, Sparkles, LoaderCircle } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Room, Inspection } from "@/lib/types";
+import "@/app/landing.css";
 
 export default function Dashboard() {
-  const [rooms, setRooms] = useState<Room[]>([]); const [inspections, setInspections] = useState<Inspection[]>([]);
-  const [loading, setLoading] = useState(true); const [error, setError] = useState(""); const [newRoom, setNewRoom] = useState(""); const [adding, setAdding] = useState(false); const [showCreate, setShowCreate] = useState(false);
-  async function refresh() { try { const [r, i] = await Promise.all([api.rooms(), api.inspections()]); setRooms(r.rooms); setInspections(i.inspections); setError(""); } catch (e) { setError(e instanceof Error ? e.message : "Could not load your spaces."); } finally { setLoading(false); } }
+  const [rooms, setRooms] = useState<Room[]>([]);
+  const [inspections, setInspections] = useState<Inspection[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [newRoom, setNewRoom] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
+
+  async function refresh() {
+    setLoading(true);
+    try {
+      const [r, i] = await Promise.all([api.rooms(), api.inspections()]);
+      setRooms(r.rooms); setInspections(i.inspections); setError("");
+    } catch (e) { setError(e instanceof Error ? e.message : "Could not load your spaces."); }
+    finally { setLoading(false); }
+  }
   useEffect(() => { void refresh(); }, []);
-  async function create(e: React.FormEvent) { e.preventDefault(); if (!newRoom.trim()) return; setAdding(true); try { const { room } = await api.createRoom(newRoom.trim()); setRooms((v) => [room, ...v]); setNewRoom(""); setShowCreate(false); } catch (e) { setError(e instanceof Error ? e.message : "Could not create room."); } finally { setAdding(false); } }
-  const roomFor = (id: string) => rooms.find((r) => r.id === id);
-  return <main className="shell">
-    <header className="topbar"><Link href="/" className="brand"><span className="brand-mark">d.</span><span>dwelld<span className="brand-period">.</span></span></Link><nav><a className="nav-active" href="#spaces">My spaces</a><a href="#history">History</a></nav><div className="profile"><span className="profile-dot">Y</span><span>My home</span></div></header>
-    <section className="welcome"><div><p className="eyebrow">YOUR HOME, DOCUMENTED</p><h1>A little peace<br className="mobile-break"/> of mind.</h1><p className="lead">A clear record of the place you call home.<br />Start with a room, and let it remember.</p><Link className="button button-dark" href="/live">Start an inspection <ArrowUpRight size={17}/></Link></div><div className="hero-art"><img className="hero-photo" src="/room-hero.webp" alt="A quiet bedroom in warm afternoon sunlight"/><div className="art-caption"><span className="caption-dot"/> YOUR SPACE, SAFELY KEPT</div></div></section>
-    {error && <div className="notice error-notice">{error} <button onClick={() => void refresh()}>Try again</button></div>}
-    <section id="spaces" className="section"><div className="section-head"><div><p className="eyebrow">THE PLACES THAT MATTER</p><h2>Your spaces <span className="count">{rooms.length.toString().padStart(2,"0")}</span></h2></div><button className="text-button" onClick={() => setShowCreate(true)}><Plus size={16}/> New room</button></div>
-    {loading ? <div className="loading-row"><LoaderCircle className="spin" size={20}/> Finding your rooms…</div> : rooms.length === 0 ? <div className="empty-card"><div className="empty-icon"><BedDouble size={22}/></div><div><h3>Your first room starts here</h3><p>Add a room, then record a quick walkthrough to create a lasting move-in record.</p></div><button className="button button-outline" onClick={() => setShowCreate(true)}>Create a room <ArrowRight size={16}/></button></div> : <div className="room-grid">{rooms.map((room, index) => { const count = inspections.filter((i) => i.roomId === room.id).length; return <Link className="room-card" href={`/rooms/${room.id}`} key={room.id}><div className={`room-card-image room-tone-${index % 3}`}><span className="room-card-icon"><BedDouble size={19}/></span><span className="room-card-open"><ArrowUpRight size={17}/></span><div className="card-illustration"><div className="card-window"/><div className="card-bed"><i/><i/></div><div className="card-lamp"/></div></div><div className="room-card-body"><div><h3>{room.name}</h3><p>{count} {count === 1 ? "inspection" : "inspections"}</p></div><span className="card-arrow"><ArrowRight size={16}/></span></div></Link>; })}<button className="add-room-card" onClick={() => setShowCreate(true)}><span><Plus size={20}/></span><b>Add another room</b></button></div>}</section>
-    <FindingsSearch rooms={rooms}/>
-    <section id="history" className="section history-section"><div className="section-head"><div><p className="eyebrow">A RECORD THAT STAYS WITH YOU</p><h2>Recent inspections</h2></div><span className="history-filter"><Search size={15}/> All activity</span></div>
-    {loading ? <div className="loading-row"><LoaderCircle className="spin" size={20}/> Loading history…</div> : inspections.length === 0 ? <div className="history-empty"><Clock3 size={18}/><span>Your completed walkthroughs will show up here.</span></div> : <div className="history-list">{inspections.map((i) => <Link key={i.id} href={`/inspections/${i.id}`} className="history-row"><span className="history-thumb"><BedDouble size={17}/></span><span className="history-main"><b>{roomFor(i.roomId)?.name || "Room inspection"}</b><small>{new Date(i.createdAt).toLocaleDateString(undefined,{day:"numeric",month:"long",year:"numeric"})}</small></span><span className={`status-pill status-${i.status}`}>{i.status === "completed" ? "Ready to review" : i.status}</span><ArrowUpRight className="history-link" size={17}/></Link>)}</div>}</section>
-    <footer className="footer"><div className="footer-brand"><span className="brand-mark">d.</span><span>Your room remembers.</span></div><div><ShieldCheck size={14}/> Your footage stays yours</div><span>Made for renters, with care.</span></footer>
-    {showCreate && <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) setShowCreate(false); }}><form className="modal" onSubmit={create}><button type="button" className="modal-close" onClick={() => setShowCreate(false)}>×</button><div className="modal-icon"><Sparkles size={20}/></div><p className="eyebrow">A PLACE TO BEGIN</p><h2>Name your room</h2><p className="modal-copy">Give it a name that feels familiar. You can add more spaces anytime.</p><label className="field-label" htmlFor="room-name">Room name</label><input autoFocus id="room-name" className="field" placeholder="e.g. University bedroom" value={newRoom} onChange={(e) => setNewRoom(e.target.value)} maxLength={80}/><button className="button button-dark modal-submit" disabled={adding || !newRoom.trim()}>{adding ? <LoaderCircle className="spin" size={17}/> : <><span>Create room</span><ArrowRight size={16}/></>}</button></form></div>}
+  async function create(e: FormEvent) {
+    e.preventDefault();
+    if (!newRoom.trim() || adding) return;
+    setAdding(true);
+    try {
+      const { room } = await api.createRoom(newRoom.trim());
+      setRooms((v) => [room, ...v]); setNewRoom(""); setShowCreate(false); setError("");
+    } catch (e) { setError(e instanceof Error ? e.message : "Could not create room."); }
+    finally { setAdding(false); }
+  }
+  const roomFor = (id: string) => rooms.find((room) => room.id === id);
+
+  return <main className="landing">
+    <header className="landing-header">
+      <Link href="/" className="landing-wordmark" aria-label="Dwelld home">dwelld.</Link>
+      <nav aria-label="Main navigation"><a href="#spaces">Your spaces</a><a href="#history">History</a></nav>
+    </header>
+
+    <section className="landing-hero" aria-labelledby="landing-title">
+      <div className="landing-intro">
+        <h1 id="landing-title">Your room.<br/><em>On record.</em></h1>
+        <div className="landing-intro-copy">
+          <p>A place to keep the details.<br/>Document your room, review what you find,<br className="landing-desktop-break"/> and keep a record you can return to.</p>
+          <Link className="landing-primary" href="/live">Start an inspection <ArrowUpRight size={19} aria-hidden="true"/></Link>
+        </div>
+      </div>
+      <img className="landing-photograph" src="/room-hero.webp" width={1400} height={933} fetchPriority="high" alt="Afternoon sunlight falling through a tall window across a linen bed, oak desk and warm plaster walls"/>
+    </section>
+
+    {error && <div className="landing-error" role="alert"><p>{error}</p><button type="button" onClick={() => void refresh()} disabled={loading}>{loading ? "Retrying…" : "Try again"}</button></div>}
+
+    <section id="spaces" className="landing-section" aria-labelledby="spaces-title">
+      <div className="landing-section-heading"><h2 id="spaces-title">Your spaces</h2><button className="landing-text-action" type="button" aria-expanded={showCreate} aria-controls="create-room" onClick={() => setShowCreate((value) => !value)}>{showCreate ? "Cancel" : "Add a room"}{!showCreate && <span aria-hidden="true">+</span>}</button></div>
+      {showCreate && <form className="landing-create" id="create-room" onSubmit={create}>
+        <label htmlFor="room-name">Room name<input autoFocus id="room-name" placeholder="e.g. University bedroom" value={newRoom} onChange={(e) => setNewRoom(e.target.value)} maxLength={80} required disabled={adding}/></label>
+        <button className="landing-primary" disabled={adding || !newRoom.trim()}>{adding ? "Creating…" : "Create room"}<ArrowRight size={17} aria-hidden="true"/></button>
+      </form>}
+      {loading ? <p className="landing-loading" role="status"><LoaderCircle className="spin" size={17} aria-hidden="true"/> Loading your spaces…</p> : rooms.length === 0 ? <p className="landing-empty">{error ? "Your spaces could not be loaded." : "Begin with a room. Your walkthroughs and observations will stay together here."}</p> : <div className="landing-room-list">{rooms.map((room, index) => {
+        const count = inspections.filter((inspection) => inspection.roomId === room.id).length;
+        return <Link className="landing-room" href={`/rooms/${room.id}`} key={room.id}><span className="landing-room-number" aria-hidden="true">{String(index + 1).padStart(2, "0")}</span><h3>{room.name}</h3><span className="landing-room-count">{count} {count === 1 ? "inspection" : "inspections"}</span><ArrowUpRight size={20} aria-hidden="true"/></Link>;
+      })}</div>}
+    </section>
+
+    <section id="history" className="landing-section" aria-labelledby="history-title">
+      <div className="landing-section-heading"><h2 id="history-title">Inspection history</h2></div>
+      {loading ? <p className="landing-loading" role="status">Loading history…</p> : inspections.length === 0 ? <p className="landing-empty">{error ? "Your history could not be loaded." : "Your saved walkthroughs will appear here."}</p> : <div className="landing-history">{inspections.map((inspection) => <Link key={inspection.id} href={`/inspections/${inspection.id}`} className="landing-history-row"><span className="landing-history-main"><strong>{roomFor(inspection.roomId)?.name || "Room inspection"}</strong><time dateTime={inspection.createdAt}>{new Date(inspection.createdAt).toLocaleDateString(undefined, {day: "numeric", month: "long", year: "numeric"})}</time></span><span className={`landing-status landing-status-${inspection.status}`}>{inspection.status === "completed" ? "Ready to review" : inspection.status.replaceAll("_", " ")}</span><ArrowUpRight size={18} aria-hidden="true"/></Link>)}</div>}
+    </section>
+
+    <details className="landing-search"><summary>Find something in your records <span aria-hidden="true">+</span></summary><FindingsSearch rooms={rooms}/></details>
+    <footer className="landing-footer"><span className="landing-wordmark">dwelld.</span><p>Your room remembers.</p><a href="#landing-title">Back to top ↑</a></footer>
   </main>;
 }
