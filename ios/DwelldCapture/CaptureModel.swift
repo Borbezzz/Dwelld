@@ -3,6 +3,7 @@ import RoomPlan
 import ARKit
 import CoreImage
 import WebKit
+import Security
 
 func matrix(_ m: simd_float4x4) -> [Float] { (0..<4).flatMap { c in (0..<4).map { r in m[c][r] } } }
 func matrix(_ m: simd_float3x3) -> [Float] { (0..<3).flatMap { c in (0..<3).map { r in m[c][r] } } }
@@ -15,25 +16,57 @@ struct Asset: Codable { let name: String; var mediaRef: String; let kind: String
 struct Manifest: Codable { var version = 1; let sessionId: String; var coordinateSystem = "arkit-right-handed-y-up-metres"; var elements: [Element]; var frames: [FrameRecord]; var assets: [Asset] }
 
 @MainActor final class CaptureModel: NSObject, ObservableObject, @preconcurrency RoomCaptureViewDelegate {
-    @Published var status = "Start a scan. Sign in and choose a room when you are ready to upload."
+    @Published var status = "Start an inspection on your laptop, then scan its QR code to connect this phone."
     @Published var pairedSession = ""
+    @Published var pairing = false
+    @Published var uploadComplete = false
+    @Published var uploadProgress: Double = 0
+    private var connection: CaptureConnection?
     private var phoneToken = ""
     private var progressInFlight = false
     private let pairedBase = URL(string: "https://dwelld.vercel.app")!
     func pair(url: URL) async {
         guard !scanning, !uploading, !processing else { status = "Finish the current capture before pairing."; return }
         guard url.scheme == "dwelld", url.host == "pair", let parts = URLComponents(url: url, resolvingAgainstBaseURL: false), let session = parts.queryItems?.first(where: {$0.name == "session"})?.value, session.range(of: "^[a-f0-9]{24}$", options: .regularExpression) != nil, let token = parts.queryItems?.first(where: {$0.name == "token"})?.value, token.range(of: "^[A-Za-z0-9_-]{32,128}$", options: .regularExpression) != nil else { status = "Invalid pairing link. Scan a new QR code."; return }
-        let phone = UUID().uuidString.replacingOccurrences(of: "-", with: "") + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        guard !pairing else { return }
+        guard !ready || uploadComplete || connection?.session == session else { status = "Finish uploading this capture before connecting a different inspection. Your files are retained on this phone."; return }
+        let changesSession = pairedSession != session
+        pairing = true; defer { pairing = false }
         do {
-            var request = URLRequest(url: pairedBase.appendingPathComponent("api/live/\(session)/pair")); request.httpMethod = "POST"; request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = try JSONSerialization.data(withJSONObject: ["pairingToken": token, "phoneToken": phone, "deviceId": UUID().uuidString])
+            // Save the claim BEFORE sending it. Retrying a lost response reuses the same identity.
+            var claim = connection?.session == session ? connection! : CaptureConnection(session: session, phone: UUID().uuidString.replacingOccurrences(of: "-", with: "") + UUID().uuidString.replacingOccurrences(of: "-", with: ""), device: UUID().uuidString, pairingToken: token)
+            claim.pairingToken = token
+            try CaptureConnectionStore.save(claim); connection = claim
+            var request = URLRequest(url: pairedBase.appendingPathComponent("api/live/\(session)/pair")); request.httpMethod = "POST"; request.timeoutInterval = 30; request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: ["pairingToken": token, "phoneToken": claim.phone, "deviceId": claim.device])
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw httpFailure(response, data: data) }
-            phoneToken = phone; pairedSession = session; inspectionId = ""
-            status = "Connected to your laptop’s room. Tap Start scan."
-            await publishProgress(stage: "ready")
-        } catch { status = "Pairing: \(error.localizedDescription)" }
+            let body = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            let remote = body?["session"] as? [String: Any]
+            claim.paired = true
+            if let expiry = remote?["expiresAt"] as? String { let formatter = ISO8601DateFormatter(); formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; claim.expiresAt = formatter.date(from: expiry) ?? claim.expiresAt }
+            if remote?["status"] as? String == "saved" { claim.completed = true }
+            try CaptureConnectionStore.save(claim); connection = claim
+            if changesSession { ready = false; manifest = nil; directory = nil; uploadProgress = 0 }
+            phoneToken = claim.phone; pairedSession = session; uploadComplete = claim.completed
+            if !ready { inspectionId = "" }
+            status = uploadComplete ? "Inspection already saved. Start a new inspection on your laptop for another scan." : "Connected. Finish & save sends your scan to the laptop automatically."
+            if !uploadComplete { await publishProgress(stage: "ready") }
+        } catch { status = "Could not connect. Scan the same QR again to retry. \(error.localizedDescription)" }
     }
+    private func restoreConnection() {
+        guard let saved = CaptureConnectionStore.load() else { return }
+        connection = saved; uploadComplete = saved.completed
+        if saved.paired { pairedSession = saved.session; phoneToken = saved.phone }
+        if let folder = saved.captureFolder, UUID(uuidString: folder) != nil {
+            let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(folder)
+            if let data = try? Data(contentsOf: dir.appendingPathComponent("manifest.json")), let m = try? JSONDecoder().decode(Manifest.self, from: data) {
+                directory = dir; manifest = m; ready = true; frameCount = m.frames.count; depthCount = m.frames.filter { $0.depth != nil }.count
+            }
+        }
+        status = saved.completed ? "Inspection saved on your laptop." : saved.expiresAt < Date() ? "QR connection expired. Your capture is retained locally; reconnect from the laptop. No phone sign-in is required." : saved.paired ? (ready ? "Capture recovered. Tap Retry save to resume." : "Reconnected to your laptop. Ready to scan.") : "Scan the same laptop QR again to finish connecting."
+    }
+    func savePairedCapture() async { await upload(base: pairedBase, roomId: "", type: "move-in") }
     private func publishProgress(stage: String) async {
         guard !pairedSession.isEmpty, !progressInFlight else { return }; progressInFlight = true; defer { progressInFlight = false }
         do {
@@ -72,15 +105,19 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
     private let splatBuilder = DepthSplatBuilder()
     private var manifest: Manifest?
     private(set) var directory: URL?
-    override init() { super.init(); view.delegate = self }
-    required init?(coder: NSCoder) { super.init(); view.delegate = self }
+    override init() { super.init(); view.delegate = self; restoreConnection() }
+    required init?(coder: NSCoder) { super.init(); view.delegate = self; restoreConnection() }
     func encode(with coder: NSCoder) {}
     func start() {
+        guard !pairing, !uploading, !processing, !ready || uploadComplete else { return }
+        guard let connection, connection.paired, !connection.completed, connection.expiresAt > Date() else { status = "Scan a new inspection QR on your laptop first. No phone sign-in is required."; return }
         guard RoomCaptureSession.isSupported else { status = "RoomPlan requires a supported LiDAR iPhone or iPad."; return }
         do {
             let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(UUID().uuidString)
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             inspectionId = ""; manifest = nil; frameCount = 0; depthCount = 0; featureCount = 0; processing = false; directory = dir; frames = []; assets = []; startTime = nil; lastTimestamp = -1; ready = false
+            uploadComplete = false; uploadProgress = 0
+            if var saved = self.connection { saved.captureFolder = dir.lastPathComponent; try CaptureConnectionStore.save(saved); self.connection = saved }
             splatBuilder.reset()
             view.captureSession.run(configuration: RoomCaptureSession.Configuration())
             // Read the current frame without replacing RoomPlan's ARSession delegate.
@@ -169,7 +206,8 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
             manifest = Manifest(sessionId: processedResult.identifier.uuidString, elements: elements, frames: evidence, assets: cloudAssets)
             try JSONEncoder().encode(manifest).write(to: dir.appendingPathComponent("manifest.json"))
             ready = true; status = "Ready: \(evidence.count) evidence samples and \(splatBuilder.count) LiDAR splats. Full-resolution capture stays on this phone."
-        } catch { status = "Could not export the captured geometry." }
+            if !pairedSession.isEmpty { Task { await savePairedCapture() } }
+        } catch { status = "Could not export the captured geometry. Local evidence is retained." }
     }
     private func httpFailure(_ response: URLResponse, data: Data) -> NSError {
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
@@ -203,9 +241,11 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
     }
     func upload(base: URL, roomId: String, type: String) async {
         guard !uploading, var m = manifest, let dir = directory else { status = "Finish a scan before uploading."; return }
-        guard !roomId.isEmpty || !pairedSession.isEmpty else { status = "Sign in and choose a room before uploading."; return }
+        guard !pairedSession.isEmpty else { status = "Scan your laptop inspection QR to connect before saving. No phone sign-in is required."; return }
+        guard !uploadComplete else { status = "This inspection is already saved."; return }
         uploading = true
-        defer { uploading = false }
+        UIApplication.shared.isIdleTimerDisabled = true
+        defer { uploading = false; UIApplication.shared.isIdleTimerDisabled = false }
         if inspectionId.isEmpty && pairedSession.isEmpty { await createInspection(base: base, roomId: roomId, type: type) }
         guard !inspectionId.isEmpty || !pairedSession.isEmpty else { return }
         let inspectionId = self.inspectionId
@@ -214,7 +254,10 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
         await publishProgress(stage: "uploading")
         guard base.scheme == "https" else { status = "Use your HTTPS deployment for authenticated capture upload."; return }
         let cookies = await login.configuration.websiteDataStore.httpCookieStore.allCookies()
-        let session = URLSession(configuration: .ephemeral)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 60; configuration.timeoutIntervalForResource = 600
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
         var cookieHeader = HTTPCookie.requestHeaderFields(with: cookies.filter { base.host == $0.domain.trimmingCharacters(in: CharacterSet(charactersIn: ".")) || base.host?.hasSuffix("." + $0.domain.trimmingCharacters(in: CharacterSet(charactersIn: "."))) == true })
         if !pairedSession.isEmpty { cookieHeader = ["Authorization": "Bearer \(phoneToken)"] }
         func request(_ path: String, method: String = "POST", data: Data, type: String = "application/json") async throws -> [String: Any] {
@@ -228,6 +271,8 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
             let pending = m.assets.indices.filter { !m.assets[$0].mediaRef.hasPrefix("gridfs:") }
             let totalBytes = m.assets.reduce(0) { sum, asset in sum + ((try? dir.appendingPathComponent(asset.name).resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) }
             var completedCount = m.assets.count - pending.count
+            uploadProgress = Double(completedCount) / Double(max(1, m.assets.count))
+            status = "Saving to your laptop inspection… Keep Dwelld open."
             // Four independent assets at a time. Chunks within each asset remain ordered.
             var uploadError: Error?
             await withTaskGroup(of: Result<(Int, String), Error>.self) { group in
@@ -257,13 +302,16 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
                     }
                     m.assets[i].mediaRef = ref; manifest = m; completedCount += 1
                     do { try JSONEncoder().encode(m).write(to: dir.appendingPathComponent("manifest.json"), options: .atomic) } catch { uploadError = error }
+                    uploadProgress = Double(completedCount) / Double(max(1, m.assets.count))
                     status = "Uploading \(completedCount)/\(m.assets.count) files · \(totalBytes / 1024 / 1024) MB total"
                     if uploadError == nil, next < pending.count { enqueue(pending[next]); next += 1 }
                 }
             }
             if let uploadError { throw uploadError }
             _ = try await request(pairedSession.isEmpty ? "api/inspections/\(inspectionId)/spatial" : "api/live/\(pairedSession)/spatial", data: JSONEncoder().encode(m))
-            status = "Capture saved. Open this inspection's Spatial review in Dwelld."; manifest = m
+            uploadComplete = true; uploadProgress = 1
+            if var saved = connection { saved.completed = true; connection = saved; try CaptureConnectionStore.save(saved) }
+            status = "Saved to your laptop inspection. You can close Dwelld."; manifest = m
         } catch { status = "Upload: \(error.localizedDescription). Local capture is retained; retry resumes saved assets." }
     }
 }
@@ -328,5 +376,31 @@ private final class DepthSplatBuilder {
         }
         try data.write(to: url, options: .atomic)
         return true
+    }
+}
+
+private struct CaptureConnection: Codable {
+    let session: String
+    let phone: String
+    let device: String
+    var pairingToken: String
+    var paired = false
+    var expiresAt = Date().addingTimeInterval(2 * 60 * 60)
+    var captureFolder: String?
+    var completed = false
+}
+private enum CaptureConnectionStore {
+    private static var query: [String: Any] { [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "com.dwelld.capture.pairing", kSecAttrAccount as String: "current-inspection"] }
+    static func load() -> CaptureConnection? {
+        var q = query; q[kSecReturnData as String] = true; q[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(q as CFDictionary, &result) == errSecSuccess, let data = result as? Data else { return nil }
+        return try? JSONDecoder().decode(CaptureConnection.self, from: data)
+    }
+    static func save(_ connection: CaptureConnection) throws {
+        let attributes: [String: Any] = [kSecValueData as String: try JSONEncoder().encode(connection), kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]
+        let update = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        let result = update == errSecItemNotFound ? SecItemAdd(query.merging(attributes) { _, value in value } as CFDictionary, nil) : update
+        guard result == errSecSuccess else { throw NSError(domain: "Dwelld", code: Int(result), userInfo: [NSLocalizedDescriptionKey: "Could not save the secure phone connection. Unlock the phone and retry."]) }
     }
 }
