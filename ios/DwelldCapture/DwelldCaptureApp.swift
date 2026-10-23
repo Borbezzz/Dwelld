@@ -22,6 +22,9 @@ struct CaptureScreen: View {
             }
             if model.pairing { ProgressView("Connecting securely…") }
             HStack {
+                if model.uploadComplete {
+                    Button("New inspection") { model.prepareNewInspection() }.disabled(model.pairing || model.processing || model.uploading)
+                }
                 if !model.ready && !model.uploadComplete {
                     Button(model.scanning ? "Finish & save" : "Start scan") { if model.scanning { model.stop() } else { model.start() } }
                         .disabled(model.pairedSession.isEmpty || model.pairing || model.uploading || model.processing)
@@ -36,7 +39,7 @@ struct CaptureScreen: View {
             }
             ZStack(alignment: .topLeading) {
                 RoomView(model: model).frame(minHeight: 180, maxHeight: .infinity)
-                if !model.scanning && (model.ready || model.processing) { Color(red: 0.09, green: 0.12, blue: 0.10).overlay(Text(model.processing ? "Finishing capture…" : "Capture ready to upload").foregroundStyle(.white)) }
+                if !model.scanning && (model.ready || model.processing) { Color(red: 0.09, green: 0.12, blue: 0.10).overlay(Text(model.processing ? "Finishing capture…" : (model.uploadComplete ? "Inspection saved" : "Capture ready to upload")).foregroundStyle(.white)) }
                 if model.scanning { VStack(alignment: .leading, spacing: 5) {
                     Label(model.tracking, systemImage: "viewfinder")
                     Text("\(model.frameCount) frames · \(model.depthCount) depth frames")

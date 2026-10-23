@@ -112,8 +112,17 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
     override init() { super.init(); view.delegate = self; view.isModelEnabled = false; restoreConnection() }
     required init?(coder: NSCoder) { super.init(); view.delegate = self; view.isModelEnabled = false; restoreConnection() }
     func encode(with coder: NSCoder) {}
+    func prepareNewInspection() {
+        guard uploadComplete, !scanning, !processing, !uploading, !pairing else { return }
+        do { try CaptureConnectionStore.clear() }
+        catch { status = "Could not prepare a new inspection. Retry after unlocking the phone."; return }
+        connection = nil; pairedSession = ""; phoneToken = ""; inspectionId = ""
+        ready = false; uploadComplete = false; uploadProgress = 0; manifest = nil; directory = nil
+        liveSplats = []; splatCount = 0; splatRevision += 1; frameCount = 0; depthCount = 0
+        status = "Start a new inspection on your laptop, then scan its QR code."
+    }
     func start() {
-        guard !pairing, !uploading, !processing, !ready || uploadComplete else { return }
+        guard !scanning, !pairing, !uploading, !processing, !ready, !uploadComplete else { return }
         guard let connection, connection.paired, !connection.completed, connection.expiresAt > Date() else { status = "Scan a new inspection QR on your laptop first. No phone sign-in is required."; return }
         guard RoomCaptureSession.isSupported else { status = "RoomPlan requires a supported LiDAR iPhone or iPad."; return }
         do {
@@ -404,6 +413,10 @@ private struct CaptureConnection: Codable {
 }
 private enum CaptureConnectionStore {
     private static var query: [String: Any] { [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "com.dwelld.capture.pairing", kSecAttrAccount as String: "current-inspection"] }
+    static func clear() throws {
+        let result = SecItemDelete(query as CFDictionary)
+        guard result == errSecSuccess || result == errSecItemNotFound else { throw NSError(domain: "Dwelld", code: Int(result)) }
+    }
     static func load() -> CaptureConnection? {
         var q = query; q[kSecReturnData as String] = true; q[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
