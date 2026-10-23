@@ -125,13 +125,14 @@ export default function LiveWorkspace({sessionId,phone=false}:{sessionId?:string
   if(!description.trim()){setError('Describe the visible mark before saving.');return;}
   if(!credentials){setError('The phone is not paired. Reconnect before saving.');return;}
   setError('');setBusy('Saving marked evidence');busyStarted.current=Date.now();
+  const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),45000);
   const job=(async()=>{try{
    const form=new FormData();form.append('image',manual.blob,'manual.jpg');
    form.append('metadata',JSON.stringify({mode:'manual',observationId:manual.observationId,timestampSeconds:manual.timestamp,point:manual.point,description:description.trim(),objects:[],includeSurfaces:false}));
-   const result=await liveRequest<{findings:LiveFinding[]}>(id,credentials.token,'/analyze',{method:'POST',body:form});
+   const result=await liveRequest<{findings:LiveFinding[]}>(id,credentials.token,'/analyze',{method:'POST',body:form,signal:controller.signal});
    setFindings(previous=>[...previous.filter(f=>!result.findings.some(saved=>saved.id===f.id)),...result.findings]);
    setManual(null);setDescription('');setAnalysis('Marker saved with its source photo.');
-  }catch(e){setError((e as Error).message)}finally{markerJob.current=null;if(!stopping.current)setBusy('')}})();
+  }catch(e){setError(controller.signal.aborted?'The marker save took too long. Your photo is still here. Tap Save marker to retry.':(e as Error).message)}finally{clearTimeout(timeout);markerJob.current=null;if(!stopping.current)setBusy('')}})();
   markerJob.current=job;await job;
  }
  const stage=savedId?'saved':busy&&stopping.current?'saving':recording||session?.status==='recording'?'scanning':session?.paired?'connected':id?'pairing':'prepare';
