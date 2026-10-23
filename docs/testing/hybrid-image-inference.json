@@ -1,0 +1,69 @@
+{
+  "fixture": "COCO kitchen /tmp/dwelld-room.jpg",
+  "model": "gemini-4-argon",
+  "elapsedSeconds": 32.396,
+  "detectionSource": "Real browser YOLO supplied by orchestrator",
+  "findings": [
+    {
+      "timestampSeconds": 0,
+      "originalVideoBoundingBox": null,
+      "evidenceFrameUrl": null,
+      "reviewStatus": "unreviewed",
+      "kind": "object",
+      "label": "oven",
+      "description": "oven detected by the browser object model.",
+      "boundingBox": {
+        "x": 0.00007345676422119141,
+        "y": 0.4399896483231484,
+        "width": 0.3062296867370605,
+        "height": 0.24644109292666866
+      },
+      "localizationStatus": "localized",
+      "objectLabel": null,
+      "detectionId": "image_oven1",
+      "parentDetectionId": null,
+      "classId": 69,
+      "confidence": 0.6994622945785522
+    },
+    {
+      "timestampSeconds": 0,
+      "originalVideoBoundingBox": null,
+      "evidenceFrameUrl": null,
+      "reviewStatus": "unreviewed",
+      "kind": "object",
+      "label": "oven",
+      "description": "oven detected by the browser object model.",
+      "boundingBox": {
+        "x": 0.763820481300354,
+        "y": 0.47006754461998684,
+        "width": 0.20183024406433114,
+        "height": 0.33830086129610654
+      },
+      "localizationStatus": "localized",
+      "objectLabel": null,
+      "detectionId": "image_oven2",
+      "parentDetectionId": null,
+      "classId": 69,
+      "confidence": 0.6499928832054138
+    },
+    {
+      "timestampSeconds": 0,
+      "originalVideoBoundingBox": null,
+      "evidenceFrameUrl": null,
+      "reviewStatus": "unreviewed",
+      "kind": "damage",
+      "label": "stain",
+      "description": "Significant dark soot or scorch staining on the left wall above the cooking range.",
+      "boundingBox": {
+        "x": 0,
+        "y": 0.314,
+        "width": 0.278,
+        "height": 0.145
+      },
+      "localizationStatus": "localized",
+      "objectLabel": null,
+      "parentDetectionId": null,
+      "detectionId": "image_damage_surface_0"
+    }
+  ]
+}

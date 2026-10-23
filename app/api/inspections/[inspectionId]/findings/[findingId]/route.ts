@@ -17,19 +17,28 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ in
     const db = await getDb();
     const updated = await db.collection("findings").findOneAndUpdate(
       { _id: findingObjectId, inspectionId: inspectionObjectId },
-      { $set: { reviewStatus: body.reviewStatus, reviewedAt: new Date() } },
+      [{
+        $set: {
+          reviewStatus: body.reviewStatus,
+          reviewedAt: "$$NOW",
+          reviewHistory: { $concatArrays: [
+            { $ifNull: ["$reviewHistory", []] },
+            [{ from: { $ifNull: ["$reviewStatus", "pending"] }, to: body.reviewStatus, at: "$$NOW" }],
+          ] },
+        },
+      }],
       { returnDocument: "after" },
     );
     if (!updated) return NextResponse.json({ error: "Finding not found" }, { status: 404 });
     return NextResponse.json({ finding: {
       id: String(updated._id), kind: updated.kind, label: updated.label, description: updated.description,
       timestampSeconds: updated.timestampSeconds, evidenceFrameUrl: updated.evidenceFrameUrl,
-      boundingBox: updated.boundingBox ?? null, reviewStatus: updated.reviewStatus,
-      uncertain: !updated.boundingBox, objectId: updated.objectId ? String(updated.objectId) : null,
+      boundingBox: updated.boundingBox ?? null, point: updated.point ?? null, source: updated.source ?? "ai", damageType: updated.damageType ?? null, reviewStatus: updated.reviewStatus,
+      uncertain: !updated.boundingBox && !updated.point, objectId: updated.objectId ? String(updated.objectId) : null,
       objectLabel: updated.objectLabel ?? null,
     } });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not update finding";
-    return NextResponse.json({ error: message }, { status: message.includes("not configured") ? 503 : 500 });
+    return NextResponse.json({ error: error instanceof SyntaxError ? "Invalid request body" : "The service could not complete this request. Check server configuration and try again." }, { status: error instanceof SyntaxError ? 400 : message.includes("not configured") ? 503 : 500 });
   }
 }

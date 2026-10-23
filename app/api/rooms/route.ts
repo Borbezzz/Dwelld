@@ -7,8 +7,8 @@ export const dynamic = "force-dynamic";
 
 function errorResponse(error: unknown) {
   const message = error instanceof Error ? error.message : "The request could not be completed";
-  const status = message.includes("not configured") || message.includes("unavailable") ? 503 : 500;
-  return NextResponse.json({ error: message }, { status });
+  const status = error instanceof SyntaxError ? 400 : message.includes("not configured") || message.includes("unavailable") ? 503 : 500;
+  return NextResponse.json({ error: error instanceof SyntaxError ? "Invalid request body" : "The service could not complete this request. Check server configuration and try again." }, { status });
 }
 
 export async function GET() {

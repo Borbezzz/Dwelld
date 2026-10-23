@@ -10,9 +10,9 @@ export async function GET(_request: Request, { params }: { params: Promise<{ ins
   const id = parseObjectId(inspectionId);
   if (!id) return new NextResponse("Not found", { status: 404 });
   try {
-    const inspection = await (await getDb()).collection("inspections").findOne({ _id: id }, { projection: { videoUrl: 1, videoMimeType: 1 } });
-    if (!inspection || typeof inspection.videoUrl !== "string") return new NextResponse("Not found", { status: 404 });
-    const blobUrl = new URL(inspection.videoUrl);
+    const inspection = await (await getDb()).collection("inspections").findOne({ _id: id }, { projection: { sourceUrl: 1, videoMimeType: 1 } });
+    if (!inspection || typeof inspection.sourceUrl !== "string") return new NextResponse("Not found", { status: 404 });
+    const blobUrl = new URL(inspection.sourceUrl);
     if (blobUrl.protocol !== "https:" || !blobUrl.hostname.endsWith(".private.blob.vercel-storage.com")) return new NextResponse("Not found", { status: 404 });
     const blob = await getBlob(decodeURIComponent(blobUrl.pathname.slice(1)), { access: "private" });
     if (!blob || blob.statusCode !== 200) return new NextResponse("Not found", { status: 404 });
@@ -27,6 +27,6 @@ export async function GET(_request: Request, { params }: { params: Promise<{ ins
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not read video";
-    return NextResponse.json({ error: message }, { status: message.includes("not configured") ? 503 : 500 });
+    return NextResponse.json({ error: error instanceof SyntaxError ? "Invalid request body" : "The service could not complete this request. Check server configuration and try again." }, { status: error instanceof SyntaxError ? 400 : message.includes("not configured") ? 503 : 500 });
   }
 }

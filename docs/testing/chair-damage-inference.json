@@ -1,0 +1,18 @@
+{
+  "fixture": "COCO139 /tmp/dwelld-furniture.jpg",
+  "model": "gemini-4-argon",
+  "elapsedSeconds": 16.661,
+  "detection": {
+    "objectId": "chair1",
+    "label": "chair",
+    "classId": 56,
+    "confidence": 0.86050868,
+    "boundingBox": {
+      "x": 0.4571128606796265,
+      "y": 0.5106230185065471,
+      "width": 0.09546647071838382,
+      "height": 0.23462881168849026
+    }
+  },
+  "damage": []
+}

@@ -16,7 +16,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ ins
     const serializedFindings = findings.map((f) => ({
       id: String(f._id), kind: f.kind, label: f.label, description: f.description,
       timestampSeconds: f.timestampSeconds, evidenceFrameUrl: f.evidenceFrameUrl,
-      boundingBox: f.boundingBox ?? null, reviewStatus: f.reviewStatus, uncertain: !f.boundingBox,
+      boundingBox: f.boundingBox ?? null, point: f.point ?? null, source: f.source ?? "ai", damageType: f.damageType ?? null, reviewStatus: f.reviewStatus, uncertain: !f.boundingBox && !f.point,
       objectId: f.objectId ? String(f.objectId) : null, objectLabel: f.objectLabel ?? null,
     }));
     return NextResponse.json({
@@ -25,12 +25,12 @@ export async function GET(_request: Request, { params }: { params: Promise<{ ins
         createdAt: new Date(inspection.createdAt).toISOString(),
         videoUrl: "/api/inspections/" + String(inspection._id) + "/video",
         durationSeconds: inspection.durationSeconds ?? null,
-        error: inspection.error ?? null,
+        error: inspection.status === "failed" ? "Video analysis failed. Check service configuration and retry with a supported video." : null,
       },
       findings: serializedFindings,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not load inspection";
-    return NextResponse.json({ error: message }, { status: message.includes("not configured") ? 503 : 500 });
+    return NextResponse.json({ error: error instanceof SyntaxError ? "Invalid request body" : "The service could not complete this request. Check server configuration and try again." }, { status: error instanceof SyntaxError ? 400 : message.includes("not configured") ? 503 : 500 });
   }
 }

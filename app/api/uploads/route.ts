@@ -46,6 +46,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ videoUrl: blob.url, url: blob.url, contentType: type }, { status: 201 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not upload video";
-    return NextResponse.json({ error: message }, { status: 400 });
+    return NextResponse.json({ error: error instanceof SyntaxError ? "Invalid request body" : "The service could not complete this request. Check server configuration and try again." }, { status: 400 });
   }
 }

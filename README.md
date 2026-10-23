@@ -61,7 +61,7 @@ The app's MongoDB collection names, fields, and Search index definition must mat
 
 Video uploads use Vercel Blob's private upload flow, rather than sending the full video through a standard serverless request body. Private Blob delivery depends on the application serving authorized access to the file; do not expose or log private URLs. The MVP has no user authentication, so do not use it to store sensitive footage until access controls are added.
 
-The current AI pipeline sends the stored source video to Gemini and stores structured findings. Review the results as suggestions, and verify service limits and model availability for your project before a live demo.
+The AI pipeline sends the stored source video to Gemini, extracts JPEG evidence frames at the returned timestamps, and stores the frames privately alongside structured findings. Evidence annotations are localized against those extracted still frames. The bundled FFmpeg binary is included in Vercel function file tracing; the inspection function requests a 300-second execution limit, which must be supported by the hosting plan. Long model processing or media jobs may exceed that limit and should use a durable job worker before production use. Review changes append an atomic history entry so earlier review decisions remain available in MongoDB. Damage links to an object only when the model's object label identifies one object unambiguously. Review the results as suggestions, and verify service limits and model availability for your project before a live demo.
 
 ## MVP boundaries
 
@@ -69,3 +69,17 @@ The current AI pipeline sends the stored source video to Gemini and stores struc
 - AI findings are suggestions for tenant review, not verified facts. Review evidence and timestamps before relying on a record.
 - The MVP does not include user authentication or tenant/landlord access controls. Do not store sensitive footage in a publicly accessible demo.
 - Atlas Vector Search and hybrid search require a compatible Atlas deployment and explicitly configured indexes. They are not implied by ordinary MongoDB queries or Atlas Search alone.
+
+## Verification status (23 October 2026)
+
+MongoDB admin ping and live API persistence checks passed: room creation/read, review transitions with preserved history, reopening findings, and rejecting invalid inspection requests before writing processing records. Temporary test documents were removed. The configured Atlas cluster has a ready, queryable `findings_search` index.
+
+The complete upload-to-analysis flow still requires `BLOB_READ_WRITE_TOKEN` in the local environment. Without it, the inspection endpoint returns HTTP 503 before creating a processing record. A successful MongoDB or Gemini connectivity check alone does not verify video analysis, evidence extraction, or private media delivery.
+
+## Browser object detection
+
+YOLO11n runs locally in the browser using ONNX Runtime Web's CPU/WASM backend. It loads approximately 24 MB of model/runtime assets from this app on first use. No detector API key or GPU server is required; Google Gemini still uses its server-side credential for damage analysis.
+
+The shipped model is pretrained on COCO80. The room filter supports chair, couch, potted plant, bed, dining table, toilet, TV, laptop, microwave, oven, toaster, sink, refrigerator, clock, and vase. It does not recognize an open vocabulary; desk, wardrobe, shelf, door, and window are not supported class names. Unrecognized items remain absent rather than being fabricated. Confidence values are the actual model class scores, not calibrated certainty. Per-frame class-aware non-maximum suppression removes overlapping duplicate detections; it does not establish physical identity across camera views.
+
+Model provenance, export command, checksum and AGPL-3.0 license notice are in [public/models/README.md](public/models/README.md). Browser preprocessing letterboxes original frames to 640×640 and maps detections back into original-frame normalized coordinates. Three synthetic tensor tests verify landscape/portrait geometry, NMS, unsupported classes, score filtering and invalid output shapes; these tests do not establish model accuracy. Real browser WASM inference also passed on two COCO photos: a kitchen returned two ovens; a furnished room returned two chairs, two TVs, a potted plant, a vase, and a clock. The visible dining table was missed, so these checks demonstrate functioning inference rather than complete inventory accuracy. See the model provenance document for source images and measured scores.

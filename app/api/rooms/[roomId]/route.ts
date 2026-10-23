@@ -14,6 +14,6 @@ export async function GET(_request: Request, { params }: { params: Promise<{ roo
     return NextResponse.json({ room: { id: String(room._id), name: room.name, createdAt: new Date(room.createdAt).toISOString() } });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not load room";
-    return NextResponse.json({ error: message }, { status: message.includes("not configured") ? 503 : 500 });
+    return NextResponse.json({ error: error instanceof SyntaxError ? "Invalid request body" : "The service could not complete this request. Check server configuration and try again." }, { status: error instanceof SyntaxError ? 400 : message.includes("not configured") ? 503 : 500 });
   }
 }

@@ -13,7 +13,9 @@ export async function GET(request: Request) {
     if (source.protocol !== "https:" || !source.hostname.endsWith(".private.blob.vercel-storage.com")) {
       return new NextResponse("Not found", { status: 404 });
     }
-    const registered = await (await getDb()).collection("inspections").findOne({ sourceUrl: raw }, { projection: { _id: 1 } });
+    const db = await getDb();
+    const registered = await db.collection("inspections").findOne({ sourceUrl: raw }, { projection: { _id: 1 } })
+      || await db.collection("findings").findOne({ evidenceFrameUrl: raw }, { projection: { _id: 1 } });
     if (!registered) return new NextResponse("Not found", { status: 404 });
     const blob = await getBlob(decodeURIComponent(source.pathname.slice(1)), { access: "private" });
     if (!blob || blob.statusCode !== 200) return new NextResponse("Not found", { status: 404 });
@@ -28,6 +30,6 @@ export async function GET(request: Request) {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not read media";
-    return NextResponse.json({ error: message }, { status: message.includes("not configured") ? 503 : 500 });
+    return NextResponse.json({ error: error instanceof SyntaxError ? "Invalid request body" : "The service could not complete this request. Check server configuration and try again." }, { status: error instanceof SyntaxError ? 400 : message.includes("not configured") ? 503 : 500 });
   }
 }

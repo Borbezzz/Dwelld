@@ -1,7 +1,7 @@
 import { ObjectId } from "mongodb";
 import { after, NextResponse } from "next/server";
 import { getDb, ensureIndexes, parseObjectId } from "@/lib/server/db";
-import { analyzeVideo } from "@/lib/server/inspection";
+import { analyzeVideo, validateDetectionFrames } from "@/lib/server/inspection";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -9,8 +9,8 @@ export const maxDuration = 300;
 
 function errorResponse(error: unknown) {
   const message = error instanceof Error ? error.message : "The request could not be completed";
-  const status = message.includes("not configured") || message.includes("unavailable") ? 503 : 500;
-  return NextResponse.json({ error: message }, { status });
+  const status = error instanceof SyntaxError ? 400 : message.includes("not configured") || message.includes("unavailable") ? 503 : 500;
+  return NextResponse.json({ error: error instanceof SyntaxError ? "Invalid request body" : "The service could not complete this request. Check server configuration and try again." }, { status });
 }
 
 function serializeInspection(doc: Record<string, any>) {
@@ -36,13 +36,30 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json() as { roomId?: unknown; videoUrl?: unknown; videoMimeType?: unknown };
+    const body = await request.json() as { roomId?: unknown; videoUrl?: unknown; videoMimeType?: unknown; detectionFrames?: unknown };
     const roomId = typeof body.roomId === "string" ? parseObjectId(body.roomId) : null;
     const videoUrl = typeof body.videoUrl === "string" ? body.videoUrl : "";
-    const mimeType = typeof body.videoMimeType === "string" ? body.videoMimeType : "";
+    const mimeType = typeof body.videoMimeType === "string" ? body.videoMimeType.split(";")[0].trim().toLowerCase() : "";
     if (!roomId) return NextResponse.json({ error: "A valid roomId is required" }, { status: 400 });
     if (!videoUrl || videoUrl.length > 2048) return NextResponse.json({ error: "A videoUrl is required" }, { status: 400 });
 
+    if (!["video/mp4", "video/webm", "video/quicktime", "video/x-msvideo", "video/mpeg"].includes(mimeType)) {
+      return NextResponse.json({ error: "Unsupported video format" }, { status: 415 });
+    }
+    try {
+      const source = new URL(videoUrl);
+      if (source.protocol !== "https:" || !source.hostname.endsWith(".private.blob.vercel-storage.com") ||
+          source.username || source.password || source.port || source.search || source.hash || source.pathname.length <= 1) throw new Error();
+      decodeURIComponent(source.pathname);
+    } catch {
+      return NextResponse.json({ error: "Video URL must refer to a private Vercel Blob upload" }, { status: 400 });
+    }
+    if (!process.env.GEMINI_API_KEY || !process.env.BLOB_READ_WRITE_TOKEN) {
+      return NextResponse.json({ error: "Video inspection is unavailable: Gemini or media storage is not configured" }, { status: 503 });
+    }
+    let detectionFrames;
+    try { detectionFrames = validateDetectionFrames(body.detectionFrames); }
+    catch { return NextResponse.json({ error: "Invalid browser detection frames" }, { status: 400 }); }
     const db = await getDb();
     await ensureIndexes(db);
     const room = await db.collection("rooms").findOne({ _id: roomId }, { projection: { _id: 1 } });
@@ -52,26 +69,28 @@ export async function POST(request: Request) {
     const createdAt = new Date();
     const inspectionDoc = {
       _id: inspectionId, roomId, type: "move-in", sourceUrl: videoUrl, videoMimeType: mimeType,
-      status: "processing", createdAt, durationSeconds: null,
+      status: "processing", createdAt, durationSeconds: null, detector: "yolo11n-coco", detectionFrames,
     };
     await inspections.insertOne(inspectionDoc);
 
     after(async () => {
       try {
-        const result = await analyzeVideo(videoUrl, mimeType);
-        const objectIds = new Map(result.findings.filter((f) => f.kind === "object").map((f) => [f.label.toLowerCase(), new ObjectId()]));
-        const docs = result.findings.map((finding) => {
-          const id = finding.kind === "object" ? objectIds.get(finding.label.toLowerCase()) : undefined;
-          const objectId = finding.kind === "damage" && finding.objectLabel ? objectIds.get(finding.objectLabel.toLowerCase()) : undefined;
-          return {
-            _id: id || new ObjectId(), inspectionId, roomId, ...finding,
-            objectId: objectId || null, reviewStatus: "pending", createdAt: new Date(),
-          };
+        const result = await analyzeVideo(videoUrl, mimeType, detectionFrames);
+        // Every observation has its own identity, including objects sharing a label.
+        const ids = result.findings.map(() => new ObjectId());
+        const objectIds = new Map<string, ObjectId>();
+        result.findings.forEach((finding, index) => {
+          if (finding.kind === "object" && finding.detectionId) objectIds.set(finding.detectionId, ids[index]);
         });
+        const docs = result.findings.map((finding, index) => ({
+          _id: ids[index], inspectionId, roomId, ...finding,
+          objectId: finding.parentDetectionId ? objectIds.get(finding.parentDetectionId) || null : null,
+          source: "ai", reviewStatus: "pending", reviewHistory: [], createdAt: new Date(),
+        }));
         if (docs.length) await db.collection("findings").insertMany(docs);
         await inspections.updateOne({ _id: inspectionId }, { $set: { status: "completed", durationSeconds: result.durationSeconds, completedAt: new Date() } });
       } catch (error) {
-        const message = error instanceof Error ? error.message : "Gemini analysis failed";
+        const message = "Video analysis failed. Check service configuration and retry with a supported video.";
         await inspections.updateOne({ _id: inspectionId }, { $set: { status: "failed", error: message, failedAt: new Date() } });
       }
     });
