@@ -1,3 +1,4 @@
+import { errorResponse } from "@/lib/server/api-error";
 import { NextResponse } from "next/server";
 import { getDb, parseObjectId } from "@/lib/server/db";
 
@@ -38,8 +39,6 @@ export async function GET(request: Request) {
       timestamp: r.timestampSeconds, reviewStatus: r.reviewStatus, score: r.score,
     })), search: "atlas-search" });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Atlas Search failed";
-    if (/index|search/i.test(message)) return NextResponse.json({ error: "Atlas Search index unavailable. Configure the findings_search index described in docs/mongodb-atlas-search.md." }, { status: 503 });
-    return NextResponse.json({ error: error instanceof SyntaxError ? "Invalid request body" : "The service could not complete this request. Check server configuration and try again." }, { status: error instanceof SyntaxError ? 400 : message.includes("not configured") ? 503 : 500 });
+    return errorResponse(error, "app/api/search/route.ts");
   }
 }

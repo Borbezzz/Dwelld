@@ -1,0 +1,14 @@
+{
+  "testedAt": "2026-10-23T18:59:42.143Z",
+  "fixture": "Real COCO room photo, not live camera footage",
+  "elapsedMs": 5183,
+  "sourceWidth": 640,
+  "sourceHeight": 426,
+  "analyzedObjectIds": [
+    "chair-verification"
+  ],
+  "surfacesAnalyzed": true,
+  "findings": [],
+  "evidenceReadBytes": 561902,
+  "cleanedUp": true
+}

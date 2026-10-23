@@ -1,3 +1,4 @@
+import { errorResponse, reportError } from "@/lib/server/api-error";
 import { ObjectId } from "mongodb";
 import { parseMediaId, getMediaFile } from "@/lib/server/media";
 import { after, NextResponse } from "next/server";
@@ -8,11 +9,6 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-function errorResponse(error: unknown) {
-  const message = error instanceof Error ? error.message : "The request could not be completed";
-  const status = error instanceof SyntaxError ? 400 : message.includes("not configured") || message.includes("unavailable") ? 503 : 500;
-  return NextResponse.json({ error: error instanceof SyntaxError ? "Invalid request body" : "The service could not complete this request. Check server configuration and try again." }, { status });
-}
 
 function serializeInspection(doc: Record<string, any>) {
   return {
@@ -32,7 +28,7 @@ export async function GET(request: Request) {
     await ensureIndexes(db);
     const docs = await db.collection("inspections").find(roomId ? { roomId } : {}).sort({ createdAt: -1 }).limit(100).toArray();
     return NextResponse.json({ inspections: docs.map(serializeInspection) });
-  } catch (error) { return errorResponse(error); }
+  } catch (error) { return errorResponse(error, "app/api/inspections/route.ts"); }
 }
 
 export async function POST(request: Request) {
@@ -86,12 +82,13 @@ export async function POST(request: Request) {
         if (docs.length) await db.collection("findings").insertMany(docs);
         await inspections.updateOne({ _id: inspectionId }, { $set: { status: result.warnings.length ? "partial" : "completed", analysisWarnings: result.warnings, durationSeconds: result.durationSeconds, completedAt: new Date() } });
       } catch (error) {
-        const message = "Video analysis failed. Check service configuration and retry with a supported video.";
+        const failure = reportError(error, "inspection.analyze");
+        const message = `${failure.error} Request ID: ${failure.requestId}`;
         await inspections.updateOne({ _id: inspectionId }, { $set: { status: "failed", error: message, failedAt: new Date() } });
       }
     });
     return NextResponse.json({
       inspection: { id: String(inspectionId), roomId: String(roomId), status: "processing", createdAt: createdAt.toISOString(), videoUrl: "/api/inspections/" + String(inspectionId) + "/video" },
     }, { status: 201 });
-  } catch (error) { return errorResponse(error); }
+  } catch (error) { return errorResponse(error, "app/api/inspections/route.ts"); }
 }

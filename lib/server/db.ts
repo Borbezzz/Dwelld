@@ -9,7 +9,7 @@ function getClientPromise(): Promise<MongoClient> {
   if (global._dwelldMongoClientPromise) return global._dwelldMongoClientPromise;
   const uri = process.env.MONGODB_URI;
   if (!uri) throw new Error("MongoDB is unavailable: MONGODB_URI is not configured");
-  const promise = new MongoClient(uri).connect().catch((error) => {
+  const promise = new MongoClient(uri, { serverSelectionTimeoutMS: 10_000, connectTimeoutMS: 10_000, maxPoolSize: 10 }).connect().catch((error) => {
     global._dwelldMongoClientPromise = undefined;
     throw error;
   });

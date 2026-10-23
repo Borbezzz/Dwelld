@@ -1,3 +1,4 @@
+import { errorResponse } from "@/lib/server/api-error";
 import { ObjectId } from "mongodb";
 import { NextResponse } from "next/server";
 import { getDb, parseObjectId } from "@/lib/server/db";
@@ -34,6 +35,6 @@ export async function POST(request: Request, { params }: { params: Promise<{ ins
     await db.collection("findings").insertOne(doc);
     return NextResponse.json({ finding: { ...doc, id: String(doc._id), _id: undefined, inspectionId: String(inspectionId), roomId: String(doc.roomId), objectId: objectId ? String(objectId) : null, uncertain: false } }, { status: 201 });
   } catch (error) {
-    return NextResponse.json({ error: "Could not save the damage marker" }, { status: error instanceof SyntaxError ? 400 : 500 });
+    return errorResponse(error, "finding.create");
   }
 }

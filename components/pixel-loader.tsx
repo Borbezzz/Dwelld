@@ -1,0 +1,3 @@
+"use client";
+import {useEffect,useState} from 'react';
+export default function PixelLoader({label,startedAt}:{label:string;startedAt?:number}) {const [initialStart]=useState(Date.now);const start=startedAt??initialStart;const [seconds,setSeconds]=useState(0);useEffect(()=>{const tick=()=>setSeconds(Math.max(0,Math.floor((Date.now()-start)/1000)));tick();const id=setInterval(tick,1000);return()=>clearInterval(id)},[start]);return <div className="pixel-loader" role="status"><div className="pixel-grid" aria-hidden>{Array.from({length:25},(_,i)=><i key={i} style={{animationDelay:`${(Math.floor(i/5)+i%5)*.1}s`}}/>)}</div><div><span className="shimmer-label">{label}</span><small>{seconds}s elapsed · You can keep this page open</small></div></div>}

@@ -1,3 +1,4 @@
+import { errorResponse } from "@/lib/server/api-error";
 import { createHash, randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import { Binary, ObjectId } from "mongodb";
@@ -75,10 +76,10 @@ export async function POST(request: Request) {
     const upload: Upload = { _id: new ObjectId(), filename, contentType, size: body.size, status: "uploading", expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) };
     await uploads.insertOne(upload);
     return NextResponse.json({ uploadId: upload._id.toHexString(), chunkSize: CHUNK_SIZE }, { status: 201 });
-  } catch {
+  } catch (error) {
     if (cleanupRef) await deleteMedia(cleanupRef).catch(() => {});
     if (unlock) await unlock().catch(() => {});
-    return failure("Could not complete the upload. Retry the request.");
+    return errorResponse(error, "upload.finalize");
   }
 }
 
@@ -115,5 +116,5 @@ export async function PATCH(request: Request) {
     const stored = await parts.findOne({ uploadId: id, part }, { projection: { digest: 1 } });
     if (stored?.digest !== digest) return failure("Upload part differs from the previously accepted data", 409);
     return NextResponse.json({ part, received: size });
-  } catch { return failure("Could not store the upload part. Retry the request."); }
+  } catch (error) { return errorResponse(error, "upload.part"); }
 }

@@ -1,3 +1,4 @@
+import { errorResponse } from "@/lib/server/api-error";
 import { NextResponse } from "next/server";
 import { getDb, parseObjectId } from "@/lib/server/db";
 
@@ -39,7 +40,6 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ in
       objectLabel: updated.objectLabel ?? null,
     } });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Could not update finding";
-    return NextResponse.json({ error: error instanceof SyntaxError ? "Invalid request body" : "The service could not complete this request. Check server configuration and try again." }, { status: error instanceof SyntaxError ? 400 : message.includes("not configured") ? 503 : 500 });
+    return errorResponse(error, "app/api/inspections/[inspectionId]/findings/[findingId]/route.ts");
   }
 }

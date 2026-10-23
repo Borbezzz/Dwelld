@@ -1,3 +1,4 @@
+import { errorResponse } from "@/lib/server/api-error";
 import { mediaResponse, parseMediaId } from "@/lib/server/media";
 import { NextResponse } from "next/server";
 import { getDb, parseObjectId } from "@/lib/server/db";
@@ -15,7 +16,6 @@ export async function GET(request: Request, { params }: { params: Promise<{ insp
     if (!parseMediaId(inspection.sourceUrl)) return new NextResponse("Not found", { status: 404 });
     return await mediaResponse(inspection.sourceUrl, request);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Could not read video";
-    return NextResponse.json({ error: error instanceof SyntaxError ? "Invalid request body" : "The service could not complete this request. Check server configuration and try again." }, { status: error instanceof SyntaxError ? 400 : message.includes("not configured") ? 503 : 500 });
+    return errorResponse(error, "app/api/inspections/[inspectionId]/video/route.ts");
   }
 }
