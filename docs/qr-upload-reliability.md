@@ -36,6 +36,7 @@ website for native-app-only commits. Vercel-only tracing exclusions remove ONNX'
 Windows and macOS binaries from Linux function bundles; Linux binaries and models
 are retained. No measured latency improvement is claimed yet.
 
-The QR fixes were developed on an isolated branch because the main checkout was
-actively editing the same native files for the live splat preview. Integrate those
-changes together before installing a combined build.
+The QR fixes were developed on an isolated branch and combined with the native
+live-splat renderer. The combined simulator build passes. An updated native app
+installation and a physical QR-to-save run are still required; a web deployment
+cannot update an already-installed iPhone app.

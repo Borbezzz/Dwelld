@@ -84,6 +84,10 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
             if let http = response as? HTTPURLResponse, http.statusCode == 200, let body = try JSONSerialization.jsonObject(with: data) as? [String: Any], body["stopRequested"] as? Bool == true, scanning { stop() }
         } catch { /* Capture continues locally if the laptop connection drops. */ }
     }
+    @Published var liveSplats: [LiveGaussian] = []
+    @Published var splatCount = 0
+    @Published var splatRevision = 0
+    @Published var splatRenderError = ""
     @Published var tracking = "Camera idle"
     @Published var frameCount = 0
     @Published var depthCount = 0
@@ -105,8 +109,8 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
     private let splatBuilder = DepthSplatBuilder()
     private var manifest: Manifest?
     private(set) var directory: URL?
-    override init() { super.init(); view.delegate = self; restoreConnection() }
-    required init?(coder: NSCoder) { super.init(); view.delegate = self; restoreConnection() }
+    override init() { super.init(); view.delegate = self; view.isModelEnabled = false; restoreConnection() }
+    required init?(coder: NSCoder) { super.init(); view.delegate = self; view.isModelEnabled = false; restoreConnection() }
     func encode(with coder: NSCoder) {}
     func start() {
         guard !pairing, !uploading, !processing, !ready || uploadComplete else { return }
@@ -118,7 +122,7 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
             inspectionId = ""; manifest = nil; frameCount = 0; depthCount = 0; featureCount = 0; processing = false; directory = dir; frames = []; assets = []; startTime = nil; lastTimestamp = -1; ready = false
             uploadComplete = false; uploadProgress = 0
             if var saved = self.connection { saved.captureFolder = dir.lastPathComponent; try CaptureConnectionStore.save(saved); self.connection = saved }
-            splatBuilder.reset()
+            splatBuilder.reset(); liveSplats = []; splatCount = 0; splatRevision += 1
             view.captureSession.run(configuration: RoomCaptureSession.Configuration())
             // Read the current frame without replacing RoomPlan's ARSession delegate.
             timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in Task { @MainActor in self?.recordFrame() } }
@@ -140,6 +144,7 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
         let index = String(format: "%04d", frames.count), imageName = "frame-\(index).jpg"
         do {
             splatBuilder.add(frame: frame)
+            liveSplats = splatBuilder.preview(); splatCount = splatBuilder.count; splatRevision += 1
             let image = CIImage(cvPixelBuffer: frame.capturedImage)
             guard let jpeg = context.jpegRepresentation(of: image, colorSpace: CGColorSpaceCreateDeviceRGB(), options: [:]) else { return }
             try jpeg.write(to: dir.appendingPathComponent(imageName))
@@ -361,6 +366,14 @@ private final class DepthSplatBuilder {
                 let color = SIMD3<Float>(luma + 1.402 * red, luma - 0.344136 * blue - 0.714136 * red, luma + 1.772 * blue)
                 samples[cell] = Sample(point: point, color: simd_clamp(color, SIMD3<Float>(repeating: 0), SIMD3<Float>(repeating: 1)), radius: min(0.035, max(0.008, z * sx * 1.2 / k.columns.0.x)))
             }
+        }
+    }
+    func preview() -> [LiveGaussian] {
+        // Rendering uses a bounded subset; the export keeps the complete accumulated preview.
+        let step = max(1, Int(ceil(Double(samples.count) / 40000)))
+        return samples.values.enumerated().compactMap { index, sample in
+            guard index % step == 0 else { return nil }
+            return LiveGaussian(centerRadius: SIMD4<Float>(sample.point.x, sample.point.y, sample.point.z, sample.radius), color: SIMD4<Float>(sample.color.x, sample.color.y, sample.color.z, 0.9))
         }
     }
     func write(to url: URL) throws -> Bool {
