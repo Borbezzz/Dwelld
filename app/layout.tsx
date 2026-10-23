@@ -4,6 +4,8 @@ import { Analytics } from "@vercel/analytics/next";
 
 import "./globals.css";
 import "./experience.css";
+import "./landing.css";
+import "./editorial.css";
 
 export const metadata: Metadata = {
   title: "dwelld. — Your room remembers",

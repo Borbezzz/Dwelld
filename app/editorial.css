@@ -1,0 +1,34 @@
+/* Shared material, type and controls across the room record. */
+body{background:#f7f5ef;color:#302e28}
+.live-shell,.results-page,.capture-page,.comparison-page,.inspection-report,.editorial-surface{background:#f7f5ef;color:#302e28}
+.live-shell,.results-wrap,.capture-wrap,.comparison-page,.editorial-surface{max-width:1480px;margin-inline:auto}
+.brand,.landing-wordmark{font-family:Georgia,'Times New Roman',serif;letter-spacing:-2px}.brand-mark{display:none}
+.capture-top,.live-topbar{min-height:100px;border-bottom:1px solid #d7d2c7}
+.button{border-radius:2px;box-shadow:none}.button-dark{background:#373d30;color:#fffdf7}
+.field{border-radius:0;background:transparent;border:0;border-bottom:1px solid #8c877d;box-shadow:none}
+.results-page h1,.comparison-page h1,.editorial-surface h1,.account-intro h1{font-family:Georgia,'Times New Roman',serif;font-weight:400;letter-spacing:-.055em;line-height:1.05}
+.spaces-split{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:48px;align-items:start}
+.spaces-split .landing-room{grid-template-columns:26px minmax(0,1fr) auto 22px;gap:16px;padding:26px 0}
+.room-select{padding:0;border:0;background:none;text-align:left;cursor:pointer;color:inherit}
+.landing-room.active{border-top-color:#59664e}.landing-room.active .room-select{color:#526146}
+.room-reconstruction{position:sticky;top:24px;background:#eeece4;min-height:480px;overflow:hidden}
+.reconstruction-heading,.reconstruction-footer{position:relative;z-index:2;display:flex;justify-content:space-between;gap:16px;padding:22px;font-size:12px}
+.reconstruction-heading button{border:0;background:none;text-decoration:underline;cursor:pointer}
+.reconstruction-canvas{position:relative;height:400px;width:100%}.reconstruction-canvas canvas{max-width:100%}
+.reconstruction-message{position:absolute;inset:70px 28px;display:flex;flex-direction:column;justify-content:center;pointer-events:none}
+.reconstruction-message h3{font:400 36px/1.1 Georgia,serif;letter-spacing:-1px;max-width:300px}
+.reconstruction-message p{max-width:300px;font-size:14px;line-height:1.7;color:#706b61}.reconstruction-message small{max-width:300px;font-size:11px;color:#706b61}
+.account-layout{display:grid;grid-template-columns:1fr 1fr;gap:10%;padding:70px 0 100px;border-top:1px solid #d7d2c7;min-height:65vh}
+.account-intro h1{font-size:clamp(48px,5.5vw,80px);margin:24px 0}.account-intro h1 em{font-weight:400}
+.account-intro>p:not(.eyebrow){font-size:17px;line-height:1.7;color:#706b61;max-width:380px}
+.account-form{max-width:440px;width:100%;padding-top:24px}.account-form form{display:grid;gap:24px}.account-form label{display:grid;gap:10px;font-size:13px}.account-form small{color:#706b61;font-size:11px}.account-form h2{font:400 32px Georgia,serif;margin:0 0 24px}.account-form .landing-text-action{margin-top:22px}.profile-room-form{border-top:1px solid #d7d2c7;padding:26px 0}.account-form>h2:not(:first-child){margin-top:52px}
+.live-shell[data-stage="prepare"] .feed-anchor{min-height:0}.live-shell[data-stage="prepare"] .feed-anchor>.pairing-layer{position:relative;inset:auto;max-width:none;transform:none;padding:40px;align-items:stretch;text-align:left;background:#eeece4}
+.live-shell[data-stage="prepare"] .feed-anchor>div:first-child{display:none!important}
+.capture-mode{display:flex;gap:24px;border-bottom:1px solid #c9c6bb;margin:12px 0 24px}.capture-mode button{background:none;border:0;border-bottom:2px solid transparent;padding:12px 0;cursor:pointer;font:inherit;color:#706b61}.capture-mode button[aria-pressed="true"]{border-bottom-color:#373d30;color:#302e28}.capture-mode button:disabled{opacity:.5}
+.inspection-upload{border-top:1px solid #d7d2c7;padding-top:24px;margin-top:20px}.inspection-upload video{width:100%;max-height:300px;margin-bottom:20px}.inspection-upload p{font-size:12px;line-height:1.6}.upload-picker{display:grid;gap:16px;overflow-wrap:anywhere;padding:22px;border:1px dashed #8c877d;font-size:14px}.upload-picker input{max-width:100%;font-size:12px}
+.editorial-surface{padding:40px 56px}.editorial-surface>h1{font-size:48px;margin:30px 0 16px}.editorial-surface>p{color:#706b61;line-height:1.7}.editorial-surface>section,.editorial-surface>details{margin-top:30px}
+@media(max-width:900px){.spaces-split{gap:24px}.spaces-split .landing-room{grid-template-columns:20px 1fr 20px}.spaces-split .landing-room-count{grid-column:2;grid-row:2}.spaces-split .landing-room>a{grid-column:3;grid-row:1}.account-layout{gap:40px}.room-reconstruction{min-height:420px}.reconstruction-canvas{height:340px}}
+@media(max-width:650px){.spaces-split,.account-layout{grid-template-columns:1fr}.room-reconstruction{position:relative;top:0}.account-layout{padding:32px 0 50px;gap:20px}.account-form{max-width:none}.account-intro h1{font-size:54px}.live-shell[data-stage="prepare"] .feed-anchor>.pairing-layer{padding:22px}.editorial-surface{padding:24px}.capture-top,.live-topbar{min-height:80px}}
+@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
+.landing-account .landing-intro{padding:40px 0 48px;border-bottom:1px solid #d7d2c7}.landing-account .landing-intro h1{font-size:clamp(54px,6vw,84px)}.landing-account #spaces{padding-top:48px}
+.inspection-report{color:#302e28}.comparison-page button,.editorial-surface button{border-radius:2px}.comparison-page h2,.editorial-surface h2{font-family:Georgia,serif;font-weight:400}.room-select{font-size:inherit;letter-spacing:inherit}
