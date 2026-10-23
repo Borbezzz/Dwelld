@@ -42,7 +42,7 @@ Evidence room: `6adbb411fd18996e0aea9ddb`, titled **Production storage recovery 
 
 This used a three-second static room-photo MP4 as a **storage fixture**. No detections were submitted (0 findings). Pairing here verifies API token/state persistence only, not physical iPhone camera capture, WebRTC, YOLO, or Gemini. Those remain separate acceptance gates. A production admin ping endpoint was not introduced; real production collection and GridFS reads/writes are stronger application-path evidence.
 
-The temporary Atlas rule expires after six hours. Durable production connectivity still needs an approved long-term policy. Repeat these API/storage checks against the integrated correction release; this verification was against the previously deployed main build.
+The temporary Atlas rule expires at **02:21:58 BST on 24 October 2026** (`2026-10-24T01:21:58Z`). Durable production connectivity still needs an approved long-term policy. Repeat these API/storage checks against the integrated correction release; this verification was against the previously deployed main build.
 
 References: [Atlas connection troubleshooting](https://www.mongodb.com/docs/atlas/troubleshoot-connection/) and [Atlas network requirements](https://www.mongodb.com/docs/atlas/setup-cluster-security/).
 
@@ -57,3 +57,18 @@ Read-only Vercel API checks confirm the team is on Hobby; `GET /v1/connect/netwo
 Production also has no TURN configuration environment variables. Cross-network phone WebRTC relay testing remains separate from MongoDB connectivity recovery.
 
 Sources: [Vercel static egress options](https://vercel.com/kb/guide/how-to-allowlist-deployment-ip-address), [Static IP availability](https://vercel.com/kb/guide/can-i-get-a-fixed-ip-address), [current pricing](https://vercel.com/pricing).
+
+## Integrated release verification — e4cae51
+
+After the coordinator promoted `dwelld-ce9emcw30-borbez2s-projects.vercel.app`, the complete API/Gemini/storage smoke ran against **https://dwelld.vercel.app** at 20:31 BST on 23 October. All ten checks passed; see `production-recovery-verification.json` for the measured results.
+
+- Created and retrieved a room; created and paired a session through scoped API credentials.
+- Submitted the actual 640×426 public room photograph to the deployed Gemini surface-analysis endpoint, with an empty object list (no fabricated detections).
+- Analysis completed in **19.5 seconds**, returning **0 potential damage findings**. This is a result for that sampled image, not a claim that the room is damage-free.
+- Retrieved its 561,902-byte normalized PNG evidence from GridFS and verified exact byte equality with the normalized source.
+- Uploaded a matching two-second static-photo source video (67,406 bytes), saved the inspection, reopened it, and verified byte-exact source retrieval.
+- Evidence remained retrievable through the authorized session endpoint after saving.
+
+Saved record: [production Gemini verification](https://dwelld.vercel.app/inspections/6adbb62a413d515781513013), in the room **Production Gemini evidence verification**.
+
+This verifies the deployed Gemini provider, MongoDB data writes, GridFS evidence/source storage, API pairing credentials and saved-result retrieval. It does **not** verify physical iPhone footage, actual WebRTC transport, or fresh browser YOLO inference; no substitute footage was represented as a live camera test.

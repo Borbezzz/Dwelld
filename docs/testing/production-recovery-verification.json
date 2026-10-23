@@ -1,0 +1,60 @@
+{
+  "base": "https://dwelld.vercel.app",
+  "startedAt": "2026-10-23T19:31:23.685Z",
+  "fixture": "Actual public room photo; static two-second source video. Surfaces-only Gemini verification, no camera or new YOLO inference.",
+  "checks": [
+    {
+      "name": "integrated deployed room creation",
+      "pass": true
+    },
+    {
+      "name": "integrated deployed room retrieval",
+      "pass": true
+    },
+    {
+      "name": "integrated deployed live session creation",
+      "pass": true
+    },
+    {
+      "name": "pair claim and desktop retrieval",
+      "pass": true,
+      "note": "API only"
+    },
+    {
+      "name": "real Gemini surface analysis",
+      "pass": true,
+      "elapsedMs": 19500,
+      "findings": 0,
+      "sourceWidth": 640,
+      "sourceHeight": 426
+    },
+    {
+      "name": "Gemini evidence stored and retrieved byte-exact",
+      "pass": true,
+      "bytes": 561902
+    },
+    {
+      "name": "source GridFS upload",
+      "pass": true,
+      "bytes": 67406
+    },
+    {
+      "name": "Gemini inspection saved and reopened",
+      "pass": true,
+      "status": "completed",
+      "findings": 0
+    },
+    {
+      "name": "saved source retrieved byte-exact",
+      "pass": true
+    },
+    {
+      "name": "evidence still retrievable after save",
+      "pass": true
+    }
+  ],
+  "roomId": "6adbb60d5465bb757418dc2a",
+  "sessionId": "6adbb60f5465bb757418dc2b",
+  "evidenceFrameRef": "gridfs:6adbb613717394b85d4fe167",
+  "inspectionId": "6adbb62a413d515781513013"
+}
