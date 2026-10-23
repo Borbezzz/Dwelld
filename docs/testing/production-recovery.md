@@ -72,3 +72,11 @@ After the coordinator promoted `dwelld-ce9emcw30-borbez2s-projects.vercel.app`, 
 Saved record: [production Gemini verification](https://dwelld.vercel.app/inspections/6adbb62a413d515781513013), in the room **Production Gemini evidence verification**.
 
 This verifies the deployed Gemini provider, MongoDB data writes, GridFS evidence/source storage, API pairing credentials and saved-result retrieval. It does **not** verify physical iPhone footage, actual WebRTC transport, or fresh browser YOLO inference; no substitute footage was represented as a live camera test.
+
+## Phone marker follow-up
+
+The user confirmed the physical phone connects, then reported that Save marker turns grey. The connected desktop also received real object updates (185 ms reported inference latency); this is not a full save/reopen acceptance result.
+
+Corrected the marker interface to explain point/description requirements, retain the source image URL while moving the point, capture manual evidence directly from the current camera frame even before YOLO is ready, show saving/success feedback, and retain the observation ID across retries. A stalled marker request now times out after 45 seconds while retaining the photo for retry. Recording finalization waits for an in-flight marker save.
+
+TypeScript and the 29 existing tests passed for the primary patch. Production marker API verification passed: real photo saved, repeat submission returned the same marker, desktop read exactly one manual finding, normalized coordinates were retained, and its GridFS source image was retrieved. Test session: `6adbb7a9d94f5c6bbb0d7cf8`. This API check does not establish that the updated UI has been retested on the user's iPhone.
