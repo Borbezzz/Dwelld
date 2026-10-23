@@ -1,6 +1,6 @@
 # LiDAR and spatial inventory feasibility
 
-Researched 23 October 2026. This is a proposal, not a completed native capture feature. Current Dwelld uses camera images and short-lived 2D tracks; it has no measured room coordinates.
+Researched 23 October 2026. Implementation now lives in `ios/DwelldCapture`, the spatial API/workspace, and `scripts/spatial`. The native source compiles for simulator and physical iPhone, and the signed app was installed on an iPhone 16 Pro. Real capture and reconstruction validation are tracked in `docs/testing/spatial-verification.md`; the design discussion below is retained as context.
 
 ## Recommended next experiment
 
@@ -13,10 +13,10 @@ Apple documents RoomPlan as a Swift API using camera and LiDAR to identify room 
 | Capability | Implementation path | Current Dwelld status |
 |---|---|---|
 | RGB camera, YOLO boxes, short-term tracking | Browser camera frames + ONNX | Implemented; camera testing required |
-| Room geometry and furniture transforms | Native Swift RoomPlan | Research only |
-| Depth, camera pose, coloured point cloud | Native ARKit frame data + calibration | Research only |
-| View exported USDZ | Safari AR Quick Look | Future integration |
-| Desktop spatial inventory | Render real exported dimensions/transforms in web viewer | Future integration |
+| Room geometry and furniture transforms | Native Swift RoomPlan | Native capture implementation; real scan validation pending |
+| Depth, camera pose, coloured point cloud | Native ARKit frame data + calibration | Native capture implementation; real scan validation pending |
+| View exported USDZ | Safari AR Quick Look | Implemented spatial viewer/import; real scan validation pending |
+| Desktop spatial inventory | Render real exported dimensions/transforms in web viewer | Implemented spatial viewer/import; real scan validation pending |
 | Photorealistic novel views | Multi-view reconstruction and Gaussian-splat training | Separate experimental pipeline |
 
 There is no verified Safari API here for direct RoomPlan or raw iPhone LiDAR capture. Do not present WebXR support as access to those native APIs. WebKit's documented immersive WebXR support concerns visionOS rendering; it does not establish iPhone RoomPlan/depth access. A web-based viewer and native capture are separate components. [WebKit WebXR](https://webkit.org/blog/15865/webkit-features-in-safari-18-0/)
@@ -39,4 +39,4 @@ Use a real capture's USDZ for an iOS Quick Look link, or convert actual captured
 
 The original technique trains a scene representation from calibrated multi-view images and sparse points and renders new views. It is not a direct consequence of having a RoomPlan USDZ file, nor does a rendered splat guarantee accurate physical dimensions or stable inventory identities. Plan capture coverage, pose estimation, compute, asset size and licensing separately. Prioritize measured spatial anchors and room geometry first; add a splat viewer only after a reconstruction from real room imagery exists. [Original research project](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/)
 
-No native prototype or scan was available in this environment. Real hardware validation, native signing and capture permissions remain required. No synthetic room model is presented as a scan.
+The native app and offline reconstruction wrapper are implemented. A physical iPhone 16 Pro is connected and signing/installation passed. Real scanning, capture permissions and GPU reconstruction validation remain required. No synthetic room model is presented as a scan.

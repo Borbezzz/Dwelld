@@ -1,3 +1,4 @@
+import {inspectCracks, CRACK_MODEL} from './crack-detector';
 import { readMedia, writeMedia, deleteMedia, parseMediaId } from "./media";
 import { createHash } from "node:crypto";
 import { openVideoFrames } from "./video-frames";
@@ -11,7 +12,7 @@ export type AnalyzedFinding = {
   boundingBox: Box | null; originalVideoBoundingBox: Box | null;
   localizationStatus: "localized" | "uncertain"; objectLabel: string | null;
   evidenceFrameUrl: string | null; reviewStatus: "unreviewed";
-  detectionSource: "yolo" | "gemini";
+  detectionSource: "yolo" | "gemini" | "crack-model";
   detectionId: string; parentDetectionId: string | null; classId?: number; confidence?: number;
 };
 
@@ -97,6 +98,8 @@ export async function analyzeDetectedImage(image: Buffer, detections: ClientDete
   findings.push(...supplementalFindings.flat());
   const surfaces = await runScope("room surface damage", () => inspectSurfaceDamage(image));
   findings.push(...(surfaces || []).map((item, index) => damageFinding(item, null, null, index)));
+  const cracks=await runScope("specialised crack detection",()=>inspectCracks(image));
+  for(const [index,crack] of (cracks||[]).entries()) findings.push({...base,kind:'damage',label:'Potential crack',description:`Pretrained crack model candidate (${CRACK_MODEL}); may confuse joints, shadows and texture with cracks. Requires human review.`,boundingBox:crack.boundingBox,localizationStatus:'localized',objectLabel:null,parentDetectionId:null,detectionId:`${frameKey}_crack_${index}`,detectionSource:'crack-model',confidence:crack.confidence});
   return findings;
 }
 

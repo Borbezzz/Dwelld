@@ -6,3 +6,10 @@ node_modules/
 next-env.d.ts
 .vercel/
 .vercel
+
+.next-hackathon/
+__pycache__/
+*.pyc
+.DS_Store
+ios/**/xcuserdata/
+ios/**/DerivedData/

@@ -3,7 +3,7 @@ import { ObjectId } from "mongodb";
 import { getDb, parseObjectId } from "./db";
 import type { InspectionSession, LiveRole, LiveStatus, LiveObject, LiveFinding } from "@/lib/live/types";
 export class LiveError extends Error { constructor(message: string, public status = 400) { super(message); } }
-export type SessionDoc = { _id: ObjectId; signalSequence?: number; roomId: ObjectId; desktopHash: string; pairingHash: string; phoneHash?: string; deviceId?: string; createdAt: Date; expiresAt: Date; pairingExpiresAt: Date; status: LiveStatus; phoneLastSeenAt?: Date; desktopLastSeenAt?: Date; stopRequested?: boolean; inspectionId?: ObjectId; sourceUrl?: string; videoMimeType?: string; manualUntil?: Date; manualLeaseId?: string; analysisInFlight?: boolean; analysisAfter?: Date };
+export type SessionDoc = { _id: ObjectId; ownerId:string; type?:"move-in"|"move-out"; signalSequence?: number; roomId: ObjectId; desktopHash: string; pairingHash: string; phoneHash?: string; deviceId?: string; createdAt: Date; expiresAt: Date; pairingExpiresAt: Date; status: LiveStatus; phoneLastSeenAt?: Date; desktopLastSeenAt?: Date; stopRequested?: boolean; inspectionId?: ObjectId; sourceUrl?: string; videoMimeType?: string; manualUntil?: Date; manualLeaseId?: string; analysisWarnings?:string[]; analysisInFlight?: boolean; analysisAfter?: Date };
 export const hashToken = (token: string) => createHash("sha256").update(token).digest("hex");
 export const validToken = (v: unknown): v is string => typeof v === "string" && /^[a-zA-Z0-9_-]{32,128}$/.test(v);
 export const validEventId = (v: unknown): v is string => typeof v === "string" && /^[a-zA-Z0-9_-]{8,100}$/.test(v);
@@ -30,11 +30,12 @@ export function iceServers(): RTCIceServer[] {
  // TURN REST secret never leaves the server; credentials expire after one hour.
  return servers;
 }
-export async function createLive(roomId:string) {
+export async function createLive(roomId:string, ownerId:string, type:"move-in"|"move-out"="move-in") {
+ if(!["move-in","move-out"].includes(type))throw new LiveError("Invalid inspection type");
  const id=parseObjectId(roomId); const {db,sessions}=await liveCollections();
- if(!id || !await db.collection("rooms").findOne({_id:id})) throw new LiveError("Room not found",404);
+ if(!id || !await db.collection("rooms").findOne({_id:id,ownerId})) throw new LiveError("Room not found",404);
  const desktopToken=randomBytes(32).toString("base64url"),pairingToken=randomBytes(32).toString("base64url"); const now=new Date();
- const session:SessionDoc={_id:new ObjectId(),roomId:id,desktopHash:hashToken(desktopToken),pairingHash:hashToken(pairingToken),createdAt:now,expiresAt:new Date(+now+2*3600000),pairingExpiresAt:new Date(+now+10*60000),status:"pairing"};
+ const session:SessionDoc={_id:new ObjectId(),ownerId,type,roomId:id,desktopHash:hashToken(desktopToken),pairingHash:hashToken(pairingToken),createdAt:now,expiresAt:new Date(+now+2*3600000),pairingExpiresAt:new Date(+now+10*60000),status:"pairing"};
  await sessions.insertOne(session); return {sessionId:String(session._id),desktopToken,pairingToken,pairingExpiresAt:session.pairingExpiresAt.toISOString(),expiresAt:session.expiresAt.toISOString(),iceServers:iceServers()};
 }
 export function liveFailure(error:unknown) { const requestId=randomUUID(); const status=error instanceof LiveError?error.status:error instanceof SyntaxError?400:500; if(status>=500) console.error("Live request failed",{requestId,name:error instanceof Error?error.name:"Error"}); return Response.json({error:error instanceof LiveError?error.message:status===400?"Invalid request body":"Live inspection request failed; retry shortly",requestId},{status,headers:{"Cache-Control":"no-store"}}); }

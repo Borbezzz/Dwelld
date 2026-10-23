@@ -1,0 +1,11 @@
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),Module=require('node:module'),ts=require('typescript');
+const filename=path.resolve('lib/comparison.ts');const mod=new Module(filename,module);mod.filename=filename;mod.paths=module.paths;mod._compile(ts.transpileModule(fs.readFileSync(filename,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText,filename);
+const {parseComparison}=mod.exports;
+const base={baselineFindingId:'a',currentFindingId:'b',category:'pre_existing',explanation:'Same visible scratch',comparableView:true};
+const parse=changes=>parseComparison(JSON.stringify({changes}),new Set(['a']),new Set(['b']));
+test('comparison preserves evidence IDs and requires human review',()=>{const [r]=parse([base]);assert.equal(r.baselineFindingId,'a');assert.equal(r.reviewStatus,'pending');});
+test('comparison rejects invented evidence references',()=>{assert.throws(()=>parse([{...base,currentFindingId:'invented'}]));});
+test('non-comparable views cannot establish new damage',()=>{assert.equal(parse([{...base,category:'potentially_new',comparableView:false}])[0].category,'uncertain');});
+test('missing detection cannot establish missing object',()=>{assert.equal(parse([{...base,category:'missing_or_changed',currentFindingId:null}])[0].category,'uncertain');});
+test('existing damage requires evidence on both sides',()=>{assert.equal(parse([{...base,currentFindingId:null}])[0].category,'uncertain');});
+test('comparison rejects duplicate pairs and unbounded model output',()=>{assert.throws(()=>parse([base,base]));assert.throws(()=>parse(Array(81).fill(base)));});

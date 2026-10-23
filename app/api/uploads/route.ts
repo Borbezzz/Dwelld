@@ -1,3 +1,5 @@
+import {readJsonBody} from "@/lib/server/request-body";
+import { requireUser } from "@/lib/server/access";
 import { errorResponse } from "@/lib/server/api-error";
 import { createHash, randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
@@ -11,8 +13,8 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 const CHUNK_SIZE = 2 * 1024 * 1024;
 const MAX_BYTES = 100 * 1024 * 1024;
-const TYPES = ["video/mp4", "video/webm", "video/quicktime", "video/x-msvideo", "video/mpeg"];
-type Upload = { _id: ObjectId; filename: string; contentType: string; size: number; expiresAt: Date; status: "uploading" | "finalizing" | "complete"; lockId?: string; lockedAt?: Date; url?: string };
+const TYPES = ["video/mp4", "video/webm", "video/quicktime", "video/x-msvideo", "video/mpeg", "application/octet-stream", "model/vnd.usdz+zip", "image/jpeg", "application/json"];
+type Upload = { _id: ObjectId; ownerId:string; filename: string; contentType: string; size: number; expiresAt: Date; status: "uploading" | "finalizing" | "complete"; lockId?: string; lockedAt?: Date; url?: string };
 type Part = { uploadId: ObjectId; part: number; data: Binary; digest: string; size: number; expiresAt: Date };
 async function collections() {
   const db = await getDb();
@@ -31,17 +33,18 @@ export async function POST(request: Request) {
   let cleanupRef: string | undefined;
   let unlock: (() => Promise<unknown>) | undefined;
   try {
-    const body = await request.json();
+    const user = await requireUser(request);
+    const body = await readJsonBody(request);
     const { uploads, parts } = await collections();
     if (body.action === "complete") {
       const id = typeof body.uploadId === "string" ? parseObjectId(body.uploadId) : null;
       if (!id) return failure("Invalid upload ID");
-      const existing = await uploads.findOne({ _id: id, expiresAt: { $gt: new Date() } });
+      const existing = await uploads.findOne({ _id: id, ownerId:user.id, expiresAt: { $gt: new Date() } });
       if (!existing) return failure("Upload not found or expired", 404);
       if (existing.status === "complete") return NextResponse.json({ url: existing.url, videoUrl: existing.url, contentType: existing.contentType });
       const lockId = randomUUID();
       // Recover a finalization abandoned by a terminated function after its maximum duration.
-      const upload = await uploads.findOneAndUpdate({ _id: id, $or: [{ status: "uploading" }, { status: "finalizing", lockedAt: { $lt: new Date(Date.now() - 360_000) } }] }, { $set: { status: "finalizing", lockId, lockedAt: new Date() } }, { returnDocument: "after" });
+      const upload = await uploads.findOneAndUpdate({ _id: id, ownerId:user.id, $or: [{ status: "uploading" }, { status: "finalizing", lockedAt: { $lt: new Date(Date.now() - 360_000) } }] }, { $set: { status: "finalizing", lockId, lockedAt: new Date() } }, { returnDocument: "after" });
       if (!upload) return failure("Upload is being finalized; retry shortly", 409);
       unlock = () => uploads.updateOne({ _id: id, lockId }, { $set: { status: "uploading" }, $unset: { lockId: "", lockedAt: "" } });
       const count = Math.ceil(upload.size / CHUNK_SIZE);
@@ -62,7 +65,7 @@ export async function POST(request: Request) {
         }
         if (bytes !== upload!.size) throw new Error("Invalid upload length");
       }
-      cleanupRef = await writeMedia(Readable.from(chunks()), upload.filename, upload.contentType);
+      cleanupRef = await writeMedia(Readable.from(chunks()), upload.filename, upload.contentType, {ownerId:user.id});
       const result = await uploads.updateOne({ _id: id, lockId }, { $set: { status: "complete", url: cleanupRef }, $unset: { lockId: "", lockedAt: "" } });
       if (!result.modifiedCount) throw new Error("Upload finalization expired");
       const url = cleanupRef; cleanupRef = undefined; unlock = undefined;
@@ -73,7 +76,7 @@ export async function POST(request: Request) {
     if (!TYPES.includes(contentType)) return failure("Unsupported video format", 415);
     if (!Number.isSafeInteger(body.size) || body.size <= 0 || body.size > MAX_BYTES) return failure("Video size must be between 1 byte and 100 MB", 413);
     const filename = String(body.filename || "walkthrough-video").replace(/[^a-zA-Z0-9._-]/g, "_").slice(-100);
-    const upload: Upload = { _id: new ObjectId(), filename, contentType, size: body.size, status: "uploading", expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) };
+    const upload: Upload = { _id: new ObjectId(), ownerId:user.id, filename, contentType, size: body.size, status: "uploading", expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) };
     await uploads.insertOne(upload);
     return NextResponse.json({ uploadId: upload._id.toHexString(), chunkSize: CHUNK_SIZE }, { status: 201 });
   } catch (error) {
@@ -85,13 +88,14 @@ export async function POST(request: Request) {
 
 export async function PATCH(request: Request) {
   try {
+    const user = await requireUser(request);
     const url = new URL(request.url);
     const id = parseObjectId(url.searchParams.get("uploadId") || "");
     const partText = url.searchParams.get("part") || "";
     const part = /^\d+$/.test(partText) ? Number(partText) : NaN;
     if (!id || !Number.isSafeInteger(part) || part < 0) return failure("Invalid upload part");
     const { uploads, parts } = await collections();
-    const upload = await uploads.findOne({ _id: id, expiresAt: { $gt: new Date() } });
+    const upload = await uploads.findOne({ _id: id, ownerId:user.id, expiresAt: { $gt: new Date() } });
     if (!upload) return failure("Upload not found or expired", 404);
     if (upload.status !== "uploading") return failure("Upload is no longer accepting parts", 409);
     const expected = Math.min(CHUNK_SIZE, upload.size - part * CHUNK_SIZE);

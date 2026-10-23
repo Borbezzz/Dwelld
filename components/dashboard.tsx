@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import {authClient} from "@/lib/auth-client";
 import { useEffect, useState, type FormEvent } from "react";
 import { ArrowUpRight, ArrowRight, LoaderCircle } from "lucide-react";
 import FindingsSearch from "./findings-search";
@@ -9,6 +10,7 @@ import type { Room, Inspection } from "@/lib/types";
 import "@/app/landing.css";
 
 export default function Dashboard() {
+  const {data:session,isPending:authPending,error:authError}=authClient.useSession();
   const [rooms, setRooms] = useState<Room[]>([]);
   const [inspections, setInspections] = useState<Inspection[]>([]);
   const [loading, setLoading] = useState(true);
@@ -25,7 +27,7 @@ export default function Dashboard() {
     } catch (e) { setError(e instanceof Error ? e.message : "Could not load your spaces."); }
     finally { setLoading(false); }
   }
-  useEffect(() => { void refresh(); }, []);
+  useEffect(() => { if(session?.user.id)void refresh();else if(!authPending){setLoading(false);setRooms([]);setInspections([]);} }, [session?.user.id,authPending]);
   async function create(e: FormEvent) {
     e.preventDefault();
     if (!newRoom.trim() || adding) return;
@@ -41,7 +43,7 @@ export default function Dashboard() {
   return <main className="landing">
     <header className="landing-header">
       <Link href="/" className="landing-wordmark" aria-label="Dwelld home">dwelld.</Link>
-      <nav aria-label="Main navigation"><a href="#spaces">Your spaces</a><a href="#history">History</a></nav>
+      <nav aria-label="Main navigation"><a href="#spaces">Your spaces</a><a href="#history">History</a><Link href={session?"/profile":"/sign-in"}>{session?"Profile":"Sign in"}</Link></nav>
     </header>
 
     <section className="landing-hero" aria-labelledby="landing-title">
@@ -49,15 +51,17 @@ export default function Dashboard() {
         <h1 id="landing-title">Your room.<br/><em>On record.</em></h1>
         <div className="landing-intro-copy">
           <p>A place to keep the details.<br/>Document your room, review what you find,<br className="landing-desktop-break"/> and keep a record you can return to.</p>
-          <Link className="landing-primary" href="/live">Start an inspection <ArrowUpRight size={19} aria-hidden="true"/></Link>
+          <Link className="landing-primary" href={session?"/live":"/sign-in"}>Start an inspection <ArrowUpRight size={19} aria-hidden="true"/></Link>
         </div>
       </div>
       <img className="landing-photograph" src="/room-hero.webp" width={1400} height={933} fetchPriority="high" alt="Afternoon sunlight falling through a tall window across a linen bed, oak desk and warm plaster walls"/>
     </section>
 
+    {authError&&<p role="alert">Account access is unavailable. Please retry shortly.</p>}
+    {!authPending&&!session&&<p className="landing-empty"><Link href="/sign-in">Sign in or create a profile</Link> to keep your room records private.</p>}
     {error && <div className="landing-error" role="alert"><p>{error}</p><button type="button" onClick={() => void refresh()} disabled={loading}>{loading ? "Retrying…" : "Try again"}</button></div>}
 
-    <section id="spaces" className="landing-section" aria-labelledby="spaces-title">
+    {session&&<><section id="spaces" className="landing-section" aria-labelledby="spaces-title">
       <div className="landing-section-heading"><h2 id="spaces-title">Your spaces</h2><button className="landing-text-action" type="button" aria-expanded={showCreate} aria-controls="create-room" onClick={() => setShowCreate((value) => !value)}>{showCreate ? "Cancel" : "Add a room"}{!showCreate && <span aria-hidden="true">+</span>}</button></div>
       {showCreate && <form className="landing-create" id="create-room" onSubmit={create}>
         <label htmlFor="room-name">Room name<input autoFocus id="room-name" placeholder="e.g. University bedroom" value={newRoom} onChange={(e) => setNewRoom(e.target.value)} maxLength={80} required disabled={adding}/></label>
@@ -75,6 +79,6 @@ export default function Dashboard() {
     </section>
 
     <details className="landing-search"><summary>Find something in your records <span aria-hidden="true">+</span></summary><FindingsSearch rooms={rooms}/></details>
-    <footer className="landing-footer"><span className="landing-wordmark">dwelld.</span><p>Your room remembers.</p><a href="#landing-title">Back to top ↑</a></footer>
+    </>}<footer className="landing-footer"><span className="landing-wordmark">dwelld.</span><p>Your room remembers.</p><a href="#landing-title">Back to top ↑</a></footer>
   </main>;
 }

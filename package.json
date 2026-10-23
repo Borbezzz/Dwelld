@@ -10,23 +10,29 @@
     "test": "node --test tests/*.test.cjs"
   },
   "dependencies": {
+    "@better-auth/mongo-adapter": "^1.7.12",
     "@google/genai": "^2.31.0",
+    "@mkkellogg/gaussian-splats-3d": "^0.4.7",
     "@vercel/analytics": "^2.0.1",
+    "better-auth": "^1.7.12",
     "ffmpeg-static": "^5.3.0",
     "lucide-react": "^0.468.0",
     "mongodb": "^7.7.0",
     "next": "^15.1.0",
+    "onnxruntime-node": "^1.30.0",
     "onnxruntime-web": "^1.30.0",
     "qrcode": "^1.5.4",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "sharp": "^0.35.5"
+    "sharp": "^0.35.5",
+    "three": "^0.186.1"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "@types/three": "^0.186.0",
     "autoprefixer": "^10.6.1",
     "postcss": "^8.5.23",
     "tailwindcss": "^3.4.19",

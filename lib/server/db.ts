@@ -5,7 +5,7 @@ declare global {
   var _dwelldMongoClientPromise: Promise<MongoClient> | undefined;
 }
 
-function getClientPromise(): Promise<MongoClient> {
+export function getClientPromise(): Promise<MongoClient> {
   if (global._dwelldMongoClientPromise) return global._dwelldMongoClientPromise;
   const uri = process.env.MONGODB_URI;
   if (!uri) throw new Error("MongoDB is unavailable: MONGODB_URI is not configured");
@@ -29,8 +29,8 @@ export function parseObjectId(value: string): ObjectId | null {
 
 export async function ensureIndexes(db: Db): Promise<void> {
   await Promise.all([
-    db.collection("rooms").createIndex({ createdAt: -1 }),
-    db.collection("inspections").createIndex({ roomId: 1, createdAt: -1 }),
+    db.collection("rooms").createIndex({ ownerId:1, createdAt: -1 }),
+    db.collection("inspections").createIndex({ ownerId:1, roomId: 1, createdAt: -1 }),
     db.collection("findings").createIndex({ inspectionId: 1, createdAt: 1 }),
     db.collection("findings").createIndex({ roomId: 1, reviewStatus: 1 }),
   ]);

@@ -1,3 +1,6 @@
+import {readJsonBody} from "@/lib/server/request-body";
+import {indexFindings} from "@/lib/server/search";
+import { requireUser } from "@/lib/server/access";
 import { errorResponse, reportError } from "@/lib/server/api-error";
 import { ObjectId } from "mongodb";
 import { parseMediaId, getMediaFile } from "@/lib/server/media";
@@ -12,7 +15,7 @@ export const maxDuration = 300;
 
 function serializeInspection(doc: Record<string, any>) {
   return {
-    id: String(doc._id), roomId: String(doc.roomId), status: doc.status,
+    id: String(doc._id), roomId: String(doc.roomId), status: doc.status, type: doc.type || "move-in",
     createdAt: new Date(doc.createdAt).toISOString(),
     videoUrl: "/api/inspections/" + String(doc._id) + "/video",
   };
@@ -20,20 +23,23 @@ function serializeInspection(doc: Record<string, any>) {
 
 export async function GET(request: Request) {
   try {
+    const user = await requireUser(request);
     const url = new URL(request.url);
     const roomParam = url.searchParams.get("roomId");
     const roomId = roomParam ? parseObjectId(roomParam) : null;
     if (roomParam && !roomId) return NextResponse.json({ error: "Invalid roomId" }, { status: 400 });
     const db = await getDb();
     await ensureIndexes(db);
-    const docs = await db.collection("inspections").find(roomId ? { roomId } : {}).sort({ createdAt: -1 }).limit(100).toArray();
+    const docs = await db.collection("inspections").find({ownerId:user.id,...(roomId ? {roomId} : {})}).sort({ createdAt: -1 }).limit(100).toArray();
     return NextResponse.json({ inspections: docs.map(serializeInspection) });
   } catch (error) { return errorResponse(error, "app/api/inspections/route.ts"); }
 }
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json() as { roomId?: unknown; videoUrl?: unknown; videoMimeType?: unknown; detectionFrames?: unknown };
+    const user = await requireUser(request);
+    const body = await readJsonBody(request, 512*1024) as { roomId?: unknown; videoUrl?: unknown; videoMimeType?: unknown; detectionFrames?: unknown; type?: unknown };
+    if (body.type !== undefined && !["move-in","move-out"].includes(String(body.type))) return NextResponse.json({error:"Invalid inspection type"},{status:400});
     const roomId = typeof body.roomId === "string" ? parseObjectId(body.roomId) : null;
     const videoUrl = typeof body.videoUrl === "string" ? body.videoUrl : "";
     const mimeType = typeof body.videoMimeType === "string" ? body.videoMimeType.split(";")[0].trim().toLowerCase() : "";
@@ -48,19 +54,19 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Video inspection is unavailable: Gemini is not configured" }, { status: 503 });
     }
     const media = await getMediaFile(videoUrl);
-    if (!media || media.metadata?.contentType !== mimeType) return NextResponse.json({ error: "Uploaded video not found or content type mismatch" }, { status: 400 });
+    if (!media || media.metadata?.ownerId !== user.id || media.metadata?.contentType !== mimeType) return NextResponse.json({ error: "Uploaded video not found or content type mismatch" }, { status: 400 });
     let detectionFrames;
     try { detectionFrames = validateDetectionFrames(body.detectionFrames); }
     catch { return NextResponse.json({ error: "Invalid browser detection frames" }, { status: 400 }); }
     const db = await getDb();
     await ensureIndexes(db);
-    const room = await db.collection("rooms").findOne({ _id: roomId }, { projection: { _id: 1 } });
+    const room = await db.collection("rooms").findOne({ _id: roomId, ownerId:user.id }, { projection: { _id: 1 } });
     if (!room) return NextResponse.json({ error: "Room not found" }, { status: 404 });
     const inspections = db.collection("inspections");
     const inspectionId = new ObjectId();
     const createdAt = new Date();
     const inspectionDoc = {
-      _id: inspectionId, roomId, type: "move-in", sourceUrl: videoUrl, videoMimeType: mimeType,
+      _id: inspectionId, ownerId:user.id, roomId, type: body.type || "move-in", sourceUrl: videoUrl, videoMimeType: mimeType,
       status: "processing", createdAt, durationSeconds: null, detector: "yolo11n-coco", detectionFrames,
     };
     await inspections.insertOne(inspectionDoc);
@@ -75,11 +81,12 @@ export async function POST(request: Request) {
           if (finding.kind === "object" && finding.detectionId) objectIds.set(finding.detectionId, ids[index]);
         });
         const docs = result.findings.map((finding, index) => ({
-          _id: ids[index], inspectionId, roomId, ...finding,
+          _id: ids[index], ownerId:user.id, inspectionId, roomId, ...finding,
           objectId: finding.parentDetectionId ? objectIds.get(finding.parentDetectionId) || null : null,
           source: "ai", reviewStatus: "pending", reviewHistory: [], createdAt: new Date(),
         }));
         if (docs.length) await db.collection("findings").insertMany(docs);
+        await indexFindings(user.id,inspectionId).catch(()=>{});
         await inspections.updateOne({ _id: inspectionId }, { $set: { status: result.warnings.length ? "partial" : "completed", analysisWarnings: result.warnings, durationSeconds: result.durationSeconds, completedAt: new Date() } });
       } catch (error) {
         const failure = reportError(error, "inspection.analyze");

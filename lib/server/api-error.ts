@@ -36,7 +36,11 @@ export function reportError(error: unknown, operation: string) {
   const message = typeof item.message === "string" ? item.message : "";
   const name = typeof item.name === "string" ? item.name : "Error";
   let code = "INTERNAL_ERROR", status = 500, detail = "The request failed. Please retry and quote the request ID if it continues.";
-  if (error instanceof SyntaxError) { code = "INVALID_JSON"; status = 400; detail = "The request body must be valid JSON."; }
+  if (name === "RequestBodyError") { code = "INVALID_REQUEST_BODY"; status = Number(item.status) || 413; detail = message; }
+  else if (message === "SEARCH_NOT_READY") { code = "SEARCH_INDEX_UNAVAILABLE"; status = 503; detail = "The required Atlas Search index is not queryable yet. Retry after indexing completes."; }
+  else if (name === "AccessError") { code = "ACCESS_DENIED"; status = Number(item.status) || 401; detail = message; }
+  else if (message === "AUTH_NOT_CONFIGURED") { code = "AUTH_NOT_CONFIGURED"; status = 503; detail = "Account sign-in is not configured on this deployment."; }
+  else if (error instanceof SyntaxError) { code = "INVALID_JSON"; status = 400; detail = "The request body must be valid JSON."; }
   else if (/MONGODB_URI.*not configured/.test(message)) { code = "DATABASE_NOT_CONFIGURED"; status = 503; detail = "Database configuration is missing on this deployment."; }
   else if (/GEMINI.*not configured|Gemini.*not configured/.test(message)) { code = "AI_NOT_CONFIGURED"; status = 503; detail = "Damage analysis is not configured on this deployment."; }
   else if (item.code === 18 || /AuthenticationFailed|authentication failed|bad auth/i.test(message)) { code = "DATABASE_AUTH_FAILED"; status = 503; detail = "Database authentication failed. The deployment credentials need checking."; }

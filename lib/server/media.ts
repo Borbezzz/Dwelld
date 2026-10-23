@@ -8,9 +8,9 @@ export function parseMediaId(ref: string): ObjectId | null {
   return typeof ref === "string" && ref.startsWith("gridfs:") ? parseObjectId(ref.slice(7)) : null;
 }
 async function bucket() { return new GridFSBucket(await getDb(), { bucketName: BUCKET }); }
-export async function writeMedia(source: Buffer | Readable, filename: string, contentType: string): Promise<string> {
+export async function writeMedia(source: Buffer | Readable, filename: string, contentType: string, metadata: Record<string, unknown> = {}): Promise<string> {
   const store = await bucket();
-  const stream = store.openUploadStream(filename, { metadata: { contentType }, chunkSizeBytes: 255 * 1024 });
+  const stream = store.openUploadStream(filename, { metadata: { ...metadata, contentType }, chunkSizeBytes: 255 * 1024 });
   try {
     await pipeline(Buffer.isBuffer(source) ? Readable.from([source]) : source, stream);
     return `gridfs:${stream.id.toHexString()}`;

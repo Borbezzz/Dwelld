@@ -1,0 +1,7 @@
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),Module=require('node:module'),ts=require('typescript');
+const filename=path.resolve('lib/server/request-body.ts'),mod=new Module(filename,module);mod.filename=filename;mod.paths=module.paths;mod._compile(ts.transpileModule(fs.readFileSync(filename,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText,filename);const {readJsonBody,readTextBody}=mod.exports;
+const req=(body,headers={})=>new Request('http://localhost/api',{method:'POST',headers:{'content-type':'application/json',...headers},body});
+test('bounded JSON reader parses object with multibyte text',async()=>assert.deepEqual(await readJsonBody(req('{"name":"椅子"}')),{name:'椅子'}));
+test('bounded JSON reader rejects untrusted content types and nonobjects',async()=>{await assert.rejects(readJsonBody(req('{}',{'content-type':'text/plain'})),{status:415});for(const body of ['null','[]','"text"'])await assert.rejects(readJsonBody(req(body)),{status:400});});
+test('bounded reader rejects actual bytes without trusting declared size',async()=>{await assert.rejects(readTextBody(req('123456',{'content-length':'1'}),5),{status:413});await assert.rejects(readTextBody(req('椅子'),5),{status:413});});
+test('bounded reader rejects oversized declared body before read',async()=>assert.rejects(readTextBody(req('{}',{'content-length':'70000'})),{status:413}));

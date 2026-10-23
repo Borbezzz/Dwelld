@@ -5,3 +5,8 @@ node_modules
 .env*
 !.env.example
 *.tsbuildinfo
+
+.next-hackathon
+ios
+**/__pycache__
+*.pyc

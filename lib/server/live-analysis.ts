@@ -1,3 +1,4 @@
+import {inspectCracks, CRACK_MODEL} from './crack-detector';
 import { randomUUID } from 'node:crypto';
 import sharp from 'sharp';
 import { inspectObjectDamage, inspectSurfaceDamage, validBox } from './damage';
@@ -24,8 +25,8 @@ export async function analyzeLiveFrame(image: Buffer, input: LiveAnalysisInput):
   const size=await sharp(normalized).metadata();
   const ref=await writeMedia(normalized,`live/${input.sessionId}/${input.observationId}.png`,'image/png');
   try{
-    const findings:LiveDamageFinding[]=[];
-    await Promise.all([
+    const findings:LiveDamageFinding[]=[];const analysisWarnings:string[]=[];
+    const checks=await Promise.allSettled([
       ...input.objects.map(async object=>{
         const observations=await inspectObjectDamage(normalized,object.label,object.boundingBox);
         findings.push(...observations.map(item=>({id:randomUUID(),parentObjectId:object.objectId,label:`${object.label}: ${item.type}`,description:item.description,boundingBox:item.boundingBox,timestampSeconds:input.timestampSeconds,damageType:item.type,source:'ai' as const})));
@@ -34,6 +35,10 @@ export async function analyzeLiveFrame(image: Buffer, input: LiveAnalysisInput):
         findings.push(...observations.map(item=>({id:randomUUID(),parentObjectId:null,label:`Room surface: ${item.type}`,description:item.description,boundingBox:item.boundingBox,timestampSeconds:input.timestampSeconds,damageType:item.type,source:'ai' as const})));
       })]:[]),
     ]);
-    return{evidenceFrameRef:ref,sourceWidth:size.width!,sourceHeight:size.height!,findings,analyzedObjectIds:[...ids],surfacesAnalyzed:input.includeSurfaces};
+    const analyzedObjectIds=input.objects.filter((object,index)=>{if(checks[index].status==='fulfilled')return true;analysisWarnings.push(`Damage check for ${object.label} could not finish. Assessment is incomplete.`);return false}).map(object=>object.objectId);
+    const surfacesAnalyzed=input.includeSurfaces&&checks[input.objects.length]?.status==='fulfilled';
+    if(input.includeSurfaces&&!surfacesAnalyzed)analysisWarnings.push('Gemini surface analysis could not finish. Assessment is incomplete.');
+    if(input.includeSurfaces){try{const cracks=await inspectCracks(normalized);findings.push(...cracks.map(crack=>({id:randomUUID(),parentObjectId:null,label:'Potential crack',description:`Pretrained crack model candidate (${CRACK_MODEL}); review against the source image. Joints and shadows can be false positives.`,boundingBox:crack.boundingBox,timestampSeconds:input.timestampSeconds,damageType:'crack',source:'ai' as const,detectionSource:'crack-model' as const})));}catch{analysisWarnings.push('Specialised crack detection was unavailable. Gemini observations are retained; crack assessment is incomplete.');}}
+    return{analysisWarnings,evidenceFrameRef:ref,sourceWidth:size.width!,sourceHeight:size.height!,findings,analyzedObjectIds,surfacesAnalyzed};
   }catch(error){await deleteMedia(ref).catch(()=>{});throw error;}
 }

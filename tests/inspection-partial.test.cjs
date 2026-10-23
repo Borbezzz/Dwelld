@@ -9,7 +9,7 @@ function load(damage) {
   const mod = new Module(filename, module);
   mod.filename = filename; mod.paths = module.paths;
   const original = mod.require.bind(mod);
-  mod.require = (id) => id === './damage' ? { validBox: (box) => box, ...damage } : id === './media' || id === './video-frames' ? {} : original(id);
+  mod.require = (id) => id === './crack-detector' ? {inspectCracks:async()=>[],CRACK_MODEL:'unit-test-stub'} : id === './damage' ? { validBox: (box) => box, ...damage } : id === './media' || id === './video-frames' ? {} : original(id);
   mod._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS, esModuleInterop: true } }).outputText, filename);
   return mod.exports;
 }
@@ -35,7 +35,7 @@ test('expired deadline skips AI calls while retaining detected object', async ()
   const { analyzeDetectedImage } = load({ inspectObjectDamage: work, inspectUnsupportedFurniture: work, inspectSurfaceDamage: work });
   const warnings = [];
   const findings = await analyzeDetectedImage(Buffer.from('fixture'), [detection], 1, 'frame', warnings, Date.now());
-  assert.equal(calls, 0); assert.equal(findings.length, 1); assert.equal(warnings.length, 3);
+  assert.equal(calls, 0); assert.equal(findings.length, 1); assert.equal(warnings.length, 4);
 });
 test('surface failure and optional furniture failure are reported', async () => {
   const fail = async () => { throw new Error('invalid response'); };

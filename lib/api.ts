@@ -6,12 +6,12 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 }
 export const api = {
   addDamage: (inspectionId: string, body: {description: string; evidenceFindingId: string; point: {x:number;y:number}; objectId?: string|null}) => request<{finding: Finding}>(`/api/inspections/${inspectionId}/findings`, {method:"POST",body:JSON.stringify(body)}),
-  search: (query: string, roomId?: string) => request<{results: SearchFinding[]}>(`/api/search?${new URLSearchParams({q:query, ...(roomId ? {roomId} : {})})}`),
+  search: (query: string, roomId?: string, mode="text") => request<{results: SearchFinding[]}>(`/api/search?${new URLSearchParams({q:query, mode, ...(roomId ? {roomId} : {})})}`),
   rooms: () => request<{ rooms: Room[] }>("/api/rooms"),
   createRoom: (name: string) => request<{ room: Room }>("/api/rooms", { method: "POST", body: JSON.stringify({ name }) }),
   room: (id: string) => request<{ room: Room }>(`/api/rooms/${id}`),
   inspections: () => request<{ inspections: Inspection[] }>("/api/inspections"),
-  createInspection: (roomId: string, videoUrl: string, videoMimeType: string, detectionFrames: DetectionFrame[]) => request<{ inspection: Inspection }>("/api/inspections", { method: "POST", body: JSON.stringify({ roomId, videoUrl, videoMimeType, detectionFrames }) }),
+  createInspection: (roomId: string, videoUrl: string, videoMimeType: string, detectionFrames: DetectionFrame[], type: "move-in" | "move-out" = "move-in") => request<{ inspection: Inspection }>("/api/inspections", { method: "POST", body: JSON.stringify({ roomId, videoUrl, videoMimeType, detectionFrames, type }) }),
   inspection: (id: string) => request<{ inspection: Inspection; findings: Finding[] }>(`/api/inspections/${id}`),
   review: (inspectionId: string, findingId: string, reviewStatus: ReviewStatus) => request<{ finding: Finding }>(`/api/inspections/${inspectionId}/findings/${findingId}`, { method: "PATCH", body: JSON.stringify({ reviewStatus }) })
 };
