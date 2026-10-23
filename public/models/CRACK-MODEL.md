@@ -11,3 +11,5 @@
 Dwelld uses its crack bounding-box candidates, not the segmentation mask or a structural severity score. It does not detect stains, dents, scratches, or all household materials. Gemini supplies broader multimodal damage observations. Shadows, joints and textures can cause false positives; all candidates require human review. Results cannot certify safety or declare a room damage-free.
 
 Preprocessing uses RGB, 640px centered letterbox (114 background), float32 CHW /255. Confidence threshold .45, NMS IoU .45, maximum8 candidates. Bounding boxes are restored to normalized source coordinates. The server verifies the pinned checksum before CPU inference. No separate GPU service is used.
+
+High-resolution evidence now runs as a full view plus four overlapping 60% crops (when the longer image dimension is at least 960px). Crop coordinates map back to the preserved source; final IoU suppression is .35, maximum 12 candidates. Live inference runs concurrently with Gemini and preserves independent failure warnings. This remains one specialised crack model, not additional trained damage categories.

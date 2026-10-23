@@ -1,4 +1,5 @@
 
+import AskRecords from "@/components/ask-records";
 import type { Metadata } from "next";
 import { Analytics } from "@vercel/analytics/next";
 
@@ -19,6 +20,7 @@ export default function RootLayout({
     <html lang="en">
       <body>
         {children}
+        <AskRecords />
         <Analytics />
       </body>
     </html>

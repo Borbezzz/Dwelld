@@ -31,6 +31,7 @@ export async function POST(request: Request, { params }: Context) {
     await db.collection("spatialCaptures").createIndex({ inspectionId: 1 }, { unique: true });
     // A scan origin is immutable once imported; replacing it would invalidate world-space markers.
     const existing = await db.collection("spatialCaptures").findOne({ inspectionId: inspection._id });
+    if (existing && JSON.stringify(existing.manifest) === JSON.stringify(manifest)) return NextResponse.json({saved:true,alreadySaved:true});
     if (existing) return NextResponse.json({ error: "This inspection already has a capture. Use a new inspection for a different scan." }, { status: 409 });
     await db.collection("spatialCaptures").insertOne({ inspectionId: inspection._id, roomId: inspection.roomId, ownerId: user.id, manifest, createdAt: new Date() });
     if (inspection.captureSource === "native-lidar") {

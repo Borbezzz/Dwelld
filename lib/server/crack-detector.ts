@@ -31,7 +31,7 @@ export function decodeCracks(data:ArrayLike<number>,dims:readonly number[],width
  const selected:Candidate[]=[];for(const box of boxes.sort((a,b)=>b.confidence-a.confidence)){if(selected.every(other=>iou(other.boundingBox,box.boundingBox)<.45))selected.push(box);if(selected.length===8)break;}return selected;
 }
 /** Pretrained specialist: surface cracks only; no structural severity or other damage categories. */
-export async function inspectCracks(image:Buffer):Promise<Candidate[]>{
+async function inspectCrackView(image:Buffer):Promise<Candidate[]>{
  const {data,info}=await sharp(image,{limitInputPixels:24_000_000}).rotate().removeAlpha().toColourspace('srgb').raw().toBuffer({resolveWithObject:true});
  const scale=Math.min(640/info.width,640/info.height),width=Math.round(info.width*scale),height=Math.round(info.height*scale);
  const left=Math.floor((640-width)/2),top=Math.floor((640-height)/2);
@@ -39,4 +39,19 @@ export async function inspectCracks(image:Buffer):Promise<Candidate[]>{
  const input=new Float32Array(3*640*640);for(let i=0;i<640*640;i++){input[i]=pixels[i*3]/255;input[640*640+i]=pixels[i*3+1]/255;input[2*640*640+i]=pixels[i*3+2]/255;}
  const ort=await import('onnxruntime-node'),model=await session();const output=await model.run({images:new ort.Tensor('float32',input,[1,3,640,640])});
  const predictions=output.output0;return decodeCracks(predictions.data as Float32Array,predictions.dims,info.width,info.height);
+}
+
+/** Full view plus overlapping quadrants preserve thin cracks lost by whole-frame resizing. */
+export async function inspectCracks(image:Buffer):Promise<Candidate[]>{
+ const normalized=await sharp(image,{limitInputPixels:24_000_000}).rotate().removeAlpha().png().toBuffer();
+ const meta=await sharp(normalized).metadata(),width=meta.width!,height=meta.height!;
+ const candidates=await inspectCrackView(normalized);
+ if(Math.max(width,height)>=960){
+  const w=Math.ceil(width*.6),h=Math.ceil(height*.6);
+  for(const [left,top] of [[0,0],[width-w,0],[0,height-h],[width-w,height-h]]){
+   const crop=await sharp(normalized).extract({left,top,width:w,height:h}).png().toBuffer();
+   for(const c of await inspectCrackView(crop))candidates.push({confidence:c.confidence,boundingBox:{x:(left+c.boundingBox.x*w)/width,y:(top+c.boundingBox.y*h)/height,width:c.boundingBox.width*w/width,height:c.boundingBox.height*h/height}});
+  }
+ }
+ const result:Candidate[]=[];for(const c of candidates.sort((a,b)=>b.confidence-a.confidence)){if(result.every(r=>iou(r.boundingBox,c.boundingBox)<.35))result.push(c);if(result.length===12)break;}return result;
 }

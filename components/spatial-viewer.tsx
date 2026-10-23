@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { SpatialManifest, SpatialMarker, Vec3 } from "@/lib/spatial/types";
-export default function SpatialViewer({ manifest, markers, onPick, assetUrl, selectedElementId }: { manifest: SpatialManifest; markers: SpatialMarker[]; onPick: (point: Vec3, elementId: string | null) => void; assetUrl: (name: string) => string; selectedElementId?: string }) {
+export default function SpatialViewer({ manifest, markers, onPick, assetUrl, selectedElementId, compact=false }: { manifest: SpatialManifest; markers: SpatialMarker[]; onPick: (point: Vec3, elementId: string | null) => void; assetUrl: (name: string) => string; selectedElementId?: string; compact?:boolean }) {
   const root = useRef<HTMLDivElement>(null), callback = useRef(onPick);
   const [mode, setMode] = useState<"geometry" | "splat">("geometry"), [error, setError] = useState("");
   callback.current = onPick;
@@ -35,8 +35,8 @@ export default function SpatialViewer({ manifest, markers, onPick, assetUrl, sel
     }
     const scene = new THREE.Scene(); scene.background = new THREE.Color("#eef1ed");
     const camera = new THREE.PerspectiveCamera(50, 1, .01, 2000);
-    const renderer = new THREE.WebGLRenderer({ antialias: true }); renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); element.appendChild(renderer.domElement);
-    const controls = new OrbitControls(camera, renderer.domElement); controls.enableDamping = true;
+    let renderer: THREE.WebGLRenderer;try {renderer = new THREE.WebGLRenderer({ antialias: true });}catch{setError("3D rendering is unavailable. Enable WebGL in this browser or open the inspection on another device.");return;} renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); element.appendChild(renderer.domElement);
+    const controls = new OrbitControls(camera, renderer.domElement); controls.enableDamping = true; controls.autoRotate=compact&&!window.matchMedia("(prefers-reduced-motion: reduce)").matches;controls.autoRotateSpeed=.3;
     scene.add(new THREE.HemisphereLight(0xffffff, 0x334433, 2));
     const clickable: THREE.Mesh[] = [];
     manifest.elements.forEach(e => {
@@ -53,6 +53,6 @@ export default function SpatialViewer({ manifest, markers, onPick, assetUrl, sel
     renderer.domElement.addEventListener("dblclick", pick);
     renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
     return () => { resize.disconnect(); renderer.setAnimationLoop(null); controls.dispose(); renderer.domElement.removeEventListener("dblclick", pick); scene.traverse(o => { if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments) { o.geometry.dispose(); const materials = Array.isArray(o.material) ? o.material : [o.material]; materials.forEach(m => m.dispose()); } }); renderer.dispose(); element.replaceChildren(); };
-  }, [manifest, markers, mode, splatUrl, selectedElementId]);
-  return <section><div className="flex gap-3 py-2"><button onClick={() => setMode("geometry")} className="rounded border px-3 py-2">Measured geometry</button><button disabled={!splat} onClick={() => setMode("splat")} className="rounded border px-3 py-2 disabled:opacity-40">Gaussian reconstruction</button></div><p className="text-sm">Drag to orbit, scroll to zoom. Double-click measured geometry to place or move a marker. Reconstruction appearance is not a measurement. {mode === "splat" && (splat?.registration ? "Overlay uses supplied calibration; visually verify alignment before confirming." : "Unregistered reconstruction: world markers and measured geometry are hidden.")}</p><div ref={root} className="relative h-[520px] w-full overflow-hidden rounded-xl" aria-label="Measured room geometry viewer" />{error && <p role="alert">{error}</p>}</section>;
+  }, [manifest, markers, mode, splatUrl, selectedElementId, compact]);
+  return <section>{!compact&&<><div className="flex gap-3 py-2"><button onClick={() => setMode("geometry")} className="rounded border px-3 py-2">Measured geometry</button><button disabled={!splat} onClick={() => setMode("splat")} className="rounded border px-3 py-2 disabled:opacity-40">Gaussian reconstruction</button></div><p className="text-sm">Drag to orbit, scroll to zoom. Double-click measured geometry to place or move a marker. Reconstruction appearance is not a measurement. {mode === "splat" && (splat?.registration ? "Overlay uses supplied calibration; visually verify alignment before confirming." : "Unregistered reconstruction: world markers and measured geometry are hidden.")}</p></>}<div ref={root} className={`relative w-full overflow-hidden ${compact?"h-[400px]":"h-[520px]"}`} aria-label="Measured room geometry viewer" />{error && <p role="alert">{error}</p>}</section>;
 }

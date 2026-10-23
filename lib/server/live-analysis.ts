@@ -34,11 +34,12 @@ export async function analyzeLiveFrame(image: Buffer, input: LiveAnalysisInput):
       ...(input.includeSurfaces?[inspectSurfaceDamage(normalized).then(observations=>{
         findings.push(...observations.map(item=>({id:randomUUID(),parentObjectId:null,label:`Room surface: ${item.type}`,description:item.description,boundingBox:item.boundingBox,timestampSeconds:input.timestampSeconds,damageType:item.type,source:'ai' as const})));
       })]:[]),
+      ...(input.includeSurfaces?[inspectCracks(normalized).then(cracks=>{findings.push(...cracks.map(crack=>({id:randomUUID(),parentObjectId:null,label:'Potential crack',description:`Pretrained crack model candidate (${CRACK_MODEL}, ${(crack.confidence*100).toFixed(0)}% model score); review against the source image. Joints and shadows can be false positives.`,boundingBox:crack.boundingBox,timestampSeconds:input.timestampSeconds,damageType:'crack',source:'ai' as const,detectionSource:'crack-model' as const})));})]:[]),
     ]);
     const analyzedObjectIds=input.objects.filter((object,index)=>{if(checks[index].status==='fulfilled')return true;analysisWarnings.push(`Damage check for ${object.label} could not finish. Assessment is incomplete.`);return false}).map(object=>object.objectId);
     const surfacesAnalyzed=input.includeSurfaces&&checks[input.objects.length]?.status==='fulfilled';
     if(input.includeSurfaces&&!surfacesAnalyzed)analysisWarnings.push('Gemini surface analysis could not finish. Assessment is incomplete.');
-    if(input.includeSurfaces){try{const cracks=await inspectCracks(normalized);findings.push(...cracks.map(crack=>({id:randomUUID(),parentObjectId:null,label:'Potential crack',description:`Pretrained crack model candidate (${CRACK_MODEL}); review against the source image. Joints and shadows can be false positives.`,boundingBox:crack.boundingBox,timestampSeconds:input.timestampSeconds,damageType:'crack',source:'ai' as const,detectionSource:'crack-model' as const})));}catch{analysisWarnings.push('Specialised crack detection was unavailable. Gemini observations are retained; crack assessment is incomplete.');}}
+    if(input.includeSurfaces){const specialist=checks[input.objects.length+1];if(specialist?.status==='rejected')analysisWarnings.push('Specialised crack detection was unavailable. Gemini observations are retained; crack assessment is incomplete.');}
     return{analysisWarnings,evidenceFrameRef:ref,sourceWidth:size.width!,sourceHeight:size.height!,findings,analyzedObjectIds,surfacesAnalyzed};
   }catch(error){await deleteMedia(ref).catch(()=>{});throw error;}
 }
