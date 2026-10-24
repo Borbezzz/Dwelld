@@ -14,8 +14,9 @@ export async function GET(request: Request) {
     const user = await requireUser(request);
     const db = await getDb();
     await ensureIndexes(db);
-    const docs = await db.collection("rooms").find({ownerId:user.id}).sort({ createdAt: -1 }).limit(100).toArray();
-    const rooms = docs.map((r) => ({ id: String(r._id), name: r.name, createdAt: new Date(r.createdAt).toISOString(), spaceId: r.spaceId ? String(r.spaceId) : null }));
+    const memberships = await db.collection("spaceMembers").find({userId:user.id},{projection:{spaceId:1}}).toArray();
+    const docs = await db.collection("rooms").find({$or:[{ownerId:user.id},...(memberships.length?[{spaceId:{$in:memberships.map(m=>m.spaceId)}}]:[])]}).sort({ createdAt: -1 }).limit(100).toArray();
+    const rooms = docs.map((r) => ({ id: String(r._id), name: r.name, createdAt: new Date(r.createdAt).toISOString(), spaceId: r.spaceId ? String(r.spaceId) : null, isOwner: r.ownerId === user.id }));
     return NextResponse.json({ rooms });
   } catch (error) { return errorResponse(error, "app/api/rooms/route.ts"); }
 }
