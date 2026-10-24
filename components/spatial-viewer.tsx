@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import DotField from "./dot-field";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import type { ObjectCloud } from "@/lib/spatial/object-reconstruction";
 import type { SpatialManifest, SpatialMarker, Vec3 } from "@/lib/spatial/types";
 import { furnitureNames, isFurniture, isStructure } from "@/lib/spatial/furniture";
 
@@ -12,6 +13,9 @@ type Props = {
   selectedElementId?: string | null; hoveredElementId?: string | null;
   onSelectElement?: (id: string | null) => void; onHoverElement?: (id: string | null) => void;
   damagedElementIds?: string[]; elementTones?: Record<string, "check" | "damage">; compact?: boolean; className?: string;
+  reconstruction?: (ObjectCloud & { caption: string }) | null; reconstructing?: boolean;
+  pieceFindings?: { id: string; findingId?: string; label: string; status: string }[];
+  onReviewFinding?: (findingId: string, status: "confirmed" | "rejected" | "pending") => void; reviewBusy?: string;
 };
 // Selection is blue so it never reads as a status. Amber = needs a look, red = damage confirmed.
 const INK = 0x2f3a2c, ACTIVE = 0x3f8fd2, CHECK = 0xe39a3b, DAMAGE = 0xc4573f;
@@ -20,7 +24,7 @@ const INK = 0x2f3a2c, ACTIVE = 0x3f8fd2, CHECK = 0xe39a3b, DAMAGE = 0xc4573f;
  * One 3D space: the Gaussian splat (when present) with the measured furniture boxes inside it.
  * Hover a box to outline it, click it to select it. Walls and floors are context, never listed.
  */
-export default function SpatialViewer({ manifest, markers, assetUrl, onPick, selectedElementId, hoveredElementId, onSelectElement, onHoverElement, damagedElementIds = [], elementTones = {}, compact = false, className = "" }: Props) {
+export default function SpatialViewer({ manifest, markers, assetUrl, onPick, selectedElementId, hoveredElementId, onSelectElement, onHoverElement, damagedElementIds = [], elementTones = {}, compact = false, className = "", reconstruction = null, reconstructing = false, pieceFindings = [], onReviewFinding, reviewBusy = "" }: Props) {
   const root = useRef<HTMLDivElement>(null);
   const splat = manifest.assets.find(a => a.kind === "splat");
   const aligned = !!splat && (!!splat.registration || splat.reconstructionMethod === "lidar-initialized");
@@ -29,11 +33,13 @@ export default function SpatialViewer({ manifest, markers, assetUrl, onPick, sel
   const [tip, setTip] = useState<{ text: string; x: number; y: number } | null>(null);
   const callbacks = useRef({ onPick, onSelectElement, onHoverElement }); callbacks.current = { onPick, onSelectElement, onHoverElement };
   const tones = { ...Object.fromEntries(damagedElementIds.map(id => [id, "check" as const])), ...elementTones };
-  const state = useRef({ selected: selectedElementId ?? null, hovered: hoveredElementId ?? null, localHover: null as string | null, tones });
-  state.current.selected = selectedElementId ?? null; state.current.hovered = hoveredElementId ?? null; state.current.tones = tones;
-  const scene = useRef<{ highlight: () => void; focus: (id: string | null) => void; markers: (list: SpatialMarker[]) => void } | null>(null);
+  const state = useRef({ selected: selectedElementId ?? null, hovered: hoveredElementId ?? null, localHover: null as string | null, tones, showCloud: !!reconstruction });
+  state.current.selected = selectedElementId ?? null; state.current.hovered = hoveredElementId ?? null; state.current.tones = tones; state.current.showCloud = !!reconstruction;
+  const scene = useRef<{ highlight: () => void; focus: (id: string | null) => void; markers: (list: SpatialMarker[]) => void; cloud: (cloud: ObjectCloud | null) => void } | null>(null);
   const markersRef = useRef(markers); markersRef.current = markers;
+  const cloudRef = useRef<ObjectCloud | null>(reconstruction); cloudRef.current = reconstruction;
   useEffect(() => { scene.current?.markers(markers); }, [markers]);
+  useEffect(() => { scene.current?.cloud(reconstruction ?? null); scene.current?.highlight(); }, [reconstruction]);
   const splatUrl = splat ? assetUrl(splat.name) : "";
   const damagedKey = JSON.stringify(tones);
 
@@ -81,6 +87,19 @@ export default function SpatialViewer({ manifest, markers, assetUrl, onPick, sel
       }
     };
     placeMarkers(markersRef.current);
+    const cloudGroup = new THREE.Group(); group.add(cloudGroup);
+    const placeCloud = (cloud: ObjectCloud | null) => {
+      cloudGroup.children.slice().forEach(child => { cloudGroup.remove(child); if (child instanceof THREE.Points) { child.geometry.dispose(); (child.material as THREE.Material).dispose(); } });
+      state.current.showCloud = !!cloud && cloud.positions.length >= 9;
+      if (!state.current.showCloud || !cloud) { render(); return; }
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.Float32BufferAttribute(cloud.positions, 3));
+      const rgb = new Float32Array(cloud.colors.length);
+      for (let i = 0; i < cloud.colors.length; i++) rgb[i] = cloud.colors[i] / 255;
+      geometry.setAttribute("color", new THREE.Float32BufferAttribute(rgb, 3));
+      const points = new THREE.Points(geometry, new THREE.PointsMaterial({ size: .02, vertexColors: true, sizeAttenuation: true, depthTest: !useSplat }));
+      points.renderOrder = 13; cloudGroup.add(points); render();
+    };
     const center = bounds.isEmpty() ? new THREE.Vector3() : bounds.getCenter(new THREE.Vector3());
     const radius = bounds.isEmpty() ? 3 : Math.max(2, bounds.getSize(new THREE.Vector3()).length() * .7);
     const start = center.clone().add(new THREE.Vector3(radius * .85, radius * .8, radius * .95));
@@ -98,7 +117,7 @@ export default function SpatialViewer({ manifest, markers, assetUrl, onPick, sel
         lineMaterial.color.set(active ? ACTIVE : toneColor);
         lineMaterial.opacity = active ? 1 : tone ? .95 : useSplat ? .55 : .75;
         fillMaterial.color.set(active ? ACTIVE : toneColor);
-        fillMaterial.opacity = active ? (id === selected ? .24 : .16) : tone === "damage" ? .16 : tone ? .1 : 0;
+        fillMaterial.opacity = state.current.showCloud && id === selected ? 0 : active ? (id === selected ? .24 : .16) : tone === "damage" ? .16 : tone ? .1 : 0;
       }
       // Hovering a row in the list labels the same piece in the room.
       const external = !localHover && (hovered || null);
@@ -116,7 +135,7 @@ export default function SpatialViewer({ manifest, markers, assetUrl, onPick, sel
       const step = () => { if (dead || !controls) return; const t = Math.min(1, (performance.now() - began) / 450), k = t * (2 - t); controls.target.lerpVectors(from, goal, k); controls.update(); render(); if (t < 1) focusFrame = requestAnimationFrame(step); };
       step();
     };
-    scene.current = { highlight, focus, markers: list => { placeMarkers(list); render(); } };
+    scene.current = { highlight, focus, markers: list => { placeMarkers(list); render(); }, cloud: cloud => { placeCloud(cloud); highlight(); } };
     // ---- Pointer: hover outlines, click selects, double-click places a marker.
     const ray = new THREE.Raycaster();
     const hitAt = (event: MouseEvent, targets: THREE.Object3D[]) => { if (!canvas || !camera) return undefined; const rect = canvas.getBoundingClientRect(); ray.setFromCamera(new THREE.Vector2((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1), camera); return ray.intersectObjects(targets, false)[0]; };
@@ -142,7 +161,7 @@ export default function SpatialViewer({ manifest, markers, assetUrl, onPick, sel
     const attach = () => { if (!canvas) return; canvas.addEventListener("pointerdown", onDown); canvas.addEventListener("pointermove", onMove); canvas.addEventListener("pointerleave", onLeave); canvas.addEventListener("pointerup", onUp); canvas.addEventListener("dblclick", onDouble); };
     const detach = () => { if (!canvas) return; canvas.removeEventListener("pointerdown", onDown); canvas.removeEventListener("pointermove", onMove); canvas.removeEventListener("pointerleave", onLeave); canvas.removeEventListener("pointerup", onUp); canvas.removeEventListener("dblclick", onDouble); };
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const dispose = () => { group.traverse(o => { if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments) { o.geometry.dispose(); (o.material as THREE.Material).dispose(); } }); };
+    const dispose = () => { group.traverse(o => { if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments || o instanceof THREE.Points) { o.geometry.dispose(); (o.material as THREE.Material).dispose(); } }); };
 
     if (useSplat) {
       let viewer: import("@mkkellogg/gaussian-splats-3d").Viewer | undefined, visibility: IntersectionObserver | undefined;
@@ -162,7 +181,7 @@ export default function SpatialViewer({ manifest, markers, assetUrl, onPick, sel
         camera = viewer.camera as THREE.PerspectiveCamera; controls = viewer.controls as typeof controls; canvas = viewer.renderer.domElement;
         render = () => viewer?.forceRenderNextFrame();
         if (controls) { controls.autoRotate = compact && !reduced; controls.autoRotateSpeed = .35; }
-        attach(); viewer.start(); highlight(); setLoading(false);
+        attach(); viewer.start(); placeCloud(cloudRef.current); highlight(); setLoading(false);
         // The dashboard preview spins on its own: only render it while it is on screen.
         if (compact) { const v = viewer; visibility = new IntersectionObserver(([entry]) => { if (dead) return; const loop = v as unknown as { stop: () => void; selfDrivenModeRunning: boolean }; if (!entry.isIntersecting) loop.stop(); else if (!loop.selfDrivenModeRunning) v.start(); }); visibility.observe(element); }
         if (state.current.selected) focus(state.current.selected);
@@ -181,7 +200,7 @@ export default function SpatialViewer({ manifest, markers, assetUrl, onPick, sel
     let dirty = true; render = () => { dirty = true; };
     const resize = new ResizeObserver(() => { perspective.aspect = element.clientWidth / Math.max(1, element.clientHeight); perspective.updateProjectionMatrix(); renderer.setSize(element.clientWidth, element.clientHeight); dirty = true; }); resize.observe(element);
     orbit.addEventListener("change", () => { dirty = true; });
-    attach(); highlight();
+    attach(); placeCloud(cloudRef.current); highlight();
     renderer.setAnimationLoop(() => { orbit.update(); if (dirty || orbit.autoRotate) { group.traverse(o => { if (o.userData.billboard) o.quaternion.copy(perspective.quaternion); }); renderer.render(three, perspective); dirty = false; } });
     if (state.current.selected) focus(state.current.selected);
     return () => { dead = true; cancelAnimationFrame(focusFrame); cancelAnimationFrame(moveFrame); detach(); scene.current = null; resize.disconnect(); renderer.setAnimationLoop(null); orbit.dispose(); dispose(); three.traverse(o => { if (o instanceof THREE.Mesh) { o.geometry.dispose(); (o.material as THREE.Material).dispose(); } }); renderer.dispose(); element.replaceChildren(); };
@@ -195,7 +214,7 @@ export default function SpatialViewer({ manifest, markers, assetUrl, onPick, sel
     {loading && <div className="room-scene-loading is-live"><DotField /><p>Loading your room in 3D…</p></div>}
     {tip && <span className="room-scene-tip" style={{ left: tip.x, top: tip.y }}>{tip.text}</span>}
     {!compact && splat && <div className="room-scene-modes" role="group" aria-label="3D view"><button type="button" aria-pressed={mode === "room"} onClick={() => setMode("room")}>Room</button><button type="button" aria-pressed={mode === "geometry"} onClick={() => setMode("geometry")}>Geometry</button></div>}
-    {selectedPiece && <aside className="room-measure" aria-label="Selected furniture measurements"><b>{selectedName || "Furniture"}</b><dl><dt>Width</dt><dd>{selectedPiece.dimensions[0].toFixed(2)} m</dd><dt>Height</dt><dd>{selectedPiece.dimensions[1].toFixed(2)} m</dd><dt>Depth</dt><dd>{selectedPiece.dimensions[2].toFixed(2)} m</dd></dl><p>Measured from this scan. Shown because this piece is selected.</p></aside>}
+    {selectedPiece && <aside className="room-measure" aria-label="Selected furniture measurements"><b>{selectedName || "Furniture"}</b>{reconstruction ? <dl><dt>Width</dt><dd>{reconstruction.measurements.width.toFixed(2)} m</dd><dt>Height</dt><dd>{reconstruction.measurements.height.toFixed(2)} m</dd><dt>Depth</dt><dd>{reconstruction.measurements.depth.toFixed(2)} m</dd></dl> : <dl><dt>Width</dt><dd>{selectedPiece.dimensions[0].toFixed(2)} m</dd><dt>Height</dt><dd>{selectedPiece.dimensions[1].toFixed(2)} m</dd><dt>Depth</dt><dd>{selectedPiece.dimensions[2].toFixed(2)} m</dd></dl>}<p>{reconstructing ? "Rebuilding this piece from the inspection photos…" : reconstruction?.caption || "Measured from this scan. Shown because this piece is selected."}</p>{onReviewFinding && pieceFindings.slice(0, 3).map(finding => <div key={finding.id} className="room-measure-review"><span>{finding.label}</span>{finding.findingId && finding.status === "pending" ? <span><button type="button" disabled={reviewBusy === finding.findingId} onClick={() => onReviewFinding(finding.findingId!, "confirmed")}>Confirm</button><button type="button" disabled={reviewBusy === finding.findingId} onClick={() => onReviewFinding(finding.findingId!, "rejected")}>Dismiss</button></span> : finding.findingId ? <button type="button" disabled={reviewBusy === finding.findingId} onClick={() => onReviewFinding(finding.findingId!, "pending")}>{finding.status === "confirmed" ? "Confirmed" : "Dismissed"} · Undo</button> : <span>{finding.status}</span>}</div>)}</aside>}
     {!compact && mode === "room" && splat && !aligned && <p className="room-scene-note">This reconstruction has no calibration, so furniture outlines are shown in Geometry view only.</p>}
     {error && <p className="room-scene-note" role="alert">{error}</p>}
   </div>;

@@ -25,6 +25,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ in
       [{
         $set: {
           reviewStatus: body.reviewStatus,
+          autoApproved: false, autoRejected: false,
           reviewedAt: "$$NOW",
           reviewHistory: { $concatArrays: [
             { $ifNull: ["$reviewHistory", []] },
@@ -35,6 +36,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ in
       { returnDocument: "after" },
     );
     if (!updated) return NextResponse.json({ error: "Finding not found" }, { status: 404 });
+    await db.collection("spatialMarkers").updateMany({ inspectionId: inspectionObjectId, findingId: String(findingObjectId), deletedAt: { $exists: false } }, { $set: { reviewStatus: body.reviewStatus }, $inc: { version: 1 }, $push: { reviewHistory: { action: body.reviewStatus, at: new Date(), by: user.id, via: "finding" } } } as never);
     return NextResponse.json({ finding: {
       id: String(updated._id), kind: updated.kind, label: updated.label, description: updated.description,
       timestampSeconds: updated.timestampSeconds, evidenceFrameUrl: updated.evidenceFrameUrl,

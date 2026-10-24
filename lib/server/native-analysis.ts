@@ -8,6 +8,7 @@ import { indexFindings } from "./search";
 import type { DepthPatch } from "./crack-check";
 import { elementInView, localizeDamageBox, type FrameFinding, type FramePose, type RoomElement } from "./frame-analysis";
 import { insideElement } from "../spatial/identity";
+import { prepareObjectReconstructions } from "./object-reconstruction";
 import { furnitureNames, isFurniture } from "../spatial/furniture";
 import type { SpatialManifest, SpatialElement } from "../spatial/types";
 
@@ -158,6 +159,8 @@ export async function analyzeNativeInspection(inspection: Document, manifest: Sp
     const approved = collected.filter(f => f.autoApproved).length;
     await db.collection("inspections").updateOne({ _id: inspection._id }, { $set: { status: skipped || warnings.length > 1 ? "partial" : "completed", analysisWarnings: [...new Set(warnings)], autoReview: { checked: collected.filter(f => f.verification).length, approved }, framesAnalysed: analysed, completedAt: new Date(), durationSeconds: manifest.frames.at(-1)?.timestamp || 0 } });
     await indexFindings(inspection.ownerId, inspection._id).catch(() => {});
+    // Optional warm-up must not delay publishing the completed inspection.
+    await prepareObjectReconstructions(inspection, manifest).catch(() => {});
   } catch {
     await db.collection("inspections").updateOne({ _id: inspection._id }, { $set: { status: "partial", analysisWarnings: [...warnings, "Analysis did not finish. The capture is preserved."] } });
   }

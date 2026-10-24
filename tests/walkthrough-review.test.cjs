@@ -36,3 +36,11 @@ test('live camera metadata accepts measured boxes and damage pins but rejects in
  assert.deepEqual(parseVideoMarkers([{...box,boundingBox:{x:.9,y:0,width:.5,height:.2}},{...pin,point:{x:Infinity,y:0}},{...box,kind:'arbitrary'},null]),[]);
  assert.equal(parseVideoMarkers(Array(150).fill(box)).length,100);
 });
+
+test('still-photo boxes appear only on their exact source second, never an adjacent pose',()=>{
+ const {findingsForSourceFrame}=load('lib/inspection-timeline.ts');
+ const list=[finding('source',1),finding('nearby',1.5),finding('later',2)];
+ assert.deepEqual(findingsForSourceFrame(list,1).map(f=>f.id),['source']);
+ assert.deepEqual(findingsForSourceFrame(list,1.5).map(f=>f.id),['nearby']);
+ assert.equal(findingsForSourceFrame(list,1.2).length,0);
+});

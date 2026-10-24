@@ -25,6 +25,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ ins
       const note = typeof b.label === "string" ? b.label.trim() : "";
       if (!vector(b.position) || note.length > 500 || (b.elementId != null && !capture.manifest.elements.some((e: { id: string }) => e.id === b.elementId))) return NextResponse.json({ error: "Invalid marker" }, { status: 400 });
       let findingId = null;
+      let initialReviewStatus = "pending";
       // No finding chosen: find the photo that saw this 3D point best and let Gemini describe it there.
       if (b.findingId == null) {
         const manifest = capture.manifest as SpatialManifest;
@@ -36,19 +37,31 @@ export async function POST(request: Request, { params }: { params: Promise<{ ins
         if (seen && view) {
           const finding = { _id: new ObjectId(), ownerId: user.id, inspectionId: inspection._id, roomId: inspection.roomId, kind: "damage", label: seen.label, damageType: seen.type, description: [seen.description, note && `Your note: ${note}`].filter(Boolean).join(" "), evidenceFrameUrl: view.ref, point: view.at, boundingBox: seen.boundingBox, timestampSeconds: view.frame.timestamp, spatialElementId: b.elementId || null, source: "manual", aiDescribed: true, reviewStatus: "confirmed", reviewHistory: [{ from: "pending", to: "confirmed", at: now, by: user.id }], createdAt: now };
           await db.collection("findings").insertOne(finding);
-          findingId = finding._id; b.label = seen.label;
+          findingId = finding._id; initialReviewStatus = "confirmed"; b.label = seen.label;
         }
       }
-      if (b.findingId != null && !findingId) { findingId = typeof b.findingId === "string" ? parseObjectId(b.findingId) : null; if (!findingId || !await db.collection("findings").findOne({ _id: findingId, inspectionId: inspection._id })) return NextResponse.json({ error: "Finding does not belong to this inspection" }, { status: 400 }); }
-      const marker = { findingId: findingId ? String(findingId) : null, _id: new ObjectId(), inspectionId: inspection._id, ownerId: user.id, sessionId: capture.manifest.sessionId, position: b.position, label: String(b.label || note).trim(), elementId: b.elementId || null, reviewStatus: "pending", version: 1, createdAt: now, reviewHistory: [{ action: "add", position: b.position, userId: user.id, at: now }] };
+      if (b.findingId != null && !findingId) {
+        findingId = typeof b.findingId === "string" ? parseObjectId(b.findingId) : null;
+        const linked = findingId && await db.collection("findings").findOne({ _id: findingId, inspectionId: inspection._id });
+        if (!linked) return NextResponse.json({ error: "Finding does not belong to this inspection" }, { status: 400 });
+        initialReviewStatus = ["pending", "confirmed", "rejected"].includes(linked.reviewStatus) ? linked.reviewStatus : "pending";
+      }
+      const marker = { findingId: findingId ? String(findingId) : null, _id: new ObjectId(), inspectionId: inspection._id, ownerId: user.id, sessionId: capture.manifest.sessionId, position: b.position, label: String(b.label || note).trim(), elementId: b.elementId || null, reviewStatus: initialReviewStatus, version: 1, createdAt: now, reviewHistory: [{ action: "add", position: b.position, userId: user.id, at: now }] };
       await db.collection("spatialMarkers").insertOne(marker);
       return NextResponse.json({ id: String(marker._id) }, { status: 201 });
     }
     const id = typeof b.id === "string" ? parseObjectId(b.id) : null;
     if (!id || !Number.isInteger(b.version) || (b.action === "move" && !vector(b.position))) return NextResponse.json({ error: "Invalid marker update" }, { status: 400 });
+    const marker = await db.collection("spatialMarkers").findOne({ _id: id, inspectionId: inspection._id, version: b.version, deletedAt: { $exists: false } });
+    if (!marker) return NextResponse.json({ error: "Marker changed; reload and retry" }, { status: 409 });
     const set = b.action === "move" ? { position: b.position, reviewStatus: "pending" } : b.action === "delete" ? { deletedAt: now } : { reviewStatus: b.action === "confirm" ? "confirmed" : "rejected" };
     const result = await db.collection("spatialMarkers").updateOne({ _id: id, inspectionId: inspection._id, version: b.version, deletedAt: { $exists: false } }, { $set: set, $inc: { version: 1 }, $push: { reviewHistory: { action: b.action, ...(b.action === "move" ? { position: b.position } : {}), userId: user.id, at: now } } } as never);
     if (!result.modifiedCount) return NextResponse.json({ error: "Marker changed; reload and retry" }, { status: 409 });
+    if ((b.action === "confirm" || b.action === "reject" || b.action === "move") && marker.findingId) {
+      const findingId = parseObjectId(String(marker.findingId));
+      const reviewStatus = b.action === "confirm" ? "confirmed" : b.action === "move" ? "pending" : "rejected";
+      if (findingId) await db.collection("findings").updateOne({ _id: findingId, inspectionId: inspection._id }, { $set: { reviewStatus, reviewedAt: now, autoApproved: false }, $push: { reviewHistory: { from: "marker", to: reviewStatus, at: now, by: user.id } } } as never);
+    }
     return NextResponse.json({ saved: true });
   } catch (e) { return errorResponse(e, "spatial.marker"); }
 }

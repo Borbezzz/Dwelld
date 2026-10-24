@@ -11,3 +11,8 @@ export function timelineGroups(findings:Finding[]) {
   for(const f of timelineFindings(findings)){const key=Math.round(f.timestampSeconds!*100)/100;groups.set(key,[...(groups.get(key)||[]),f]);}
   return [...groups].sort(([a],[b])=>a-b).map(([time,items])=>({time,items,damage:items.some(f=>f.kind==='damage')}));
 }
+
+/** Still-photo boxes require the source timestamp; nearby views can have different camera poses. */
+export function findingsForSourceFrame(findings: Finding[], timestamp: number) {
+  return findingsAtTime(findings, timestamp, 0.001);
+}
