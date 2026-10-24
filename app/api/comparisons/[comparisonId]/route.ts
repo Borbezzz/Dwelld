@@ -1,6 +1,7 @@
 import {readJsonBody} from "@/lib/server/request-body";
 import { ObjectId } from "mongodb";
 import { NextResponse } from "next/server";
+import {canReadRoom} from "@/lib/server/space-access";
 import { getDb,getClientPromise,parseObjectId } from "@/lib/server/db";
 import { requireUser } from "@/lib/server/access";
 import { errorResponse } from "@/lib/server/api-error";
@@ -25,4 +26,4 @@ export async function PATCH(request:Request,{params}:{params:Promise<{comparison
  }finally{await session.endSession();}
  }catch(e){return errorResponse(e,"comparison.review");}}
 
-export async function GET(request:Request,{params}:{params:Promise<{comparisonId:string}>}){try{const user=await requireUser(request);const id=parseObjectId((await params).comparisonId);const record=id?await(await getDb()).collection("comparisons").findOne({_id:id,ownerId:user.id}):null;if(!record)return NextResponse.json({error:"Comparison not found"},{status:404});return NextResponse.json({comparison:{...record,id:String(record._id)}});}catch(e){return errorResponse(e,"comparison.read");}}
+export async function GET(request:Request,{params}:{params:Promise<{comparisonId:string}>}){try{const user=await requireUser(request);const id=parseObjectId((await params).comparisonId);const record=id?await(await getDb()).collection("comparisons").findOne({_id:id}):null;const room=record?await(await getDb()).collection("rooms").findOne({_id:record.roomId}):null;if(!record||!room||!await canReadRoom(room as never,user.id))return NextResponse.json({error:"Comparison not found"},{status:404});return NextResponse.json({comparison:{...record,id:String(record._id)}});}catch(e){return errorResponse(e,"comparison.read");}}
