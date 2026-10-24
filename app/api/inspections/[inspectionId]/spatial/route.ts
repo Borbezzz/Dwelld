@@ -14,8 +14,10 @@ export async function GET(request: Request, { params }: Context) {
   try {
     const user = await requireUser(request), { inspectionId } = await params;
     const inspection = await requireOwnedInspection(inspectionId, user.id), db = await getDb();
-    const capture = await db.collection("spatialCaptures").findOne({ inspectionId: inspection._id });
-    const markers = await db.collection("spatialMarkers").find({ inspectionId: inspection._id, deletedAt: { $exists: false } }).toArray();
+    const [capture, markers] = await Promise.all([
+      db.collection("spatialCaptures").findOne({ inspectionId: inspection._id }, { projection: { manifest: 1, createdAt: 1 } }),
+      db.collection("spatialMarkers").find({ inspectionId: inspection._id, deletedAt: { $exists: false } }, { projection: { position: 1, label: 1, elementId: 1, findingId: 1, reviewStatus: 1, version: 1 } }).toArray(),
+    ]);
     return NextResponse.json({ capture: capture ? { manifest: capture.manifest, createdAt: capture.createdAt } : null, markers: markers.map(m => ({ id: String(m._id), position: m.position, label: m.label, elementId: m.elementId, findingId: m.findingId || null, reviewStatus: m.reviewStatus, version: m.version })) });
   } catch (e) { return errorResponse(e, "spatial.read"); }
 }
