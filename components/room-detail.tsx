@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import DotField from "./dot-field";
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -10,7 +11,7 @@ import EvidenceViewer, { type EvidenceItem } from "./evidence-viewer";
 import type { Finding, Inspection, Room } from "@/lib/types";
 import type { SpatialManifest, SpatialMarker } from "@/lib/spatial/types";
 import { furnitureNames, isFurniture, isFurnitureLabel } from "@/lib/spatial/furniture";
-const SpatialViewer = dynamic(() => import("./spatial-viewer"), { ssr: false, loading: () => <div className="room-scene"><div className="room-scene-loading"><span className="skeleton" /><p>Loading your room in 3D…</p></div></div> });
+const SpatialViewer = dynamic(() => import("./spatial-viewer"), { ssr: false, loading: () => <div className="room-scene"><div className="room-scene-loading is-live"><DotField /><p>Loading your room in 3D…</p></div></div> });
 
 type Capture = { capture: { manifest: SpatialManifest } | null; markers: SpatialMarker[] };
 type Damage = { id: string; label: string; description?: string; status: string; source: string; evidence?: string; findingId?: string; box?: Finding["boundingBox"] | null; point?: Finding["point"] | null; timestampSeconds?: number; confidence?: number | null; autoApproved?: boolean; verification?: Finding["verification"] };
@@ -128,8 +129,8 @@ export default function RoomDetail({ roomId }: { roomId: string }) {
     {scans && !scans.length ? <section className="room-empty"><h2>Begin with the move-in scan.</h2><p>Walk the room with your phone. Dwelld builds it in 3D, outlines the furniture and notes anything worth a closer look.</p><Link className="button button-dark" href={next.href}>{next.label} <ArrowUpRight size={16} /></Link></section> :
     <div className="room-detail-grid">
       <section className="room-detail-stage" aria-label="Room in 3D">
-        {!scans || loadingScan ? <div className="room-scene"><div className="room-scene-loading"><span className="skeleton" /><p>Loading your room…</p></div></div>
-          : scan && !ready(scan) ? <div className="room-scene"><div className="room-scene-loading"><span className="skeleton" /><p>{scan.status === "failed" ? "This scan could not be analysed." : "Analysing this scan. Findings appear here when it's done."}</p></div></div>
+        {!scans || loadingScan ? <div className="room-scene"><div className="room-scene-loading is-live"><DotField /><p>Loading your room…</p></div></div>
+          : scan && !ready(scan) ? <div className="room-scene"><div className="room-scene-loading is-live"><DotField /><p>{scan.status === "failed" ? "This scan could not be analysed." : "Analysing this scan. Findings appear here when it's done."}</p></div></div>
           : manifest ? <SpatialViewer manifest={manifest} markers={capture?.markers || []} assetUrl={name => `/api/inspections/${current}/spatial/assets/${encodeURIComponent(name)}`} selectedElementId={selected} hoveredElementId={hovered} onSelectElement={id => { setSelected(id); setFocusFinding(null); }} onHoverElement={setHovered} elementTones={tones} />
           : <div className="room-scene"><div className="room-scene-loading"><p>This scan was a video walkthrough, so there is no 3D room. Its findings are listed alongside.</p><Link className="text-button" href={`/inspections/${current}`}>Open video review ↗</Link></div></div>}
         {manifest && <p className="room-scene-help"><span className="tone-key"><i className="tone-check" />Needs a look</span><span className="tone-key"><i className="tone-damage" />Damage confirmed</span><span>Drag to orbit · click furniture to see its footage</span></p>}

@@ -17,11 +17,14 @@ input,textarea{caret-color:var(--mark-ink)}
 
 /* Speckle: placeholders read as a room still taking shape, not a grey box */
 .reconstruction-canvas,.room-empty,.room-scene-loading,.compare-image-empty,.live-room-empty{background:var(--speckle),var(--mark-well)}
+.room-scene-loading.is-live{background:var(--mark-well)}.room-scene-loading.is-live>p,.room-scene-loading.is-live>a{position:relative;z-index:1;background:rgb(236 235 227/.82);padding:6px 12px;border-radius:2px;backdrop-filter:blur(2px)}
+.dot-field{position:absolute;inset:0;width:100%;height:100%;display:block}
 .live-room-empty{background:transparent}
 
 /* Corner brackets: the selected thing is framed the way furniture is outlined in 3D */
+.spaces-split .landing-room,.spaces-split .landing-room.active{border-top:0}.spaces-split .landing-room-list{border-top:0}
 .landing-room,.room-furniture>li>button{position:relative}
-.landing-room.active::after,.room-furniture>li[data-selected=true]>button::after,.room-furniture>li>button:hover::after{
+.landing-room.active::after,.landing-room:hover::after,.room-furniture>li[data-selected=true]>button::after,.room-furniture>li>button:hover::after{
   content:"";position:absolute;inset:6px -10px;pointer-events:none;color:var(--mark-ink);
   background:
     linear-gradient(currentColor 0 0) left top/10px 1px no-repeat,linear-gradient(currentColor 0 0) left top/1px 10px no-repeat,
@@ -33,6 +36,7 @@ input,textarea{caret-color:var(--mark-ink)}
 .room-furniture>li>button:hover::after{color:var(--mark-sage)}
 .room-furniture>li[data-selected=true]>button::after{color:var(--mark-amber)}
 .landing-room.active{cursor:default}.landing-room:not(.active){cursor:pointer}
+.landing-room:not(.active):hover::after{color:var(--mark-sage)}
 .room-shown{color:var(--mark-ink)}
 @keyframes mark-settle{from{opacity:0;transform:scale(1.035)}to{opacity:1;transform:none}}
 

@@ -101,8 +101,9 @@ export default function LiveRoomView({ live, findings, selected, onSelect }: { l
     const now = performance.now() / 1000;
     w.markers.children.slice().forEach(o => { w.markers.remove(o); if (o instanceof THREE.Mesh) { o.geometry.dispose(); (o.material as THREE.Material).dispose(); } });
     for (const f of findings) {
-      if (f.reviewStatus === "rejected" || !f.pose) continue;
-      const at = locate(f, f.pose, w.positions); if (!at) continue;
+      if (f.reviewStatus === "rejected" || (!f.pose && !f.worldPosition)) continue;
+      // Phone marks carry their measured LiDAR point; AI findings are cast from the camera pose.
+      const at = f.worldPosition ? new THREE.Vector3(...f.worldPosition) : locate(f, f.pose!, w.positions); if (!at) continue;
       if (!seen.current.has(f.id)) seen.current.set(f.id, now);
       const pin = new THREE.Mesh(new THREE.SphereGeometry(.055, 16, 16), new THREE.MeshBasicMaterial({ color: f.reviewStatus === "confirmed" ? 0x4f9a5f : 0xe0583f, depthTest: false }));
       pin.position.copy(at); pin.renderOrder = 5; pin.userData = { id: f.id, born: seen.current.get(f.id)!, active: f.id === selected };
@@ -113,7 +114,7 @@ export default function LiveRoomView({ live, findings, selected, onSelect }: { l
   const furniture = (live?.elements || []).filter(isFurniture), names = furnitureNames(furniture);
   return <div className="live-room-view">
     <div ref={root} className="live-room-canvas" aria-label="Your room building in 3D as the phone scans" />
-    <div className="live-room-legend"><span><i className="dot-splat" />{count ? `${count.toLocaleString()} points` : "Waiting for depth"}</span><span><i className="dot-furniture" />{furniture.length} furniture</span><span><i className="dot-damage" />{findings.filter(f => f.pose && f.reviewStatus !== "rejected").length} pinned</span></div>
+    <div className="live-room-legend"><span><i className="dot-splat" />{count ? `${count.toLocaleString()} points` : "Waiting for depth"}</span><span><i className="dot-furniture" />{furniture.length} furniture</span><span><i className="dot-damage" />{findings.filter(f => (f.pose || f.worldPosition) && f.reviewStatus !== "rejected").length} pinned</span></div>
     {!count && <div className="live-room-empty"><p>Your room builds here as you scan.</p></div>}
     {furniture.length > 0 && <ul className="live-room-tags">{furniture.slice(0, 6).map(e => <li key={e.id}>{names.get(e.id)}</li>)}</ul>}
   </div>;

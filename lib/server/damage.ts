@@ -135,3 +135,16 @@ export async function inspectUnsupportedFurniture(image: Buffer, existingBoxes: 
   if (!response.text) throw new Error("Gemini returned no furniture response");
   return parseFurnitureResponse(response.text, existingBoxes);
 }
+
+/**
+ * The person aimed the phone's centre crosshair at something and pressed Mark. Describe the damage
+ * at that spot only, and localize it in the full photo. Null when nothing is visible there.
+ */
+export async function describeMarkedDamage(image: Buffer): Promise<DamageObservation | null> {
+  const area = { x: .2, y: .2, width: .6, height: .6 };
+  const crop = await cropObject(image, area);
+  const found = await inspect(crop.image, "The person aimed the centre of this photo at a spot they believe is damaged. Report only the damage at or nearest the centre; ignore anything near the edges. If nothing at the centre is visibly damaged, return an empty array.");
+  const located = found.filter(f => f.boundingBox).map(f => ({ ...f, boundingBox: cropBoxToFrame(f.boundingBox!, crop.bounds) }));
+  const centre = (b: Box) => Math.hypot(b.x + b.width / 2 - .5, b.y + b.height / 2 - .5);
+  return located.sort((a, b) => centre(a.boundingBox) - centre(b.boundingBox))[0] || found[0] || null;
+}

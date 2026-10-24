@@ -13,6 +13,8 @@ struct Element: Codable { let id: String; let category: String; let dimensions: 
 struct FrameRecord: Codable { let timestamp: Double; let image: String; let depth: String?; let confidence: String?; let width: Int; let height: Int; let depthWidth: Int?; let depthHeight: Int?; let intrinsics: [Float]; let transform: [Float] }
 struct Registration: Codable { let sessionId: String; var source = "arkit-calibrated"; var transform = matrix(matrix_identity_float4x4) }
 struct Asset: Codable { let name: String; var mediaRef: String; let kind: String; var registration: Registration? = nil; var reconstructionMethod: String? = nil }
+/// A spot the person marked during the scan: the photo and the LiDAR point under the centre crosshair.
+struct PhoneMark: Codable { let id: String; let position: [Float]; let timestamp: Double; let image: String; var sent = false }
 struct Manifest: Codable { var version = 1; let sessionId: String; var coordinateSystem = "arkit-right-handed-y-up-metres"; var elements: [Element]; var frames: [FrameRecord]; var assets: [Asset] }
 
 @MainActor final class CaptureModel: NSObject, ObservableObject, @preconcurrency RoomCaptureViewDelegate, @preconcurrency RoomCaptureSessionDelegate {
@@ -96,6 +98,9 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
         } catch { /* Capture continues locally if the laptop connection drops. */ }
     }
     @Published var liveSplats: [LiveGaussian] = []
+    @Published var markCount = 0
+    @Published var markPulse = 0
+    private var marks: [PhoneMark] = []
     @Published var splatCount = 0
     @Published var splatRevision = 0
     @Published var splatRenderError = ""
@@ -149,11 +154,66 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
             uploadComplete = false; uploadProgress = 0
             if var saved = self.connection { saved.captureFolder = dir.lastPathComponent; try CaptureConnectionStore.save(saved); self.connection = saved }
             splatBuilder.reset(); liveSplats = []; splatCount = 0; splatRevision += 1
+            marks = []; markCount = 0
             view.captureSession.run(configuration: RoomCaptureSession.Configuration())
             // Read the current frame without replacing RoomPlan's ARSession delegate.
             timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in Task { @MainActor in self?.recordFrame() } }
             scanning = true; status = "Move slowly. Capture surfaces from several angles. Stop within 120 seconds."
         } catch { status = "Could not create local capture directory." }
+    }
+    /// Mark whatever is under the centre crosshair. Scanning carries on; nothing resets.
+    func markDamage() {
+        guard scanning, let frame = view.captureSession.arSession.currentFrame, let dir = directory else { return }
+        guard let point = centrePoint(frame) else { status = "Couldn't measure that spot. Move a little closer and mark again."; return }
+        let original = CIImage(cvPixelBuffer: frame.capturedImage).oriented(.right)
+        let scale = min(1, 1600 / max(original.extent.width, original.extent.height))
+        let image = original.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        guard let jpeg = context.jpegRepresentation(of: image, colorSpace: CGColorSpaceCreateDeviceRGB(), options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.85]) else { return }
+        let id = UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        let name = "mark-\(id).jpg"
+        do { try jpeg.write(to: dir.appendingPathComponent(name)) } catch { status = "Couldn't save that mark."; return }
+        let mark = PhoneMark(id: id, position: [point.x, point.y, point.z], timestamp: max(0, frame.timestamp - (startTime ?? frame.timestamp)), image: name)
+        marks.append(mark); markCount = marks.count; markPulse += 1
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        status = "Marked. It shows up on your laptop in a few seconds."
+        Task { _ = await sendMark(mark) }
+    }
+    /// LiDAR depth under the image centre (median of a small window), unprojected into the scan's world space.
+    private func centrePoint(_ frame: ARFrame) -> SIMD3<Float>? {
+        guard let depth = (frame.sceneDepth ?? frame.smoothedSceneDepth)?.depthMap else { return nil }
+        CVPixelBufferLockBaseAddress(depth, .readOnly); defer { CVPixelBufferUnlockBaseAddress(depth, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddress(depth) else { return nil }
+        let w = CVPixelBufferGetWidth(depth), h = CVPixelBufferGetHeight(depth), stride = CVPixelBufferGetBytesPerRow(depth)
+        var values: [Float] = []
+        for y in (h / 2 - 3)...(h / 2 + 3) {
+            let row = base.advanced(by: y * stride).assumingMemoryBound(to: Float.self)
+            for x in (w / 2 - 3)...(w / 2 + 3) { let z = row[x]; if z.isFinite, z > 0.1, z < 8 { values.append(z) } }
+        }
+        guard !values.isEmpty else { return nil }
+        let z = values.sorted()[values.count / 2]
+        let k = frame.camera.intrinsics
+        let u = Float(CVPixelBufferGetWidth(frame.capturedImage)) / 2, v = Float(CVPixelBufferGetHeight(frame.capturedImage)) / 2
+        let p = frame.camera.transform * SIMD4<Float>((u - k.columns.2.x) * z / k.columns.0.x, -(v - k.columns.2.y) * z / k.columns.1.y, -z, 1)
+        return SIMD3<Float>(p.x, p.y, p.z)
+    }
+    private func sendMark(_ mark: PhoneMark) async -> Bool {
+        guard !pairedSession.isEmpty, let dir = directory, let jpeg = try? Data(contentsOf: dir.appendingPathComponent(mark.image)) else { return false }
+        let boundary = "dwelld-\(UUID().uuidString)"
+        var request = URLRequest(url: pairedBase.appendingPathComponent("api/live/\(pairedSession)/marks")); request.httpMethod = "POST"; request.timeoutInterval = 60
+        request.setValue("Bearer \(phoneToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        let meta = (try? JSONSerialization.data(withJSONObject: ["observationId": mark.id, "position": mark.position, "timestampSeconds": mark.timestamp])) ?? Data()
+        var body = Data()
+        body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"metadata\"\r\n\r\n".utf8)); body.append(meta)
+        body.append(Data("\r\n--\(boundary)\r\nContent-Disposition: form-data; name=\"image\"; filename=\"mark.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n".utf8)); body.append(jpeg)
+        body.append(Data("\r\n--\(boundary)--\r\n".utf8))
+        request.httpBody = body
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return false }
+            if let i = marks.firstIndex(where: { $0.id == mark.id }) { marks[i].sent = true }
+            return true
+        } catch { return false }
     }
     func stop() { timer?.invalidate(); timer = nil; scanning = false; processing = true; view.captureSession.stop(); status = "Processing measured room geometry…" }
     private func recordFrame() {
@@ -340,6 +400,7 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
                 }
             }
             if let uploadError { throw uploadError }
+            for mark in marks where !mark.sent { _ = await sendMark(mark) }
             _ = try await request(pairedSession.isEmpty ? "api/inspections/\(inspectionId)/spatial" : "api/live/\(pairedSession)/spatial", data: JSONEncoder().encode(m))
             uploadComplete = true; uploadProgress = 1
             if var saved = connection { saved.completed = true; connection = saved; try CaptureConnectionStore.save(saved) }

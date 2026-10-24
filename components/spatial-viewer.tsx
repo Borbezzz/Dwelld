@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import DotField from "./dot-field";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { SpatialManifest, SpatialMarker, Vec3 } from "@/lib/spatial/types";
@@ -30,7 +31,9 @@ export default function SpatialViewer({ manifest, markers, assetUrl, onPick, sel
   const tones = { ...Object.fromEntries(damagedElementIds.map(id => [id, "check" as const])), ...elementTones };
   const state = useRef({ selected: selectedElementId ?? null, hovered: hoveredElementId ?? null, localHover: null as string | null, tones });
   state.current.selected = selectedElementId ?? null; state.current.hovered = hoveredElementId ?? null; state.current.tones = tones;
-  const scene = useRef<{ highlight: () => void; focus: (id: string | null) => void } | null>(null);
+  const scene = useRef<{ highlight: () => void; focus: (id: string | null) => void; markers: (list: SpatialMarker[]) => void } | null>(null);
+  const markersRef = useRef(markers); markersRef.current = markers;
+  useEffect(() => { scene.current?.markers(markers); }, [markers]);
   const splatUrl = splat ? assetUrl(splat.name) : "";
   const damagedKey = JSON.stringify(tones);
 
@@ -65,12 +68,18 @@ export default function SpatialViewer({ manifest, markers, assetUrl, onPick, sel
         plane.applyMatrix4(matrix); plane.userData.elementId = e.id; group.add(plane); structure.push(plane);
       } else geometry.dispose();
     }
-    if (showBoxes) for (const m of markers) {
-      const marker = new THREE.Mesh(new THREE.SphereGeometry(.05, 16, 16), new THREE.MeshBasicMaterial({ color: m.reviewStatus === "confirmed" ? 0x2f7d4d : m.reviewStatus === "rejected" ? 0x8a8a84 : DAMAGE, depthTest: !useSplat }));
-      marker.position.fromArray(m.position); marker.renderOrder = 12; group.add(marker);
-      const ring = new THREE.Mesh(new THREE.RingGeometry(.07, .085, 32), new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, transparent: true, opacity: .9, depthTest: !useSplat }));
-      ring.position.copy(marker.position); ring.renderOrder = 11; ring.userData.billboard = true; group.add(ring);
-    }
+    // Markers live in their own group so adding or moving one never rebuilds the room or resets the camera.
+    const pins = new THREE.Group(); pins.visible = showBoxes; group.add(pins);
+    const placeMarkers = (list: SpatialMarker[]) => {
+      pins.children.slice().forEach(o => { pins.remove(o); if (o instanceof THREE.Mesh) { o.geometry.dispose(); (o.material as THREE.Material).dispose(); } });
+      for (const m of list) {
+        const marker = new THREE.Mesh(new THREE.SphereGeometry(.05, 16, 16), new THREE.MeshBasicMaterial({ color: m.reviewStatus === "confirmed" ? DAMAGE : m.reviewStatus === "rejected" ? 0x8a8a84 : CHECK, depthTest: !useSplat }));
+        marker.position.fromArray(m.position); marker.renderOrder = 12; pins.add(marker);
+        const ring = new THREE.Mesh(new THREE.RingGeometry(.07, .085, 32), new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, transparent: true, opacity: .9, depthTest: !useSplat }));
+        ring.position.copy(marker.position); ring.renderOrder = 11; ring.userData.billboard = true; pins.add(ring);
+      }
+    };
+    placeMarkers(markersRef.current);
     const center = bounds.isEmpty() ? new THREE.Vector3() : bounds.getCenter(new THREE.Vector3());
     const radius = bounds.isEmpty() ? 3 : Math.max(2, bounds.getSize(new THREE.Vector3()).length() * .7);
     const start = center.clone().add(new THREE.Vector3(radius * .85, radius * .8, radius * .95));
@@ -106,7 +115,7 @@ export default function SpatialViewer({ manifest, markers, assetUrl, onPick, sel
       const step = () => { if (dead || !controls) return; const t = Math.min(1, (performance.now() - began) / 450), k = t * (2 - t); controls.target.lerpVectors(from, goal, k); controls.update(); render(); if (t < 1) focusFrame = requestAnimationFrame(step); };
       step();
     };
-    scene.current = { highlight, focus };
+    scene.current = { highlight, focus, markers: list => { placeMarkers(list); render(); } };
     // ---- Pointer: hover outlines, click selects, double-click places a marker.
     const ray = new THREE.Raycaster();
     const hitAt = (event: MouseEvent, targets: THREE.Object3D[]) => { if (!canvas || !camera) return undefined; const rect = canvas.getBoundingClientRect(); ray.setFromCamera(new THREE.Vector2((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1), camera); return ray.intersectObjects(targets, false)[0]; };
@@ -174,11 +183,11 @@ export default function SpatialViewer({ manifest, markers, assetUrl, onPick, sel
     if (state.current.selected) focus(state.current.selected);
     return () => { dead = true; cancelAnimationFrame(focusFrame); cancelAnimationFrame(moveFrame); detach(); scene.current = null; resize.disconnect(); renderer.setAnimationLoop(null); orbit.dispose(); dispose(); three.traverse(o => { if (o instanceof THREE.Mesh) { o.geometry.dispose(); (o.material as THREE.Material).dispose(); } }); renderer.dispose(); element.replaceChildren(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [manifest, markers, mode, splatUrl, compact, aligned]);
+  }, [manifest, mode, splatUrl, compact, aligned]);
 
   return <div className={`room-scene ${compact ? "room-scene-compact" : ""} ${className}`}>
     <div ref={root} className="room-scene-canvas" aria-label="3D room: hover furniture to outline it, click to select" />
-    {loading && <div className="room-scene-loading"><span className="skeleton" /><p>Loading your room in 3D…</p></div>}
+    {loading && <div className="room-scene-loading is-live"><DotField /><p>Loading your room in 3D…</p></div>}
     {tip && <span className="room-scene-tip" style={{ left: tip.x, top: tip.y }}>{tip.text}</span>}
     {!compact && splat && <div className="room-scene-modes" role="group" aria-label="3D view"><button type="button" aria-pressed={mode === "room"} onClick={() => setMode("room")}>Room</button><button type="button" aria-pressed={mode === "geometry"} onClick={() => setMode("geometry")}>Geometry</button></div>}
     {!compact && mode === "room" && splat && !aligned && <p className="room-scene-note">This reconstruction has no calibration, so furniture outlines are shown in Geometry view only.</p>}

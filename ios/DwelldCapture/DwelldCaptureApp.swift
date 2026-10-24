@@ -55,6 +55,26 @@ struct LineLoader: View {
         }.onAppear { sweep = true }
     }
 }
+/// Centre crosshair in the room's mark style: four corner ticks and a ring that pops when you mark.
+struct MarkCrosshair: View {
+    let pulse: Int
+    @State private var pop = false
+    var body: some View {
+        ZStack {
+            Circle().stroke(Color.white.opacity(0.9), lineWidth: 1.5).frame(width: 18, height: 18)
+            Circle().fill(Color(red: 0.77, green: 0.34, blue: 0.25)).frame(width: 6, height: 6)
+            Circle().stroke(Color(red: 0.89, green: 0.6, blue: 0.23), lineWidth: 2).frame(width: 64, height: 64).scaleEffect(pop ? 1.6 : 0.6).opacity(pop ? 0 : 1)
+            ForEach(0..<4, id: \.self) { i in
+                Path { p in p.move(to: CGPoint(x: 0, y: 12)); p.addLine(to: .zero); p.addLine(to: CGPoint(x: 12, y: 0)) }
+                    .stroke(Color.white.opacity(0.9), lineWidth: 1.5).frame(width: 12, height: 12)
+                    .offset(x: -26, y: -26).rotationEffect(.degrees(Double(i) * 90))
+            }
+        }
+        .shadow(color: .black.opacity(0.35), radius: 2)
+        .onChange(of: pulse) { _, _ in pop = false; withAnimation(.easeOut(duration: 0.5)) { pop = true } }
+        .onAppear { pop = true }
+    }
+}
 struct CaptureScreen: View {
     @StateObject private var model = CaptureModel()
     private var title: String {
@@ -88,6 +108,17 @@ struct CaptureScreen: View {
                     RoomView(model: model).frame(height: 300)
                     if !model.scanning && (model.ready || model.processing || model.uploadComplete) {
                         Dwelld.well.overlay(Text(model.processing ? "Finishing capture…" : (model.uploadComplete ? "Inspection saved" : "Capture ready")).font(Dwelld.serif(20)).foregroundStyle(Dwelld.ink))
+                    }
+                    if model.scanning {
+                        MarkCrosshair(pulse: model.markPulse).frame(maxWidth: .infinity, maxHeight: .infinity).allowsHitTesting(false)
+                        VStack {
+                            Spacer()
+                            Button { model.markDamage() } label: {
+                                Label(model.markCount > 0 ? "Mark damage · \(model.markCount)" : "Mark damage", systemImage: "scope")
+                                    .font(.system(size: 14, weight: .medium)).padding(.horizontal, 18).frame(height: 44)
+                                    .background(Capsule().fill(Dwelld.paper.opacity(0.94))).foregroundStyle(Dwelld.ink)
+                            }.accessibilityHint("Marks what is under the crosshair without stopping the scan")
+                        }.frame(maxWidth: .infinity).padding(.bottom, 14)
                     }
                     if model.scanning {
                         VStack(alignment: .leading, spacing: 4) {

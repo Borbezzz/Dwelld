@@ -1,10 +1,11 @@
 "use client";
 import {useEffect,useState} from 'react';
+import DotField from './dot-field';
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
 import type {Inspection} from '@/lib/types';
 import type {SpatialManifest,SpatialMarker} from '@/lib/spatial/types';
-const RoomScene=dynamic(()=>import('./spatial-viewer'),{ssr:false,loading:()=><div className="room-scene room-scene-compact"><div className="room-scene-loading"><span className="skeleton"/></div></div>});
+const RoomScene=dynamic(()=>import('./spatial-viewer'),{ssr:false,loading:()=><div className="room-scene room-scene-compact"><div className="room-scene-loading is-live"><DotField /></div></div>});
 /** Dashboard preview of the selected room: the latest scan's splat with its furniture outlines. */
 export default function RoomReconstruction({roomId,name,inspections,hint=false}:{roomId:string;name:string;inspections:Inspection[];hint?:boolean}){
  const [scene,setScene]=useState<{manifest:SpatialManifest;markers:SpatialMarker[];inspectionId:string}|null>(null),[status,setStatus]=useState('');
@@ -22,13 +23,13 @@ export default function RoomReconstruction({roomId,name,inspections,hint=false}:
     if(controller.signal.aborted)return;
     const found=batch.find(Boolean);if(found){setScene(found);setStatus('');return;}
    }
-   if(!controller.signal.aborted)setStatus('Your room in 3D appears here after its first LiDAR scan.');
+   if(!controller.signal.aborted)setStatus(candidates.length?'This room has video walkthroughs only. A LiDAR scan from the iPhone app adds the 3D room.':'Your room in 3D appears here after its first LiDAR scan.');
   }catch(e){if(!controller.signal.aborted)setStatus(e instanceof Error?e.message:'Could not load the room.');}})();
   return()=>controller.abort();
  },[roomId,inspections]);
  return <aside className="room-reconstruction" aria-label="Room in 3D"><div className="reconstruction-heading"><span>{name||'Your room, in 3D'}</span>{hint&&<small>Pick a room on the left to see it here</small>}</div>
   {scene?<RoomScene compact manifest={scene.manifest} markers={scene.markers} assetUrl={n=>`/api/inspections/${scene.inspectionId}/spatial/assets/${encodeURIComponent(n)}`} onSelectElement={()=>{}}/>
-   :status==='loading'?<div className="room-scene room-scene-compact"><div className="room-scene-loading"><span className="skeleton"/><p>Loading your room…</p></div></div>
+   :status==='loading'?<div className="room-scene room-scene-compact"><div className="room-scene-loading is-live"><DotField /><p>Loading your room…</p></div></div>
    :<div className="reconstruction-canvas"><div className="reconstruction-message" role="status"><h3>A space to return to.</h3><p>{status}</p></div></div>}
   <div className="reconstruction-footer">{roomId?<Link href={`/rooms/${roomId}`}>Open room ↗</Link>:<span>Your rooms in 3D</span>}</div></aside>;
 }
