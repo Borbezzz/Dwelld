@@ -1,0 +1,50 @@
+/* Interior surfaces: one frame per workspace; nested content uses rules and space. */
+:root{--instrument-mono:'SFMono-Regular',Consolas,'Liberation Mono',monospace}
+.scan-workflow,.processing-overview,.inspection-progress,.scan-report,.saved-next,.live-damage-preview{border:0;border-top:1px solid #c8ccbe;border-bottom:1px solid #d7d2c7;border-radius:0;background:transparent;box-shadow:none;padding:22px 0}
+.processing-overview .scan-workflow{border:0;padding:0}
+.scan-workflow ol{gap:0}
+.scan-workflow li{border:0;border-top:1px solid #dce0d3;border-radius:0;background:transparent}
+.scan-workflow li:first-child{border-top:0}
+.scan-workflow li>button{padding:14px 0;gap:12px}
+.scan-workflow .workflow-ring{border-radius:0;width:22px;height:22px;background:transparent;border-color:#c8ccbe}
+.scan-workflow .workflow-done .workflow-ring{background:#e4eadf;border-color:#a8b79b;color:#41613b}
+.scan-workflow .workflow-partial .workflow-ring,.scan-workflow .workflow-failed .workflow-ring{background:#f4e7de;border-color:#c9977d;color:#995238}
+.scan-workflow .workflow-badge{border-radius:0;background:transparent;padding:3px 0 3px 8px;font:9px/1.5 var(--instrument-mono);letter-spacing:.02em}
+.scan-workflow .workflow-badge::before{content:'';display:inline-block;width:4px;height:4px;background:currentColor;margin:0 7px 1px 0}
+.scan-workflow .workflow-expand dl{margin-left:10px;padding-left:23px}
+.inspection-progress li>span,.upload-steps li>span{border-radius:0;font-family:var(--instrument-mono)}
+.batch-card{border:0;border-bottom:1px solid #d4d8ca;border-radius:0;background:transparent}
+.batch-card>header{padding-inline:0;font-family:var(--instrument-mono);font-size:9px}
+.batch-result{padding:12px 0}
+.batch-clear{border-bottom-color:#91a287}.batch-failed,.batch-unassessed{border-bottom-color:#ca9a6e}
+.room-scans{gap:0 20px;border-bottom:1px solid #d7d2c7}
+.room-scans button{border:0;border-bottom:2px solid transparent;border-radius:0;padding:12px 0;background:transparent}
+.room-scans button[aria-pressed=true]{border-bottom-color:var(--mark-ink);background:transparent}
+.room-scans button:hover{border-bottom-color:#a5b39b}
+.room-scene,.room-measure,.room-scene-tip,.room-scene-modes,.room-scene-modes button,.live-room-tally,.walkthrough-player,.native-playback-heading select,.video-stage,.evidence-view,.source-video video{border-radius:0}
+.room-scene-modes{padding:0;box-shadow:none;border:1px solid #c8ccbe}
+.room-scene-modes button{padding:9px 13px}
+.room-measure,.live-room-tally{box-shadow:none;border:0;border-top:2px solid #92a48a}
+.spatial-explorer{border:0;border-top:1px solid #d7d2c7;border-bottom:1px solid #d7d2c7;border-radius:0;background:transparent}
+.spatial-saved,.compare-tag,.lab-engine span,.status-pill,.uncertain-tag{border-radius:0;background:transparent}
+.compare-tag{padding:5px 0;margin-right:14px;box-shadow:inset 0 -1px currentColor}
+.compare-tag:is(.tone-new,.tone-known,.tone-unsure,.tone-calm){background:transparent}
+.finding-card{border:0;border-top:1px solid #d7d2c7;border-radius:0;background:transparent;box-shadow:none}
+.finding-card:hover{border-color:#a9af9e}
+.no-damage,.no-findings{border:0;border-top:1px solid #d7d2c7;border-radius:0;background:transparent}
+.capture-option{border:0;border-top:1px solid #c8ccbe;border-bottom:1px solid #c8ccbe;border-radius:0;background:transparent}
+.capture-option:hover{transform:none;background:#eceee555}
+.modal{border-radius:0;background:#fffdf8}
+.modal-icon,.option-icon,.finding-symbol{border-radius:0;background:transparent}
+/* Floating chat retains a single paper surface; room choices inside are an open list. */
+.ask-records .ask-composer{border:1px solid #c7cbbd;box-shadow:0 4px 20px #302e280a}
+.ask-records .ask-answer,.ask-records .ask-scope{border:1px solid #c7cbbd;box-shadow:0 6px 24px #302e280f}
+.ask-records .ask-room-options{display:grid;gap:0}
+.ask-records .ask-room-option{width:100%;border:0;border-top:1px solid #e1e2d7;border-radius:0;background:transparent;padding:12px 2px}
+.ask-records .ask-room-option:first-child{border-top:0}
+.ask-records .ask-room-option[aria-pressed=true]{border-color:#e1e2d7;background:transparent;color:#364b40}
+.ask-records .ask-room-option:hover:enabled{background:#eceee566;border-color:#e1e2d7}
+.ask-records .ask-room-option[aria-pressed=true]>span{border-left:2px solid #607454;padding-left:10px}
+.scan-chat .scan-chat-question{background:transparent;border-right:2px solid #b7bdad;border-radius:0;padding:4px 14px}
+.ask-records :is(button,a):focus-visible{outline:1px dashed var(--mark-ink);outline-offset:3px}
+@media(max-width:600px){.scan-workflow{padding:18px 0}.scan-workflow li>button{gap:9px}.scan-workflow .workflow-badge{font-size:8px}.scan-report,.saved-next{padding:20px 0}.scan-workflow .workflow-expand dl{margin-left:10px}}

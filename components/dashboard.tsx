@@ -6,7 +6,7 @@ import ShareSpace from "./share-space";
 import PropertyPicker from "./property-picker";
 import {authClient} from "@/lib/auth-client";
 import { useEffect, useState } from "react";
-import { ArrowUpRight, Building2, Share2, Trash2, X } from "lucide-react";
+import { ArrowUpRight, Share2, Trash2, X } from "lucide-react";
 import RoomReconstruction from "./room-reconstruction";
 import FindingsSearch from "./findings-search";
 import { api } from "@/lib/api";
@@ -70,18 +70,18 @@ export default function Dashboard() {
     {error && <div className="landing-error" role="alert"><p>{error}</p><button type="button" onClick={() => void refresh()} disabled={loading}>{loading ? "Retrying…" : "Try again"}</button></div>}
 
     {session&&<><section id="spaces" className="landing-section" aria-labelledby="spaces-title">
-      <div className="landing-section-heading"><h2 id="spaces-title">Your spaces</h2><Link className="landing-text-action" href="/live?new=1">Add a room <span aria-hidden="true">+</span></Link></div>
-      <form onSubmit={e=>void createSpace(e)} className="space-create"><div className="space-create-copy"><label htmlFor="new-space">Group rooms into a property</label><p>Keep the rooms in your flat or house together.</p></div><input id="new-space" aria-label="New space name" placeholder="e.g. Flat 12" maxLength={80} value={newSpace} onChange={e=>setNewSpace(e.target.value)}/><button className="landing-primary" disabled={spaceBusy||!newSpace.trim()}>Create space</button></form>
-      {spaces.length>0&&<div className="space-groups">{spaces.map(s=>{
+      <div className="landing-section-heading"><div><p className="record-index"><span aria-hidden="true">01 /</span> Room records</p><h2 id="spaces-title">Your spaces</h2></div><Link className="landing-text-action" href="/live?new=1">Add a room <span aria-hidden="true">+</span></Link></div>
+      <form onSubmit={e=>void createSpace(e)} className="space-create"><div className="space-create-copy"><label htmlFor="new-space">Group rooms into a property</label><p>Keep the rooms in your flat or house together.</p></div><input id="new-space" aria-label="New space name" placeholder="e.g. Flat 12" maxLength={80} value={newSpace} onChange={e=>setNewSpace(e.target.value)}/><button className="landing-primary" disabled={spaceBusy||!newSpace.trim()}>Create space <ArrowUpRight size={16} aria-hidden="true"/></button></form>
+      {spaces.length>0&&<div className="space-groups">{spaces.map((s,index)=>{
         const count=rooms.filter(r=>r.spaceId===s.id).length,expanded=sharing===s.id&&s.role==="owner";
         return <article className={`space-group${expanded?" is-sharing":""}`} key={s.id}>
-          <div className="space-group-header"><span className="space-group-icon" aria-hidden="true"><Building2 size={21}/></span><div className="space-group-title"><h3><Link href={`/spaces/${s.id}`}>{s.name}<ArrowUpRight size={17} aria-hidden="true"/></Link></h3><p>{count} {count===1?"room":"rooms"}{s.role!=="owner"?` · ${s.role}`:""}</p></div>
+          <div className="space-group-header"><span className="space-group-index" aria-hidden="true">P<span>{String(index+1).padStart(2,"0")}</span></span><div className="space-group-title"><h3><Link href={`/spaces/${s.id}`}>{s.name}<ArrowUpRight size={17} aria-hidden="true"/></Link></h3><p>{count} {count===1?"room":"rooms"}{s.role!=="owner"?` · ${s.role}`:""}</p></div>
           {s.role==="owner"&&<div className="space-group-actions"><button type="button" className="space-delete" aria-label={`Delete ${s.name}`} title="Delete property" disabled={!!deletingSpace} onClick={()=>{setConfirmSpaceDelete(s.id);setSpaceDeleteError("");}}><Trash2 size={16} aria-hidden="true"/></button><button className="space-action" type="button" aria-expanded={expanded} aria-controls={`share-${s.id}`} aria-label={`${expanded?"Close sharing for":"Share"} ${s.name}`} onClick={()=>setSharing(expanded?"":s.id)}>{expanded?<X size={15} aria-hidden="true"/>:<Share2 size={15} aria-hidden="true"/>}{expanded?"Close":"Share"}</button></div>}</div>
           {confirmSpaceDelete===s.id&&<div className="space-delete-confirm" role="group" aria-label={`Delete ${s.name}?`}><p>Delete {s.name}? Rooms and inspections will be kept ungrouped. Shared access through this property will end.</p>{spaceDeleteError&&<p role="alert">{spaceDeleteError}</p>}<div><button type="button" className="button button-danger" disabled={!!deletingSpace} onClick={()=>void deleteSpace(s.id)}>{deletingSpace===s.id?"Deleting…":"Delete property"}</button><button type="button" className="text-button" disabled={!!deletingSpace} onClick={()=>{setConfirmSpaceDelete("");setSpaceDeleteError("");}}>Keep it</button></div></div>}
           {expanded&&<div id={`share-${s.id}`}><ShareSpace spaceId={s.id}/></div>}
         </article>;
       })}</div>}
-      <div className="spaces-split"><div>
+      <div className="spaces-split"><div><div className="room-list-heading"><span>Room index</span><span>{String(rooms.length).padStart(2,"0")} rooms</span></div>
       {loading ? <div className="landing-room-list" role="status" aria-label="Loading your spaces">{[0,1,2].map(i=><div className="landing-room landing-room-skeleton" key={i} aria-hidden="true"><span className="skeleton" style={{width:18,height:12}}/><span className="skeleton" style={{width:`${[62,48,55][i]}%`,height:26}}/><span className="skeleton" style={{width:74,height:12}}/><span className="skeleton" style={{width:18,height:18}}/></div>)}</div> : rooms.length === 0 ? <p className="landing-empty">{error ? "Your spaces could not be loaded." : "Begin with a room. Your walkthroughs and observations will stay together here."}</p> : <div className="landing-room-list">{rooms.map((room, index) => {
         const count = inspections.filter((inspection) => inspection.roomId === room.id).length;
         const active=room.id===(selectedRoom||rooms[0]?.id);
@@ -90,7 +90,7 @@ export default function Dashboard() {
     </section>
 
     <section id="history" className="landing-section" aria-labelledby="history-title">
-      <div className="landing-section-heading"><h2 id="history-title">Inspection history</h2></div>
+      <div className="landing-section-heading"><div><p className="record-index"><span aria-hidden="true">02 /</span> Walkthrough archive</p><h2 id="history-title">Inspection history</h2></div></div>
       {loading ? <div className="landing-history" role="status" aria-label="Loading history">{[0,1].map(i=><div className="landing-history-row" key={i} aria-hidden="true"><span className="landing-history-main"><span className="skeleton" style={{width:160,height:16}}/><span className="skeleton" style={{width:110,height:12,marginTop:8}}/></span><span className="skeleton" style={{width:90,height:12}}/><span/></div>)}</div> : inspections.length === 0 ? <p className="landing-empty">{error ? "Your history could not be loaded." : "Your saved walkthroughs will appear here."}</p> : <div className="landing-history">{inspections.map((inspection) => <Link key={`${inspection.id}-${inspection.roomId}`} href={inspection.virtual?`/rooms/${inspection.roomId}`:`/inspections/${inspection.id}`} className="landing-history-row"><span className="landing-history-main"><strong>{roomFor(inspection.roomId)?.name || "Room inspection"}</strong><time dateTime={inspection.createdAt}>{new Date(inspection.createdAt).toLocaleDateString(undefined, {day: "numeric", month: "long", year: "numeric"})}</time></span><span className={`landing-status landing-status-${inspection.status}`}>{inspection.status === "completed" ? "Ready to review" : inspection.status.replaceAll("_", " ")}</span><ArrowUpRight size={18} aria-hidden="true"/></Link>)}</div>}
     </section>
 

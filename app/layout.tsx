@@ -11,6 +11,7 @@ import "./brand.css";
 import "./room.css";
 import "./marks.css";
 import "./search.css";
+import "./instrument.css";
 
 export const metadata: Metadata = {
   title: "dwelld. — Your room remembers",

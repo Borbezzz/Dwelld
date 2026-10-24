@@ -1,5 +1,5 @@
-/* Nested surfaces become progressively tighter: panel 20px → message 10px → evidence 4px. */
-.ask-records{--argon-radius-panel:20px;--argon-radius-message:10px;--argon-radius-detail:4px}
+/* Square paper surfaces and small evidence references share the room index geometry. */
+.ask-records{--argon-radius-panel:0px;--argon-radius-message:0px;--argon-radius-detail:0px}
 .ask-records .ask-answer,.ask-records .ask-composer,.ask-records .ask-scope{border-radius:var(--argon-radius-panel)}
 .ask-records .ask-composer .ask-send,.ask-records .ask-scope .ask-room-option{border-radius:var(--argon-radius-message)}
 .ask-records .ask-answer header button{border-radius:var(--argon-radius-detail)}

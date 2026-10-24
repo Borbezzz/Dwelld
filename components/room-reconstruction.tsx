@@ -27,7 +27,7 @@ export default function RoomReconstruction({roomId,name,inspections,hint=false,l
   }catch(e){if(!controller.signal.aborted)setStatus(e instanceof Error?e.message:'Could not load the room.');}})();
   return()=>controller.abort();
  },[roomId,inspections,loading]);
- return <aside className="room-reconstruction" aria-label="Room in 3D"><div className="reconstruction-heading"><span>{name||'Your room, in 3D'}</span>{hint&&<small>Pick a room on the left to see it here</small>}</div>
+ return <aside className="room-reconstruction" aria-label="Room in 3D"><div className="reconstruction-heading"><span><span className="reconstruction-index" aria-hidden="true">3D /</span> {name||'Your room, in 3D'}</span>{hint&&<small>Pick a room on the left to see it here</small>}</div>
   {!loading&&scene?<RoomScene compact manifest={scene.manifest} markers={scene.markers} assetUrl={n=>`/api/inspections/${scene.inspectionId}/spatial/assets/${encodeURIComponent(n)}`} onSelectElement={()=>{}}/>
    :loading||status==='loading'?<div className="room-scene room-scene-compact"><div className="room-scene-loading is-live"><DotField /><p>Loading your room…</p></div></div>
    :<div className="room-scene room-scene-compact"><div className="room-scene-loading is-live"><DotField /><p>{status||"Choose a room to view it in 3D."}</p></div></div>}
