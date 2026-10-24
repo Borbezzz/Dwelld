@@ -14,6 +14,8 @@ type Props = {
   onSelectElement?: (id: string | null) => void; onHoverElement?: (id: string | null) => void;
   damagedElementIds?: string[]; elementTones?: Record<string, "check" | "damage">; compact?: boolean; className?: string;
   reconstruction?: (ObjectCloud & { caption: string }) | null; reconstructing?: boolean;
+  pieceFindings?: { id: string; findingId?: string; label: string; status: string }[];
+  onReviewFinding?: (findingId: string, status: "confirmed" | "rejected" | "pending") => void; reviewBusy?: string;
 };
 // Selection is blue so it never reads as a status. Amber = needs a look, red = damage confirmed.
 const INK = 0x2f3a2c, ACTIVE = 0x3f8fd2, CHECK = 0xe39a3b, DAMAGE = 0xc4573f;
@@ -22,7 +24,7 @@ const INK = 0x2f3a2c, ACTIVE = 0x3f8fd2, CHECK = 0xe39a3b, DAMAGE = 0xc4573f;
  * One 3D space: the Gaussian splat (when present) with the measured furniture boxes inside it.
  * Hover a box to outline it, click it to select it. Walls and floors are context, never listed.
  */
-export default function SpatialViewer({ manifest, markers, assetUrl, onPick, selectedElementId, hoveredElementId, onSelectElement, onHoverElement, damagedElementIds = [], elementTones = {}, compact = false, className = "", reconstruction = null, reconstructing = false }: Props) {
+export default function SpatialViewer({ manifest, markers, assetUrl, onPick, selectedElementId, hoveredElementId, onSelectElement, onHoverElement, damagedElementIds = [], elementTones = {}, compact = false, className = "", reconstruction = null, reconstructing = false, pieceFindings = [], onReviewFinding, reviewBusy = "" }: Props) {
   const root = useRef<HTMLDivElement>(null);
   const splat = manifest.assets.find(a => a.kind === "splat");
   const aligned = !!splat && (!!splat.registration || splat.reconstructionMethod === "lidar-initialized");
@@ -212,7 +214,7 @@ export default function SpatialViewer({ manifest, markers, assetUrl, onPick, sel
     {loading && <div className="room-scene-loading is-live"><DotField /><p>Loading your room in 3D…</p></div>}
     {tip && <span className="room-scene-tip" style={{ left: tip.x, top: tip.y }}>{tip.text}</span>}
     {!compact && splat && <div className="room-scene-modes" role="group" aria-label="3D view"><button type="button" aria-pressed={mode === "room"} onClick={() => setMode("room")}>Room</button><button type="button" aria-pressed={mode === "geometry"} onClick={() => setMode("geometry")}>Geometry</button></div>}
-    {selectedPiece && <aside className="room-measure" aria-label="Selected furniture measurements"><b>{selectedName || "Furniture"}</b>{reconstruction ? <dl><dt>Width</dt><dd>{reconstruction.measurements.width.toFixed(2)} m</dd><dt>Height</dt><dd>{reconstruction.measurements.height.toFixed(2)} m</dd><dt>Depth</dt><dd>{reconstruction.measurements.depth.toFixed(2)} m</dd></dl> : <dl><dt>Width</dt><dd>{selectedPiece.dimensions[0].toFixed(2)} m</dd><dt>Height</dt><dd>{selectedPiece.dimensions[1].toFixed(2)} m</dd><dt>Depth</dt><dd>{selectedPiece.dimensions[2].toFixed(2)} m</dd></dl>}<p>{reconstructing ? "Rebuilding this piece from the inspection photos…" : reconstruction?.caption || "Measured from this scan. Shown because this piece is selected."}</p></aside>}
+    {selectedPiece && <aside className="room-measure" aria-label="Selected furniture measurements"><b>{selectedName || "Furniture"}</b>{reconstruction ? <dl><dt>Width</dt><dd>{reconstruction.measurements.width.toFixed(2)} m</dd><dt>Height</dt><dd>{reconstruction.measurements.height.toFixed(2)} m</dd><dt>Depth</dt><dd>{reconstruction.measurements.depth.toFixed(2)} m</dd></dl> : <dl><dt>Width</dt><dd>{selectedPiece.dimensions[0].toFixed(2)} m</dd><dt>Height</dt><dd>{selectedPiece.dimensions[1].toFixed(2)} m</dd><dt>Depth</dt><dd>{selectedPiece.dimensions[2].toFixed(2)} m</dd></dl>}<p>{reconstructing ? "Rebuilding this piece from the inspection photos…" : reconstruction?.caption || "Measured from this scan. Shown because this piece is selected."}</p>{onReviewFinding && pieceFindings.slice(0, 3).map(finding => <div key={finding.id} className="room-measure-review"><span>{finding.label}</span>{finding.findingId && finding.status === "pending" ? <span><button type="button" disabled={reviewBusy === finding.findingId} onClick={() => onReviewFinding(finding.findingId!, "confirmed")}>Confirm</button><button type="button" disabled={reviewBusy === finding.findingId} onClick={() => onReviewFinding(finding.findingId!, "rejected")}>Dismiss</button></span> : finding.findingId ? <button type="button" disabled={reviewBusy === finding.findingId} onClick={() => onReviewFinding(finding.findingId!, "pending")}>{finding.status === "confirmed" ? "Confirmed" : "Dismissed"} · Undo</button> : <span>{finding.status}</span>}</div>)}</aside>}
     {!compact && mode === "room" && splat && !aligned && <p className="room-scene-note">This reconstruction has no calibration, so furniture outlines are shown in Geometry view only.</p>}
     {error && <p className="room-scene-note" role="alert">{error}</p>}
   </div>;

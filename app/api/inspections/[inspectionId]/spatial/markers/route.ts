@@ -46,9 +46,16 @@ export async function POST(request: Request, { params }: { params: Promise<{ ins
     }
     const id = typeof b.id === "string" ? parseObjectId(b.id) : null;
     if (!id || !Number.isInteger(b.version) || (b.action === "move" && !vector(b.position))) return NextResponse.json({ error: "Invalid marker update" }, { status: 400 });
+    const marker = await db.collection("spatialMarkers").findOne({ _id: id, inspectionId: inspection._id, version: b.version, deletedAt: { $exists: false } });
+    if (!marker) return NextResponse.json({ error: "Marker changed; reload and retry" }, { status: 409 });
     const set = b.action === "move" ? { position: b.position, reviewStatus: "pending" } : b.action === "delete" ? { deletedAt: now } : { reviewStatus: b.action === "confirm" ? "confirmed" : "rejected" };
     const result = await db.collection("spatialMarkers").updateOne({ _id: id, inspectionId: inspection._id, version: b.version, deletedAt: { $exists: false } }, { $set: set, $inc: { version: 1 }, $push: { reviewHistory: { action: b.action, ...(b.action === "move" ? { position: b.position } : {}), userId: user.id, at: now } } } as never);
     if (!result.modifiedCount) return NextResponse.json({ error: "Marker changed; reload and retry" }, { status: 409 });
+    if ((b.action === "confirm" || b.action === "reject" || b.action === "move") && marker.findingId) {
+      const findingId = parseObjectId(String(marker.findingId));
+      const reviewStatus = b.action === "confirm" ? "confirmed" : b.action === "move" ? "pending" : "rejected";
+      if (findingId) await db.collection("findings").updateOne({ _id: findingId, inspectionId: inspection._id }, { $set: { reviewStatus, reviewedAt: now, autoApproved: false }, $push: { reviewHistory: { from: "marker", to: reviewStatus, at: now, by: user.id } } } as never);
+    }
     return NextResponse.json({ saved: true });
   } catch (e) { return errorResponse(e, "spatial.marker"); }
 }

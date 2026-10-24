@@ -12,8 +12,9 @@ export type StoredCloud = ObjectCloud & { elementId: string; method: typeof METH
 
 function framesFor(element: SpatialElement, frames: SpatialFrame[]) {
   const depth = frames.filter(frame => frame.depth && (frame.depthWidth || 0) > 2 && (frame.depthHeight || 0) > 2);
-  const seen = depth.filter(frame => elementInView(element as RoomElement, frame));
-  return (seen.length ? seen : depth).slice(0, 8);
+  const ranked = depth.map(frame => ({ frame, area: elementInView(element as RoomElement, frame)?.area ?? 0 })).sort((a, b) => b.area - a.area);
+  const seen = ranked.filter(item => item.area > 0);
+  return (seen.length ? seen : ranked).slice(0, 8).map(item => item.frame);
 }
 
 async function viewsFor(manifest: SpatialManifest, frames: SpatialFrame[]) {
@@ -34,7 +35,7 @@ async function viewsFor(manifest: SpatialManifest, frames: SpatialFrame[]) {
       try {
         const jpeg = await readMedia(imageRef, 12 * 1024 * 1024);
         const rgb = await sharp(jpeg, { failOn: "none" }).resize(width, height, { fit: "fill" }).removeAlpha().raw().toBuffer();
-        if (rgb.length >= width * height * 3) color = new Uint8Array(rgb.buffer, rgb.byteOffset, width * height * 3);
+        if (rgb.length >= width * height * 3) color = Uint8Array.from(rgb.subarray(0, width * height * 3));
       } catch { color = null; }
     }
     views.push({ frame, depth, confidence: confidenceRaw && confidenceRaw.length >= width * height ? confidenceRaw : null, color });
@@ -58,7 +59,9 @@ export async function reconstructionFor(inspection: Document, elementId: string)
   const manifest = capture?.manifest as SpatialManifest | undefined;
   const element = manifest?.elements.find(item => item.id === elementId);
   if (!manifest || !element || !isFurniture(element)) return null;
-  const cloud = reconstructObject(element, await viewsFor(manifest, framesFor(element, manifest.frames)));
+  const views = await viewsFor(manifest, framesFor(element, manifest.frames));
+  if (!views.length) return null;
+  const cloud = reconstructObject(element, views);
   await db.collection("objectReconstructions").updateOne({ inspectionId, elementId }, { $set: { inspectionId, ownerId: inspection.ownerId, elementId, method: METHOD, ...(cloud ?? { unavailable: true }), createdAt: new Date() } }, { upsert: true });
   if (cloud) await db.collection("findings").updateOne({ inspectionId, kind: "object", spatialElementId: elementId }, { $set: { dimensions: [cloud.measurements.width, cloud.measurements.height, cloud.measurements.depth], description: measurementCaption(cloud.measuredAxes, cloud.views) } });
   return cloud ? publish(elementId, cloud) : null;
