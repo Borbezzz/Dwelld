@@ -207,5 +207,5 @@ export default function RoomDetail({ roomId }: { roomId: string }) {
         <p className="inventory-note">AI suggestions need your review. A scan that notes nothing does not prove there is no damage.</p>
       </aside>
     </div>}
-  {current&&<ScanChat key={current} inspectionId={current} findingId={cueId} onSelect={setFocusFinding}/>}</main>;
+  {current&&<ScanChat key={current} inspectionId={current} onRecovery={()=>{setRefresh(v=>v+1);return loadScans()}} findingId={cueId} onSelect={setFocusFinding}/>}</main>;
 }

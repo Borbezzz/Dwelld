@@ -1,3 +1,5 @@
+import {scanRecovery} from '@/lib/server/scan-recovery';
+import {isRecoveryQuestion} from '@/lib/scan-recovery';
 import {logAIFailure} from '@/lib/server/analysis-failure';
 import {errorResponse} from '@/lib/server/api-error';
 import {requireUser} from '@/lib/server/access';
@@ -20,6 +22,7 @@ async function context(request:Request,body:Record<string,unknown>){
 export async function POST(request:Request){try{
  const body=await readJsonBody(request,8192);
  if(typeof body.question!=='string'||body.question.trim().length<2||body.question.length>1000||!validEventId(body.requestId))throw new LiveError('Ask a question of 2–1000 characters');
+ if(isRecoveryQuestion(body.question)){const recovery=await scanRecovery(request,body);return Response.json({answer:recovery.message,sources:[],warnings:[],recovery},{headers:{'Cache-Control':'private, no-store'}});}
  const c=await context(request,body),turns=c.db.collection('scanChat'),scope={ownerId:c.ownerId,contextId:c.contextId};
  if(!indexes)indexes=Promise.all([turns.createIndex({ownerId:1,contextId:1,requestId:1},{unique:true}),turns.createIndex({ownerId:1,contextId:1,createdAt:-1})]).catch(e=>{indexes=undefined;throw e});await indexes;
  const existing=await turns.findOne({...scope,requestId:body.requestId});if(existing)return Response.json({answer:existing.answer,sources:existing.sources,warnings:existing.warnings,model:existing.model});
