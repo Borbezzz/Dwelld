@@ -13,8 +13,9 @@ export async function GET(request: Request) {
   try {
     const user = await requireUser(request);
     const db = await getDb();
-    const spaces = await db.collection("spaces").find({ ownerId: user.id }).sort({ createdAt: -1 }).limit(100).toArray();
-    return NextResponse.json({ spaces: spaces.map(s => ({ id: String(s._id), name: s.name, createdAt: s.createdAt.toISOString() })) }, { headers: { "Cache-Control": "private, no-store" } });
+    const memberships = await db.collection("spaceMembers").find({userId:user.id},{projection:{spaceId:1,role:1}}).toArray();
+    const spaces = await db.collection("spaces").find({$or:[{ownerId:user.id},...(memberships.length?[{_id:{$in:memberships.map(m=>m.spaceId)}}]:[])]}).sort({ createdAt: -1 }).limit(100).toArray();
+    return NextResponse.json({ spaces: spaces.map(s => ({ id: String(s._id), name: s.name, createdAt: s.createdAt.toISOString(),role:s.ownerId===user.id?"owner":memberships.find(m=>String(m.spaceId)===String(s._id))?.role||"member" })) }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (e) { return errorResponse(e, "spaces.list"); }
 }
 export async function POST(request: Request) {
