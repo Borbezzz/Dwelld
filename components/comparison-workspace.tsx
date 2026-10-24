@@ -40,9 +40,9 @@ export default function ComparisonWorkspace({ roomId, baselineId = "", currentId
 
   const compare = useCallback(async (b: string, c: string) => {
     setBusy("Comparing your two scans with Gemini. This usually takes under a minute"); setBusyAt(Date.now()); setError("");
-    try { const { comparison } = await request<{ comparison: ComparisonRecord }>("/api/comparisons", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ baselineInspectionId: b, currentInspectionId: c }) }); setRecord(comparison); setRecords(r => [comparison, ...r]); }
+    try { const { comparison } = await request<{ comparison: ComparisonRecord }>("/api/comparisons", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ baselineInspectionId: b, currentInspectionId: c, roomId }) }); setRecord(comparison); setRecords(r => [comparison, ...r]); }
     catch (e) { setError(e instanceof Error ? e.message : "Comparison failed"); } finally { setBusy(""); }
-  }, []);
+  }, [roomId]);
 
   // Pick sensible defaults, reuse an earlier comparison of the same pair, otherwise run one automatically.
   useEffect(() => {
