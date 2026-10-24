@@ -88,7 +88,6 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
                 }
             }
             if scanning || processing {
-                if splatBuilder.count > 0 { progress["splat"] = splatBuilder.packed(limit: 6000).base64EncodedString() }
                 progress["elements"] = liveElements.map { ["id": $0.id, "category": $0.category, "dimensions": $0.dimensions, "transform": $0.transform] as [String: Any] }
             }
             if uploading { progress["upload"] = uploadProgress }
@@ -99,6 +98,12 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
     }
     @Published var liveSplats: [LiveGaussian] = []
     @Published var markCount = 0
+    @Published var sentDuringScan = 0
+    private var streamCursor = 0
+    private var streamInFlight = false
+    private var preUploaded: [String: String] = [:]
+    private var preUploadTask: Task<Void, Never>?
+    private var liveEvidence: [Int: FrameRecord] = [:]
     @Published var markPulse = 0
     private var marks: [PhoneMark] = []
     @Published var splatCount = 0
@@ -155,6 +160,7 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
             if var saved = self.connection { saved.captureFolder = dir.lastPathComponent; try CaptureConnectionStore.save(saved); self.connection = saved }
             splatBuilder.reset(); liveSplats = []; splatCount = 0; splatRevision += 1
             marks = []; markCount = 0
+            streamCursor = 0; preUploaded = [:]; preUploadTask = nil; liveEvidence = [:]; sentDuringScan = 0
             view.captureSession.run(configuration: RoomCaptureSession.Configuration())
             // Read the current frame without replacing RoomPlan's ARSession delegate.
             timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in Task { @MainActor in self?.recordFrame() } }
@@ -215,6 +221,70 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
             return true
         } catch { return false }
     }
+    /// New LiDAR points and the latest RoomPlan furniture, about once a second, so the laptop builds the room live.
+    private func publishStream() async {
+        guard !pairedSession.isEmpty, !streamInFlight else { return }
+        streamInFlight = true; defer { streamInFlight = false }
+        let (data, next) = splatBuilder.packedNew(from: streamCursor, limit: 9000)
+        var body: [String: Any] = ["points": data.base64EncodedString()]
+        body["elements"] = liveElements.map { ["id": $0.id, "category": $0.category, "dimensions": $0.dimensions, "transform": $0.transform] as [String: Any] }
+        var request = URLRequest(url: pairedBase.appendingPathComponent("api/live/\(pairedSession)/stream")); request.httpMethod = "POST"; request.timeoutInterval = 10
+        request.setValue("Bearer \(phoneToken)", forHTTPHeaderField: "Authorization"); request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            let (_, response) = try await URLSession.shared.data(for: request)
+            if let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) { streamCursor = next }
+        } catch { /* The next tick resends from the same cursor. */ }
+    }
+    /// Downscaled evidence photo with intrinsics rescaled to the encoded size.
+    private func makeEvidence(_ f: FrameRecord, dir: URL) throws -> FrameRecord {
+        let name = "evidence-" + f.image
+        guard let source = CIImage(contentsOf: dir.appendingPathComponent(f.image)) else { throw CocoaError(.fileReadCorruptFile) }
+        let scale = min(1, 1280 / max(source.extent.width, source.extent.height))
+        let image = source.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        guard let jpeg = context.jpegRepresentation(of: image, colorSpace: CGColorSpaceCreateDeviceRGB(), options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.78]) else { throw CocoaError(.fileWriteUnknown) }
+        try jpeg.write(to: dir.appendingPathComponent(name))
+        guard let encoded = CIImage(data: jpeg) else { throw CocoaError(.fileReadCorruptFile) }
+        let width = Int(encoded.extent.width), height = Int(encoded.extent.height)
+        var intrinsics = f.intrinsics
+        for column in 0..<3 { intrinsics[column * 3] *= Float(width) / Float(f.width); intrinsics[column * 3 + 1] *= Float(height) / Float(f.height) }
+        return FrameRecord(timestamp: f.timestamp, image: name, depth: f.depth, confidence: f.confidence, width: width, height: height, depthWidth: f.depthWidth, depthHeight: f.depthHeight, intrinsics: intrinsics, transform: f.transform)
+    }
+    /// Uploads run one after another in the background while the scan continues.
+    private func queueUpload(_ files: [(String, String)]) {
+        guard !pairedSession.isEmpty else { return }
+        let previous = preUploadTask
+        preUploadTask = Task { [weak self] in
+            await previous?.value
+            for (name, type) in files {
+                guard let self, self.preUploaded[name] == nil else { continue }
+                if let ref = try? await self.uploadNow(name, contentType: type) { self.preUploaded[name] = ref; self.sentDuringScan += 1 }
+            }
+        }
+    }
+    private func uploadNow(_ name: String, contentType: String) async throws -> String {
+        guard let dir = directory else { throw CocoaError(.fileNoSuchFile) }
+        let data = try Data(contentsOf: dir.appendingPathComponent(name))
+        let path = "api/live/\(pairedSession)/upload", origin = pairedBase.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        func call(_ url: URL, method: String, body: Data, type: String) async throws -> Data {
+            var req = URLRequest(url: url); req.httpMethod = method; req.httpBody = body; req.timeoutInterval = 60
+            req.setValue(type, forHTTPHeaderField: "Content-Type"); req.setValue("Bearer \(phoneToken)", forHTTPHeaderField: "Authorization"); req.setValue(origin, forHTTPHeaderField: "Origin")
+            let (out, response) = try await URLSession.shared.data(for: req)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw httpFailure(response, data: out) }
+            return out
+        }
+        let started = try JSONSerialization.jsonObject(with: try await call(pairedBase.appendingPathComponent(path), method: "POST", body: try JSONSerialization.data(withJSONObject: ["filename": name, "contentType": contentType, "size": data.count]), type: "application/json")) as? [String: Any]
+        guard let id = started?["uploadId"] as? String, let chunk = started?["chunkSize"] as? Int, chunk > 0 else { throw CocoaError(.fileWriteUnknown) }
+        var offset = 0
+        while offset < data.count {
+            let url = URL(string: "\(path)?uploadId=\(id)&part=\(offset / chunk)", relativeTo: pairedBase.appendingPathComponent("/"))!
+            _ = try await call(url, method: "PATCH", body: data.subdata(in: offset..<min(data.count, offset + chunk)), type: "application/octet-stream")
+            offset += chunk
+        }
+        let done = try JSONSerialization.jsonObject(with: try await call(pairedBase.appendingPathComponent(path), method: "POST", body: try JSONSerialization.data(withJSONObject: ["action": "complete", "uploadId": id]), type: "application/json")) as? [String: Any]
+        guard let ref = done?["url"] as? String else { throw CocoaError(.fileWriteUnknown) }
+        return ref
+    }
     func stop() { timer?.invalidate(); timer = nil; scanning = false; processing = true; view.captureSession.stop(); status = "Processing measured room geometry…" }
     private func recordFrame() {
         guard scanning, let frame = view.captureSession.arSession.currentFrame, let dir = directory, frame.timestamp != lastTimestamp else { return }
@@ -245,6 +315,14 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
             frames.append(FrameRecord(timestamp: frame.timestamp - (startTime ?? frame.timestamp), image: imageName, depth: depthName, confidence: confidenceName, width: CVPixelBufferGetWidth(frame.capturedImage), height: CVPixelBufferGetHeight(frame.capturedImage), depthWidth: depthData.map { CVPixelBufferGetWidth($0.depthMap) }, depthHeight: depthData.map { CVPixelBufferGetHeight($0.depthMap) }, intrinsics: matrix(frame.camera.intrinsics), transform: matrix(frame.camera.transform)))
         frameCount = frames.count; depthCount = frames.filter { $0.depth != nil }.count
         if frameCount % 4 == 0 { Task { await publishProgress(stage: "scanning") } }
+        if frameCount % 2 == 0 { Task { await publishStream() } }
+        // Send evidence while scanning so Finish only has to upload the 3D file.
+        if !pairedSession.isEmpty, (frames.count - 1) % 8 == 0, let record = frames.last {
+            if let evidence = try? makeEvidence(record, dir: dir) {
+                liveEvidence[frames.count - 1] = evidence
+                queueUpload([(evidence.image, "image/jpeg")] + [record.depth, record.confidence].compactMap { $0 }.map { ($0, "application/octet-stream") })
+            }
+        }
         } catch { stop(); status = "Local evidence write failed. Capture stopped." }
     }
     private func writePixels(_ pixel: CVPixelBuffer, bytesPerPixel: Int, to url: URL) throws {
@@ -275,24 +353,18 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
             try JSONEncoder().encode(original).write(to: dir.appendingPathComponent("original-manifest.json"))
             // Sixteen evenly spaced evidence samples bound upload time without changing their timestamps.
             let count = min(16, frames.count)
-            let indices = count > 1 ? (0..<count).map { $0 * (frames.count - 1) / (count - 1) } : Array(0..<count)
+            let sentKeys = liveEvidence.keys.sorted()
+            let indices: [Int] = sentKeys.count >= 4
+                ? (sentKeys.count <= 16 ? sentKeys : (0..<16).map { sentKeys[$0 * (sentKeys.count - 1) / 15] })
+                : (count > 1 ? (0..<count).map { $0 * (frames.count - 1) / (count - 1) } : Array(0..<count))
             var evidence: [FrameRecord] = []
             var cloudAssets = assets.filter { $0.kind == "splat" }
             for i in indices {
-                let f = frames[i], name = "evidence-" + f.image
-                guard let source = CIImage(contentsOf: dir.appendingPathComponent(f.image)) else { throw CocoaError(.fileReadCorruptFile) }
-                let scale = min(1, 1280 / max(source.extent.width, source.extent.height))
-                let image = source.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-                guard let jpeg = context.jpegRepresentation(of: image, colorSpace: CGColorSpaceCreateDeviceRGB(), options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.78]) else { throw CocoaError(.fileWriteUnknown) }
-                try jpeg.write(to: dir.appendingPathComponent(name))
-                // Use the actual encoded dimensions when updating the camera calibration.
-                guard let encoded = CIImage(data: jpeg) else { throw CocoaError(.fileReadCorruptFile) }
-                let width = Int(encoded.extent.width), height = Int(encoded.extent.height)
-                var intrinsics = f.intrinsics
-                for column in 0..<3 { intrinsics[column * 3] *= Float(width) / Float(f.width); intrinsics[column * 3 + 1] *= Float(height) / Float(f.height) }
-                evidence.append(FrameRecord(timestamp: f.timestamp, image: name, depth: f.depth, confidence: f.confidence, width: width, height: height, depthWidth: f.depthWidth, depthHeight: f.depthHeight, intrinsics: intrinsics, transform: f.transform))
-                cloudAssets.append(Asset(name: name, mediaRef: "", kind: "image"))
-                cloudAssets.append(contentsOf: assets.filter { $0.name == f.depth || $0.name == f.confidence })
+                let f = frames[i]
+                let record = try liveEvidence[i] ?? makeEvidence(f, dir: dir)
+                evidence.append(record)
+                cloudAssets.append(Asset(name: record.image, mediaRef: preUploaded[record.image] ?? "", kind: "image"))
+                cloudAssets.append(contentsOf: assets.filter { $0.name == f.depth || $0.name == f.confidence }.map { a in var a = a; a.mediaRef = preUploaded[a.name] ?? ""; return a })
             }
             manifest = Manifest(sessionId: processedResult.identifier.uuidString, elements: elements, frames: evidence, assets: cloudAssets)
             try JSONEncoder().encode(manifest).write(to: dir.appendingPathComponent("manifest.json"))
@@ -359,6 +431,9 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
             return (try JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
         }
         do {
+            await preUploadTask?.value
+            for i in m.assets.indices where !m.assets[i].mediaRef.hasPrefix("gridfs:") { if let ref = preUploaded[m.assets[i].name] { m.assets[i].mediaRef = ref } }
+            await publishStream()
             let pending = m.assets.indices.filter { !m.assets[$0].mediaRef.hasPrefix("gridfs:") }
             let totalBytes = m.assets.reduce(0) { sum, asset in sum + ((try? dir.appendingPathComponent(asset.name).resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) }
             var completedCount = m.assets.count - pending.count
@@ -414,8 +489,22 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
 private final class DepthSplatBuilder {
     private struct Sample { let point: SIMD3<Float>; let color: SIMD3<Float>; let radius: Float }
     private var samples: [SIMD3<Int32>: Sample] = [:]
+    private var order: [SIMD3<Int32>] = []
     var count: Int { samples.count }
-    func reset() { samples.removeAll(keepingCapacity: true) }
+    func reset() { samples.removeAll(keepingCapacity: true); order.removeAll(keepingCapacity: true) }
+    var streamed: Int { order.count }
+    /// Points added since `from`, packed as Int16 x,y,z (mm) + UInt8 r,g,b. Returns the new cursor.
+    func packedNew(from: Int, limit: Int) -> (Data, Int) {
+        let end = min(order.count, from + limit)
+        guard from < end else { return (Data(), from) }
+        var data = Data(); data.reserveCapacity((end - from) * 9)
+        for cell in order[from..<end] {
+            guard let sample = samples[cell] else { continue }
+            for value in [sample.point.x, sample.point.y, sample.point.z] { var q = Int16(clamping: Int((value * 1000).rounded())).littleEndian; withUnsafeBytes(of: &q) { data.append(contentsOf: $0) } }
+            for channel in [sample.color.x, sample.color.y, sample.color.z] { data.append(UInt8(max(0, min(255, (channel * 255).rounded())))) }
+        }
+        return (data, end)
+    }
     func add(frame: ARFrame) {
         guard case .normal = frame.camera.trackingState,
               let depth = frame.sceneDepth ?? frame.smoothedSceneDepth,
@@ -452,6 +541,7 @@ private final class DepthSplatBuilder {
                 let chromaScale: Float = videoRange ? 224 : 255
                 let blue = (Float(uv[0]) - 128) / chromaScale, red = (Float(uv[1]) - 128) / chromaScale
                 let color = SIMD3<Float>(luma + 1.402 * red, luma - 0.344136 * blue - 0.714136 * red, luma + 1.772 * blue)
+                order.append(cell)
                 samples[cell] = Sample(point: point, color: simd_clamp(color, SIMD3<Float>(repeating: 0), SIMD3<Float>(repeating: 1)), radius: min(0.035, max(0.008, z * sx * 1.2 / k.columns.0.x)))
             }
         }

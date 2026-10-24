@@ -13,6 +13,7 @@ import LiveFeed from './live-feed';
 import dynamic from 'next/dynamic';
 import {isFurniture,furnitureNames} from '@/lib/spatial/furniture';
 const LiveRoomView=dynamic(()=>import('./live-room-view'),{ssr:false});
+import type {StreamChunk} from './live-room-view';
 import PixelLoader from '../pixel-loader';
 import BrandLogo from '../brand-logo';
 import InspectionUpload from '../inspection-upload';
@@ -37,6 +38,7 @@ export default function LiveWorkspace({sessionId,phone=false,initialRoomId='',ne
  const video=useRef<HTMLVideoElement>(null),stream=useRef<MediaStream|null>(null),peer=useRef<RTCPeerConnection|null>(null),channel=useRef<RTCDataChannel|null>(null),recorder=useRef<MediaRecorder|null>(null),chunks=useRef<Blob[]>([]);
  const elapsedRef=useRef(0),started=useRef(0),lastFrame=useRef<LiveFrame|null>(null),stopDetection=useRef<(()=>void)|null>(null),analysisJob=useRef<Promise<unknown>|null>(null),analyzed=useRef(new Set<string>()),lastAnalysis=useRef(0),lastPublish=useRef(0),lastSurface=useRef(0),totalBytes=useRef(0),stopping=useRef(false),startingScan=useRef(false),mounted=useRef(true);
  const markerJob=useRef<Promise<void>|null>(null);
+ const [roomStream,setRoomStream]=useState<StreamChunk[]>([]),[streamElements,setStreamElements]=useState<NonNullable<InspectionSession['nativeLive']>['elements']>(undefined);
  const iceBuffer=useRef(new NegotiationCandidates()),stopRef=useRef<()=>Promise<void>>(async()=>{}),busyStarted=useRef(Date.now());
  const headers:Record<string,string>=credentials?{Authorization:`Bearer ${credentials.token}`} : {};
  const event=useCallback((type:string,payload:Record<string,unknown>={})=>id&&credentials?liveRequest(id,credentials.token,'/events',{method:'POST',body:JSON.stringify({eventId:crypto.randomUUID(),type,payload})}):Promise.resolve(),[id,credentials]);
@@ -98,6 +100,11 @@ export default function LiveWorkspace({sessionId,phone=false,initialRoomId='',ne
   }catch(e){if(active)setError(e instanceof Error?e.message:'Connection interrupted. Retrying…')}finally{running=false}};
   void poll();const interval=setInterval(()=>void poll(),1500);return()=>{active=false;clearInterval(interval)};
  },[id,credentials,phone,makePeer,signal,offer,diagnose]);
+ useEffect(()=>{
+  if(phone||!id||!credentials||!session?.nativeCapture)return;let active=true,cursor=0,running=false;
+  const pull=async()=>{if(running||!active)return;running=true;try{const data=await liveRequest<{chunks:StreamChunk[];elements:NonNullable<InspectionSession['nativeLive']>['elements'];saved:boolean}>(id,credentials.token,`/stream?after=${cursor}`);if(!active)return;if(data.chunks.length){cursor=data.chunks[data.chunks.length-1].seq;setRoomStream(prev=>[...prev,...data.chunks].slice(-400));}if(data.elements?.length)setStreamElements(data.elements);}catch{}finally{running=false}};
+  void pull();const timer=setInterval(()=>void pull(),1000);return()=>{active=false;clearInterval(timer)};
+ },[phone,id,credentials,session?.nativeCapture]);
  useEffect(()=>{if(!recording&&!busy)return;const warn=(e:BeforeUnloadEvent)=>{e.preventDefault();e.returnValue='';};window.addEventListener('beforeunload',warn);return()=>window.removeEventListener('beforeunload',warn)},[recording,busy]);
  useEffect(()=>{if(!recording)return;const timer=setInterval(()=>{const value=Math.floor((performance.now()-started.current)/1000);setElapsed(value);elapsedRef.current=value;if(value>=120)void stopRef.current();},1000);return()=>clearInterval(timer)},[recording]);
  useEffect(()=>()=>{if(evidence)URL.revokeObjectURL(evidence.url)},[evidence]);
@@ -154,7 +161,7 @@ export default function LiveWorkspace({sessionId,phone=false,initialRoomId='',ne
   <div className="live-columns"><section className="live-stage-panel"><div className="live-stage-heading"><span>{manual?'MARK A SOURCE FRAME':evidence?'PRESERVED EVIDENCE':savedId?'YOUR INSPECTION':'THE ROOM, IN VIEW'}</span><div>{recording&&<span className="recording-dot"/>}<time>{Math.floor(elapsed/60)}:{String(elapsed%60).padStart(2,'0')}</time></div></div>
    <div className="feed-anchor">{session?.nativeCapture&&!phone&&!evidence&&<div className="native-live">
      <figure className="native-camera">{session.nativePreview?<img src={session.nativePreview} alt="Latest camera frame from your phone"/>:<div className="native-camera-empty">Camera view appears when scanning starts</div>}<figcaption><span className={session.nativeProgress?.stage==='scanning'?'recording-dot':'waiting-dot'}/>{session.nativeProgress?.stage==='scanning'?'Live from your phone':session.nativeProgress?.stage==='uploading'?'Sending the scan':session.nativeProgress?.stage==='processing'?'Finishing the scan':savedId?'Scan saved':'Phone connected'}</figcaption></figure>
-     <div className="native-model"><LiveRoomView live={session.nativeLive} findings={findings} selected={selected} onSelect={id=>{const f=findings.find(x=>x.id===id);if(f)void viewFinding(f);}}/></div>
+     <div className="native-model"><LiveRoomView live={streamElements?{...session.nativeLive,elements:streamElements}:session.nativeLive} stream={roomStream} findings={findings} selected={selected} onSelect={id=>{const f=findings.find(x=>x.id===id);if(f)void viewFinding(f);}}/></div>
      <div className="native-status">{session.nativeProgress?.stage==='uploading'||(session.nativeProgress?.upload!==undefined&&!savedId)?<PixelLoader label={`Sending your scan from the phone · ${Math.round((session.nativeProgress?.upload||0)*100)}%`} startedAt={busyStarted.current}/>:<p>{savedId?'Your room is saved. Findings keep arriving as the full scan is analysed.':session.nativeProgress?.stage==='scanning'?`Move slowly · ${session.nativeProgress.frames} frames · ${session.nativeProgress.depthFrames} with depth. Damage checks run every few seconds.`:session.nativeProgress?.stage==='processing'?'The phone is finishing the measured room…':'Tap Start scan on your phone.'}</p>}</div>
     </div>}
     <div style={{display:manual||evidence||session?.nativeCapture?'none':'block'}}><LiveFeed ref={video} objects={objects} findings={findings} selected={selected} onSelect={setSelected} ratio={ratio} onDimensions={setRatio} phone={phone} connected={phone?camera:connected}/></div>

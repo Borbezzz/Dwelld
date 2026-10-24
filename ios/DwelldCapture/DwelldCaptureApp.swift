@@ -124,6 +124,7 @@ struct CaptureScreen: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(model.tracking).font(.system(size: 11, weight: .medium))
                             Text("\(model.frameCount) frames · \(model.depthCount) with depth").font(.system(size: 11).monospacedDigit())
+                            if model.sentDuringScan > 0 { Text("\(model.sentDuringScan) files already on your laptop").font(.system(size: 11).monospacedDigit()) }
                         }.foregroundStyle(Dwelld.ink).padding(10).background(Dwelld.paper.opacity(0.92)).clipShape(RoundedRectangle(cornerRadius: 3)).padding(12)
                     }
                 }.background(Dwelld.well).clipShape(RoundedRectangle(cornerRadius: 2))

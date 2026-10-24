@@ -39,9 +39,12 @@ function locate(f: LiveFinding, pose: NativePose, points: Float32Array | null): 
   return origin.add(dir.multiplyScalar(1.4));
 }
 
-export default function LiveRoomView({ live, findings, selected, onSelect }: { live?: NativeLive; findings: LiveFinding[]; selected?: string; onSelect?: (id: string) => void }) {
+export type StreamChunk = { seq: number; points: string };
+const CAPACITY = 250_000;
+export default function LiveRoomView({ live, stream = [], findings, selected, onSelect }: { live?: NativeLive; stream?: StreamChunk[]; findings: LiveFinding[]; selected?: string; onSelect?: (id: string) => void }) {
   const root = useRef<HTMLDivElement>(null);
-  const world = useRef<{ points: THREE.Points; boxes: THREE.Group; markers: THREE.Group; fit: (box: THREE.Box3) => void; render: () => void; positions: Float32Array | null } | null>(null);
+  const world = useRef<{ points: THREE.Points; fresh: THREE.Points; freshAt: number; boxes: THREE.Group; markers: THREE.Group; fit: (box: THREE.Box3) => void; render: () => void; positions: Float32Array | null } | null>(null);
+  const streamed = useRef({ seq: 0, count: 0, positions: new Float32Array(CAPACITY * 3), colors: new Float32Array(CAPACITY * 3), box: new THREE.Box3() });
   const seen = useRef(new Map<string, number>());
   const [count, setCount] = useState(0);
   const select = useRef(onSelect); select.current = onSelect;
@@ -54,7 +57,9 @@ export default function LiveRoomView({ live, findings, selected, onSelect }: { l
     renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); element.appendChild(renderer.domElement);
     const controls = new OrbitControls(camera, renderer.domElement); controls.enableDamping = true; controls.autoRotate = !window.matchMedia("(prefers-reduced-motion: reduce)").matches; controls.autoRotateSpeed = .5;
     const points = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial({ size: .03, vertexColors: true, sizeAttenuation: true, transparent: true, opacity: .95 }));
-    const boxes = new THREE.Group(), markers = new THREE.Group(); scene.add(points, boxes, markers);
+    // The newest points flash brighter and larger, then settle into the room: you can watch it being scanned.
+    const fresh = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial({ size: .05, color: 0xf0c27a, sizeAttenuation: true, transparent: true, opacity: 0, depthWrite: false }));
+    const boxes = new THREE.Group(), markers = new THREE.Group(); scene.add(points, fresh, boxes, markers);
     const grid = new THREE.GridHelper(8, 16, 0x3a443a, 0x262d27); grid.position.y = -1.4; scene.add(grid);
     const goal = { target: new THREE.Vector3(), distance: 4.5 };
     const fit = (box: THREE.Box3) => { if (box.isEmpty()) return; goal.target.copy(box.getCenter(new THREE.Vector3())); goal.distance = Math.max(2.4, box.getSize(new THREE.Vector3()).length() * .9); grid.position.y = box.min.y - .01; };
@@ -64,19 +69,37 @@ export default function LiveRoomView({ live, findings, selected, onSelect }: { l
       controls.target.lerp(goal.target, .04);
       const offset = camera.position.clone().sub(controls.target), len = offset.length();
       if (Math.abs(len - goal.distance) > .02) camera.position.copy(controls.target).add(offset.multiplyScalar(1 + (goal.distance / len - 1) * .04));
+      const age = t - (world.current?.freshAt ?? 0); (fresh.material as THREE.PointsMaterial).opacity = Math.max(0, 1 - age / 1.2);
       markers.children.forEach(m => { const born = m.userData.born as number, age = t - born; const pulse = age < 1.2 ? 1 + Math.sin(age * 10) * .5 * (1.2 - age) : 1; m.scale.setScalar((m.userData.active ? 1.5 : 1) * pulse); });
       controls.update(); renderer.render(scene, camera);
     });
     const ray = new THREE.Raycaster(); ray.params.Points = { threshold: .05 };
     const click = (e: MouseEvent) => { const r = renderer.domElement.getBoundingClientRect(); ray.setFromCamera(new THREE.Vector2((e.clientX - r.left) / r.width * 2 - 1, -(e.clientY - r.top) / r.height * 2 + 1), camera); const hit = ray.intersectObjects(markers.children, false)[0]; if (hit) select.current?.(hit.object.userData.id); };
     renderer.domElement.addEventListener("click", click);
-    world.current = { points, boxes, markers, fit, render: () => {}, positions: null };
+    world.current = { points, fresh, freshAt: 0, boxes, markers, fit, render: () => {}, positions: null };
     return () => { renderer.domElement.removeEventListener("click", click); resize.disconnect(); renderer.setAnimationLoop(null); controls.dispose(); scene.traverse(o => { if (o instanceof THREE.Mesh || o instanceof THREE.Points || o instanceof THREE.LineSegments) { o.geometry.dispose(); (o.material as THREE.Material).dispose(); } }); renderer.dispose(); element.replaceChildren(); world.current = null; };
   }, []);
 
-  // Live splat: the room fills in as the phone scans.
+  // Incremental stream: append only the points that arrived since the last chunk.
   useEffect(() => {
-    const w = world.current; if (!w || !live?.splat) return;
+    const w = world.current, acc = streamed.current; if (!w) return;
+    const incoming = stream.filter(c => c.seq > acc.seq); if (!incoming.length) return;
+    if (acc.seq === 0) { const g = new THREE.BufferGeometry(); g.setAttribute("position", new THREE.BufferAttribute(acc.positions, 3)); g.setAttribute("color", new THREE.BufferAttribute(acc.colors, 3)); g.setDrawRange(0, 0); w.points.geometry.dispose(); w.points.geometry = g; }
+    const start = acc.count;
+    for (const chunk of incoming) {
+      const { positions, colors, count } = decodeSplat(chunk.points), room = Math.min(count, CAPACITY - acc.count);
+      acc.positions.set(positions.subarray(0, room * 3), acc.count * 3); acc.colors.set(colors.subarray(0, room * 3), acc.count * 3);
+      for (let i = 0; i < room; i++) acc.box.expandByPoint(new THREE.Vector3(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]));
+      acc.count += room; acc.seq = chunk.seq;
+    }
+    const g = w.points.geometry; (g.getAttribute("position") as THREE.BufferAttribute).needsUpdate = true; (g.getAttribute("color") as THREE.BufferAttribute).needsUpdate = true; g.setDrawRange(0, acc.count); g.computeBoundingSphere();
+    const latest = new THREE.BufferGeometry(); latest.setAttribute("position", new THREE.BufferAttribute(acc.positions.slice(start * 3, acc.count * 3), 3)); w.fresh.geometry.dispose(); w.fresh.geometry = latest; w.freshAt = performance.now() / 1000;
+    w.positions = acc.positions.subarray(0, acc.count * 3); setCount(acc.count); w.fit(acc.box);
+  }, [stream]);
+
+  // Older phone builds send a whole-room sample instead of a stream.
+  useEffect(() => {
+    const w = world.current; if (!w || !live?.splat || streamed.current.seq > 0) return;
     const { positions, colors, count } = decodeSplat(live.splat);
     const geometry = new THREE.BufferGeometry(); geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3)); geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
     w.points.geometry.dispose(); w.points.geometry = geometry; w.positions = positions; setCount(count);
@@ -109,7 +132,8 @@ export default function LiveRoomView({ live, findings, selected, onSelect }: { l
       pin.position.copy(at); pin.renderOrder = 5; pin.userData = { id: f.id, born: seen.current.get(f.id)!, active: f.id === selected };
       w.markers.add(pin);
     }
-  }, [findings, selected, live?.splat]);
+    // Re-place pins as the room fills in, so camera-cast findings land on real surfaces.
+  }, [findings, selected, live?.splat, Math.floor(count / 5000)]);
 
   const furniture = (live?.elements || []).filter(isFurniture), names = furnitureNames(furniture);
   return <div className="live-room-view">
