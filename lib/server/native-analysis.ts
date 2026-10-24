@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { getDb } from "./db";
 import { readMedia } from "./media";
 import { indexFindings } from "./search";
+import type { DepthPatch } from "./crack-check";
 import { analyzeEvidenceFrame, elementInView, type FrameFinding, type FramePose, type RoomElement } from "./frame-analysis";
 import { insideElement } from "../spatial/identity";
 import { furnitureNames, isFurniture } from "../spatial/furniture";
@@ -79,6 +80,17 @@ export async function analyzeNativeInspection(inspection: Document, manifest: Sp
     await db.collection("inspections").updateOne({ _id: inspection._id }, { $set: { status: "processing" } });
     const elements = manifest.elements, base = { ownerId: inspection.ownerId, inspectionId: inspection._id, roomId: inspection.roomId };
     const imageRef = (name: string) => manifest.assets.find(a => a.name === name && a.kind === "image")?.mediaRef;
+    /** LiDAR depth and confidence for this photo, when the phone kept them, for the crack edge check. */
+    const depthFor = async (fr: { depth?: string; confidence?: string; depthWidth?: number; depthHeight?: number }): Promise<DepthPatch | null> => {
+      const d = fr.depth && manifest.assets.find(a => a.name === fr.depth && a.kind === "depth")?.mediaRef, c = fr.confidence && manifest.assets.find(a => a.name === fr.confidence && a.kind === "confidence")?.mediaRef;
+      const w = fr.depthWidth, h = fr.depthHeight;
+      if (!d || !w || !h) return null;
+      const raw = await readMedia(d, 4 * w * h + 16);
+      if (raw.length < 4 * w * h) return null;
+      const data = new Float32Array(w * h); for (let i = 0; i < w * h; i++) data[i] = raw.readFloatLE(i * 4);
+      const conf = c ? await readMedia(c, w * h + 16).catch(() => null) : null;
+      return { data, width: w, height: h, confidence: conf && conf.length >= w * h ? new Uint8Array(conf.subarray(0, w * h)) : undefined };
+    };
     // Let in-flight live results finish before taking the saved snapshot. Workers stop claiming on save.
     if (sessionId) {
       const waitUntil = Date.now() + 95_000;
@@ -106,7 +118,7 @@ export async function analyzeNativeInspection(inspection: Document, manifest: Sp
           let batchIssue: string | undefined;
           const observations = await inspectVideoDamageBatch(images).catch(error=>{batchIssue=analysisFailure(error).message;warnings.push(batchIssue);return new Map();});
           for (const { image, fr } of images) {
-            const result = await analyzeEvidenceFrame(image, fr, elements as RoomElement[], { walls: true, observations: observations.get(fr.timestamp) ?? [], verify: false });
+            const result = await analyzeEvidenceFrame(image, fr, elements as RoomElement[], { walls: true, observations: observations.get(fr.timestamp) ?? [], verify: false, depth: await depthFor(fr).catch(() => null) });
             if(batchIssue)result.warnings.push(batchIssue);
             result.findings.forEach(f => collected.push({ ...f, ref: imageRef(fr.image)!, timestampSeconds: fr.timestamp })); analysed++;
             warnings.push(...result.warnings);

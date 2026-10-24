@@ -262,6 +262,8 @@ Keep secrets in ignored environment files or deployment configuration. Gemini/Mo
 | `BETTER_AUTH_SECRET` | Required | Random secret of at least 32 characters. |
 | `BETTER_AUTH_URL` | Configure per environment | Exact origin, including local port; example uses `http://localhost:3001`. |
 | `GEMINI_API_KEY` | AI features | Server-side generation and embedding credential. |
+| `VOYAGE_API_KEY` | Photo search, rerank | Voyage AI by MongoDB model API key (Atlas UI → AI Models). Used against `https://ai.mongodb.com/v1` (`VOYAGE_BASE_URL` to change). Automated Embedding needs no key here. |
+| `ATLAS_AUTO_EMBED_MODEL` | Optional | Model for the `findings_auto` autoEmbed index, default `voyage-4`. |
 | `GEMINI_MODEL` | Optional override | Generation model; source/example default is `gemini-4-argon`. Verify access in your project; a configured identifier does not establish availability. |
 | `TURN_URLS` | Optional WebRTC path | Comma-separated `turn:`/`turns:` endpoints. |
 | `TURN_SHARED_SECRET` | Optional WebRTC path | TURN REST HMAC secret for a compatible provider. |
@@ -446,27 +448,31 @@ Optionally add `--room-id <legacy-room-id>`. Only after auditing intended owners
 
 ## Search and questions about records
 
+All search runs inside MongoDB Atlas on the `findings` collection. Open **/search** (the "Search" link in the header) to watch it work: index status, each pipeline's own ranking, the fused result and a map of vector space.
+
 ```mermaid
 flowchart TD
-    Finding["Saved finding"] --> Embed["Gemini embedding, 768 numbers"]
-    Embed --> Atlas[("Atlas text index and vector index")]
-    Query["Search"] --> Mode{"text, semantic, or both"}
-    Mode --> Atlas
-    Atlas --> Hits["Matching findings"]
-    Ask["Ask a question"] --> Pack["Up to 12 recent inspections and 12 retrieved findings"]
-    Atlas --> Pack
-    Pack --> Answer["Gemini answer with source links"]
+    Finding["Saved finding: label, damage type, description, evidence photo"] --> Text["searchText field"]
+    Finding --> Crop["Evidence photo cropped to the damage"]
+    Text --> Auto[("findings_auto: Automated Embedding, Atlas embeds with Voyage voyage-4")]
+    Text --> Lex[("findings_search: Atlas Search, fuzzy full-text")]
+    Text --> Gem[("findings_vector: Gemini embedding fallback, 768-d")]
+    Crop --> VoyMM["Voyage voyage-multimodal-3.5"] --> Img[("findings_image: photo vectors, 1024-d")]
+    Query["Your words"] --> Fusion["$rankFusion: native reciprocal rank fusion"]
+    Lex --> Fusion
+    Auto --> Fusion
+    Img --> Fusion
+    Fusion --> Rerank["Voyage rerank-3"] --> Hits["Ranked findings with per-pipeline ranks"]
 ```
 
-| Mode | Implementation |
-| --- | --- |
-| `text` | Atlas `findings_search`, fuzzy label/description matching with owner/room filters. |
-| `semantic` | Atlas `findings_vector`, 768-dimensional cosine vectors with owner/room prefilters and embedding-model checks. |
-| `hybrid` | Both lists combined with reciprocal rank fusion, `k=60`. |
+| Mode | Atlas feature | Implementation |
+| --- | --- | --- |
+| `text` | **Atlas Search** | `$search` on `findings_search`: fuzzy match on label, description and damage type, owner and room filters. |
+| `semantic` | **Automated Embedding** (Vector Search) | `$vectorSearch` on `findings_auto` with `query: {text}`. Atlas embeds `searchText` on write and the query at query time with `voyage-4`. Falls back to `findings_vector` (Gemini vectors) while the autoEmbed index is not ready. |
+| `image` | **Vector Search + Voyage AI** | The text query is embedded with `voyage-multimodal-3.5` and matched against photo vectors in `findings_image`. Words find photos even when no description mentions them. |
+| `hybrid` | **Hybrid Search** | One `$rankFusion` stage over all three pipelines (weights keyword 1, meaning 1, photo 0.8) with `scoreDetails`, then **Voyage `rerank-3`**. If the cluster rejects `$rankFusion` (MongoDB below 8.0), the same RRF formula runs in the app and the page says so. |
 
-Embeddings use `gemini-embedding-001`, L2 normalization, `RETRIEVAL_DOCUMENT` for findings and `RETRIEVAL_QUERY` for queries. Indexing handles up to 50 findings per invocation. The search UI's **Index my findings** action resumes missing embeddings through `POST /api/search`.
-
-Search checks required indexes are queryable and returns an explicit error when unavailable; there is no silent regex substitute for semantic search. Atlas propagation after embedding writes is asynchronous.
+Setup: create the four indexes with the **Create or update indexes** button on /search (`POST /api/search/setup?action=indexes`) or `node --env-file=.env scripts/setup-search-indexes.cjs`. Then **Prepare my findings** (`POST /api/search/setup?action=prepare`) writes `searchText`, Gemini vectors and, when `VOYAGE_API_KEY` is set, photo vectors. Analyses also prepare new findings automatically. Search refuses to run against an index that isn't queryable; there is no silent regex fallback.
 
 The global Ask Records interface supplies Gemini with up to 12 recent inspection summaries and 12 hybrid-retrieved findings. The API validates citation IDs and links sources back to inspections. If retrieval fails, it explicitly warns that only recent summaries were supplied. Answers are bounded retrieval samples, not exhaustive history or new image analysis.
 
@@ -625,4 +631,6 @@ YOLO-related materials carry AGPL-3.0 terms, including network-use obligations d
 | [Live protocol](docs/live/session-protocol.md) | Capability/signalling/lease details; older unauthenticated/browser-fallback statements are superseded. |
 | [Spatial research](docs/research/lidar-roomplan.md) | Sensor/reconstruction background. |
 | [Verification records](docs/testing) | Individual checks and their limitations. |
+| [Pitch and demo plan](PITCH.md) | Storyline, how each bounty criterion is met, video shot list, deck. |
+| [Bounty requirements](docs/BOUNTY-REQUIREMENTS.md) | Encode London 2026 rules for each track we entered. |
 | [Performance and hackathon audit](docs/hackathon-performance-audit-2026.md) | 3D loading path, remaining benchmarks, partner requirements and demo checklist. |

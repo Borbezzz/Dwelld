@@ -1,6 +1,7 @@
 import {analysisFailure} from "./analysis-failure";
 import sharp from "sharp";
 import { inspectCracks } from "./crack-detector";
+import { checkCrack, type DepthPatch } from "./crack-check";
 import { inspectVisibleDamage, scopeForName, type DamageObservation, type Box } from "./damage";
 import { verifyFinding, autoApproveThreshold, reviewDecision, type Verdict } from "./verify";
 
@@ -99,7 +100,7 @@ const iou = (a: Box, b: Box) => { const w = Math.max(0, Math.min(a.x + a.width, 
  * Inspect all visible damage, associate boxes with measured geometry when possible, and publish
  * candidates before bounded verification. Findings without geometry keep their source-photo box.
  */
-export async function analyzeEvidenceFrame(image: Buffer, pose: FramePose, elements: RoomElement[], options: { walls: boolean; onCandidates?: (findings: FrameFinding[]) => Promise<void>; observations?: DamageObservation[]; verify?: boolean }) {
+export async function analyzeEvidenceFrame(image: Buffer, pose: FramePose, elements: RoomElement[], options: { walls: boolean; onCandidates?: (findings: FrameFinding[]) => Promise<void>; observations?: DamageObservation[]; verify?: boolean; depth?: DepthPatch | null }) {
   const meta = await sharp(image).metadata();
   // The pose was recorded for the encoded size; rescale if the stored image differs.
   const scaled: FramePose = meta.width && meta.height && (meta.width !== pose.width || meta.height !== pose.height)
@@ -120,6 +121,20 @@ export async function analyzeEvidenceFrame(image: Buffer, pose: FramePose, eleme
     if (o.boundingBox && out.some(f => f.boundingBox && iou(f.boundingBox, o.boundingBox!) > .35)) return;
     out.push({ label: `${label}: ${o.type}`, description: o.description, damageType: o.type, boundingBox: o.boundingBox, elementId: owner?.id ?? null, elementCategory: owner?.category ?? (element ? element.category : "unassigned"), worldPosition, detectionSource: source, reviewStatus: "pending", autoApproved: false });
   };
+  // Cracks get an edge + LiDAR depth check: board borders, door gaps and shelf edges are dropped.
+  let edgesRejected = 0;
+  const screenCracks = async <T extends { type: string; description: string; boundingBox: Box | null }>(list: T[]) => {
+    const kept: T[] = [];
+    for (const o of list) {
+      if (o.type !== "crack" || !o.boundingBox) { kept.push(o); continue; }
+      try {
+        const c = await checkCrack(image, o.boundingBox, options.depth);
+        if (c.verdict === "edge") { edgesRejected++; continue; }
+        kept.push({ ...o, description: `${o.description} Edge check: ${c.reason}` });
+      } catch { kept.push(o); }
+    }
+    return kept;
+  };
   // Inspect the entire photo even before RoomPlan has recognized a surface or object.
   let wholeFailure: unknown;
   let publications: Promise<void> = Promise.resolve();
@@ -134,6 +149,7 @@ export async function analyzeEvidenceFrame(image: Buffer, pose: FramePose, eleme
       let whole: DamageObservation[] = [];
       try { whole = options.observations ?? await inspectVisibleDamage(image); }
       catch (error) { wholeFailure = error; warnings.push(analysisFailure(error).message); }
+      whole = await screenCracks(whole);
       whole.forEach(o => add('Visible damage', o, null, 'gemini'));
       await publish();
     })(),
@@ -141,11 +157,13 @@ export async function analyzeEvidenceFrame(image: Buffer, pose: FramePose, eleme
       let cracks: Awaited<ReturnType<typeof inspectCracks>> = [];
       try { cracks = await inspectCracks(image); }
       catch { warnings.push('Specialist crack check was unavailable.'); }
-      cracks.forEach(o => add('Potential crack', { type: 'crack', description: 'Specialist crack candidate; requires cross-checking against the photo.', boundingBox: o.boundingBox }, null, 'crack-model'));
+      const screened = await screenCracks(cracks.map(o => ({ type: 'crack', description: 'Specialist crack candidate; requires cross-checking against the photo.', boundingBox: o.boundingBox as Box | null })));
+      screened.forEach(o => add('Potential crack', o, null, 'crack-model'));
       await publish();
     })(),
   ]);
   await publications;
+  if (edgesRejected) warnings.push(`${edgesRejected} crack candidate${edgesRejected === 1 ? " was" : "s were"} dropped: the edge and depth check found the border of an object, not a crack.`);
   if (wholeFailure && !out.length) throw wholeFailure;
   // Cross-check: a second, adversarial Gemini look at each finding.
   const threshold = autoApproveThreshold();
