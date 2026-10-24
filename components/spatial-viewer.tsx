@@ -22,7 +22,7 @@ export default function SpatialViewer({ manifest, markers, assetUrl, onPick, sel
   const root = useRef<HTMLDivElement>(null);
   const splat = manifest.assets.find(a => a.kind === "splat");
   const aligned = !!splat && (!!splat.registration || splat.reconstructionMethod === "lidar-initialized");
-  const [mode, setMode] = useState<"room" | "geometry">(splat ? "room" : "geometry");
+  const [mode, setMode] = useState<"room" | "geometry">(compact ? "geometry" : splat ? "room" : "geometry");
   const [error, setError] = useState(""), [loading, setLoading] = useState(false);
   const [tip, setTip] = useState<{ text: string; x: number; y: number } | null>(null);
   const callbacks = useRef({ onPick, onSelectElement, onHoverElement }); callbacks.current = { onPick, onSelectElement, onHoverElement };
