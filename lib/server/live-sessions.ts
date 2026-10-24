@@ -1,3 +1,4 @@
+import {sameDamage,damageEvidence,canonicalDamageFindings} from "../damage-identity";
 import { batchSummaries } from "../live/batches";
 import {canReadRoom} from "./space-access";
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
@@ -70,12 +71,20 @@ export function liveFailure(error:unknown) { const requestId=randomUUID(); const
 export async function recordLiveAnalysis(session:SessionDoc,observationId:string,result:{evidenceFrameRef:string;findings:LiveFinding[]}) {
  const {db}=await liveCollections();
  await db.collection("liveEvidence").updateOne({sessionId:session._id,observationId},{$setOnInsert:{sessionId:session._id,observationId,ref:result.evidenceFrameRef,createdAt:new Date()}},{upsert:true});
- for(const [index,finding] of result.findings.entries()) {const id=finding.id || `${observationId}-${index}`;await db.collection("liveFindings").updateOne({sessionId:session._id,id},{$setOnInsert:{...finding,id,sessionId:session._id,evidenceFrameRef:result.evidenceFrameRef,reviewStatus:"pending",createdAt:new Date(),reviewHistory:[]}},{upsert:true});}
+ const existing=await db.collection('liveFindings').find({sessionId:session._id,kind:'damage',source:{$ne:'manual'}}).toArray();
+ for(const [index,finding] of result.findings.entries()){
+  const candidate={...finding,kind:'damage',evidenceFrameUrl:result.evidenceFrameRef};const duplicate=existing.find(p=>sameDamage(p,candidate));
+  if(duplicate){await db.collection('liveFindings').updateOne({sessionId:session._id,id:duplicate.id},{$addToSet:{evidenceObservations:{$each:[damageEvidence(duplicate),damageEvidence(candidate)]}}});continue;}
+  const id=finding.id||`${observationId}-${index}`;
+  const doc={...finding,id,sessionId:session._id,kind:'damage',evidenceFrameRef:result.evidenceFrameRef,evidenceObservations:[damageEvidence(candidate)],reviewStatus:'pending',createdAt:new Date(),reviewHistory:[]};
+  await db.collection('liveFindings').updateOne({sessionId:session._id,id},{$setOnInsert:doc},{upsert:true});existing.push(doc as never);
+ }
+
 }
 export async function getLiveState(session:SessionDoc,role:LiveRole,_after:string|null) {
  const {db}=await liveCollections();
  const [objects,findings,signals]=await Promise.all([db.collection("liveObjects").find({sessionId:session._id},{projection:{_id:0,sessionId:0}}).limit(100).toArray(),db.collection("liveFindings").find({sessionId:session._id},{projection:{_id:0,sessionId:0}}).sort({timestampSeconds:-1,createdAt:-1}).limit(200).toArray(),db.collection("liveSignals").find({sessionId:session._id,to:role}).sort({sequence:-1,createdAt:-1,_id:-1}).limit(200).toArray()]);
- const [progress,batchFrames]=await Promise.all([liveFrameProgress(session._id),db.collection('liveFrames').find({sessionId:session._id},{projection:{name:1,ref:1,timestampSeconds:1,status:1,batchId:1,workerSlot:1,attempt:1,retryMessage:1,error:1,findings:1,observations:1,objects:1,views:1,warnings:1}}).sort({timestampSeconds:-1}).limit(121).toArray()]);
+ const [progress,batchFrames]=await Promise.all([liveFrameProgress(session._id),db.collection('liveFrames').find({sessionId:session._id},{projection:{name:1,ref:1,timestampSeconds:1,status:1,batchId:1,workerSlot:1,attempt:1,retryMessage:1,error:1,findings:1,findingIds:1,newFindingIds:1,observations:1,objects:1,views:1,warnings:1}}).sort({timestampSeconds:-1}).limit(121).toArray()]);
  const record=session.inspectionId?await db.collection('inspections').findOne({_id:session.inspectionId},{projection:{analysisStartedAt:1,completedAt:1,status:1,scanReportStatus:1,scanReportError:1,reportComparisonStatus:1,reportComparisonError:1,searchIndexStatus:1,searchIndexError:1}}):null;
  const began=record?.analysisStartedAt||record?.completedAt;
  if(session.status==='saved'&&record?.status==='processing'&&began&&new Date(began).getTime()<Date.now()-360_000){
@@ -86,7 +95,7 @@ export async function getLiveState(session:SessionDoc,role:LiveRole,_after:strin
    progress.failed+=progress.queued+progress.checking;progress.queued=0;progress.checking=0;
   }
  }
- return {session:{...safeSession(session),workflow:record?{inspectionStatus:record.status,reportStatus:record.scanReportStatus,reportError:record.scanReportError,comparisonStatus:record.reportComparisonStatus,comparisonError:record.reportComparisonError,searchStatus:record.searchIndexStatus,searchError:record.searchIndexError}:undefined,analysisProgress:progress,analysisBatches:batchSummaries(batchFrames as never)},objects:objects as unknown as LiveObject[],findings,signals:signals.reverse().map(s=>({id:String(s._id),eventId:s.eventId,type:s.type,data:s.data,from:s.from}))};
+ return {session:{...safeSession(session),workflow:record?{inspectionStatus:record.status,reportStatus:record.scanReportStatus,reportError:record.scanReportError,comparisonStatus:record.reportComparisonStatus,comparisonError:record.reportComparisonError,searchStatus:record.searchIndexStatus,searchError:record.searchIndexError}:undefined,analysisProgress:progress,analysisBatches:batchSummaries(batchFrames as never)},objects:objects as unknown as LiveObject[],findings:canonicalDamageFindings(findings),signals:signals.reverse().map(s=>({id:String(s._id),eventId:s.eventId,type:s.type,data:s.data,from:s.from}))};
 }
 
 export async function liveFrameProgress(sessionId: ObjectId) {

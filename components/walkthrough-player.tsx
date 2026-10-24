@@ -22,14 +22,15 @@ export default function WalkthroughPlayer({src,findings:allFindings,selectedId,o
  async function saveMark(){if(!draft||!onMark)return;setSaving(true);setMarkStatus('Placing it in the room and asking Gemini to describe it…');
   try{await onMark({...draft,note:note.trim()});setDraft(null);setNote('');setMarking(false);setMarkStatus('Saved. The new mark is pinned in the 3D room.');}
   catch(e){setMarkStatus(e instanceof Error?e.message:'Could not save this mark');}finally{setSaving(false);}}
+ const localSelection=useRef<string|null>(null);
  const video=useRef<HTMLVideoElement>(null),pending=useRef<number|null>(null);
  const [time,setTime]=useState(0),[duration,setDuration]=useState(0),[ratio,setRatio]=useState(16/9),[playing,setPlaying]=useState(false),[error,setError]=useState(''),[hover,setHover]=useState('');
  const groups=timelineGroups(findings),visible=playing?[]:findingsAtTime(findings,time,.12),selected=allFindings.find(f=>f.id===selectedId);
  /** Native scans: AI boxes are in landscape sensor pixels while the recording is upright portrait; marks made on the video are already in video space. */
  const place=(f:Finding)=>sensorBoxes&&ratio<1&&f.source!=='manual'?{b:f.boundingBox?portraitEvidenceBox(f.boundingBox):undefined,p:f.point?portraitEvidencePoint(f.point):undefined}:{b:f.boundingBox,p:f.point};
  const seek=useCallback((t:number)=>{const v=video.current;if(!v)return;v.pause();pending.current=t;if(v.readyState>=1){v.currentTime=Math.max(0,Math.min(t,Number.isFinite(v.duration)?v.duration:t));pending.current=null;setTime(v.currentTime);}},[]);
- useEffect(()=>{if(selected?.timestampSeconds!=null)seek(selected.timestampSeconds);},[selected?.id,selected?.timestampSeconds,seek]);
- function select(f:Finding){seek(f.timestampSeconds??0);onSelect(f.id);}
+ useEffect(()=>{if(localSelection.current===selected?.id){localSelection.current=null;return;}if(selected?.timestampSeconds!=null)seek(selected.timestampSeconds);},[selected?.id,selected?.timestampSeconds,seek]);
+ function select(f:Finding){localSelection.current=f.id;seek(f.timestampSeconds??0);onSelect(f.id);}
  const detail=visible.find(f=>f.id===hover)||visible.find(f=>f.id===selectedId);
  const next=groups.find(g=>g.damage&&g.time>time+.4);
  return <section className="walkthrough-player" aria-label="Walkthrough video with findings">

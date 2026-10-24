@@ -9,7 +9,7 @@ import { verifyFinding, autoApproveThreshold, reviewDecision, type Verdict } fro
 export type FramePose = { transform: number[]; intrinsics: number[]; width: number; height: number };
 export type RoomElement = { id: string; category: string; dimensions: number[]; transform: number[] };
 type Scope = NonNullable<ReturnType<typeof scopeForName>>;
-export type FrameFinding = { label: string; description: string; damageType: string; boundingBox: Box | null; elementId: string | null; elementCategory: string; worldPosition: [number, number, number] | null; detectionSource: "gemini" | "crack-model"; verification?: Verdict & { threshold: number }; reviewStatus: "pending" | "confirmed"; autoApproved: boolean; confidence?: number };
+export type FrameFinding = import("../damage-identity").DamageEvidence & { label: string; description: string; damageType: string; boundingBox: Box | null; elementId: string | null; elementCategory: string; worldPosition: [number, number, number] | null; detectionSource: "gemini" | "crack-model"; verification?: Verdict & { threshold: number }; reviewStatus: "pending" | "confirmed"; autoApproved: boolean; confidence?: number };
 import {elementInView,type ElementView} from "../spatial/visibility";
 export {elementInView,type ElementView} from "../spatial/visibility";
 

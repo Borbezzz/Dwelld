@@ -1,3 +1,4 @@
+import {damageViewSignature,damageCropSignature} from './damage-signature';
 import type { DepthPatch } from './crack-check';
 import { inspectVideoDamageBatch } from './damage';
 import { analyzeEvidenceFrame, type FramePose, type RoomElement } from './frame-analysis';
@@ -22,6 +23,8 @@ export async function analyzeFurnitureVideoFrames<T extends { image: Buffer; tim
     const result:Awaited<ReturnType<typeof analyzeEvidenceFrame>> = frame.pose ? await analyzeEvidenceFrame(frame.image, frame.pose, elements, {
       walls: false, observations: damage, verify: false, specialist: false, furnitureOnly: true, depth: frame.depth,
     }) : {findings:damage.map(o=>({label:o.type,description:o.description,damageType:o.type,boundingBox:o.boundingBox,elementId:null,elementCategory:'unassigned',worldPosition:null,detectionSource:'gemini' as const,reviewStatus:'pending' as const,autoApproved:false})),views:[],dropped:0,warnings:[]};
-    return { frame, result: {...result,objects:observations.objects?.get(frame.timestampSeconds)||[]} };
+    const viewSignature=await damageViewSignature(frame.image);
+    const findings=await Promise.all(result.findings.map(async f=>({...f,viewSignature,cropSignature:await damageCropSignature(frame.image,f.boundingBox),objectBoundingBox:result.views.find(v=>v.elementId===f.elementId)?.box})));
+    return { frame, result: {...result,findings,objects:observations.objects?.get(frame.timestampSeconds)||[]} };
   }));
 }

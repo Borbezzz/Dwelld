@@ -14,7 +14,7 @@ function BatchCard({batch,slot,sessionId,token,settled}:{batch?:LiveBatch;slot:n
  },[ref,sessionId,token]);
  const status=batch?.status||(settled?'idle':'waiting'),active=status==='checking'||status==='retrying',clean=status==='clear',failed=status==='failed'||status==='unassessed';
  const Icon=clean?CheckCheck:failed?CircleAlert:status==='findings'?ScanLine:active?LoaderCircle:status==='idle'?Check:Clock3;
- const title=clean?'No visible damage returned':status==='findings'?`${batch!.findingCount} potential ${batch!.findingCount===1?'finding':'findings'}`:status==='retrying'?`Retry ${batch!.attempt} of 3`:status==='checking'?'Argon is checking':failed?'Unassessed · needs retry':status==='queued'?'Source saved · queued':status==='idle'?'No remaining work':'Waiting for source frames';
+ const title=clean?'No visible damage returned':status==='findings'?batch!.newFindingCount===0?`${batch!.findingCount} previously noted ${batch!.findingCount===1?'mark':'marks'} · linked`:batch!.newFindingCount!=null?`${batch!.newFindingCount} new · ${batch!.findingCount-batch!.newFindingCount} already noted`:`${batch!.findingCount} potential ${batch!.findingCount===1?'finding':'findings'}`:status==='retrying'?`Retry ${batch!.attempt} of 3`:status==='checking'?'Argon is checking':failed?'Unassessed · needs retry':status==='queued'?'Source saved · queued':status==='idle'?'No remaining work':'Waiting for source frames';
  return <article className={`batch-card batch-${status}`} aria-label={`Processing lane ${slot+1}`}>
   <header><span>Lane {slot+1}</span><Icon size={14} className={active?'spin':undefined}/></header>
   <div className="batch-image" style={{aspectRatio:image&&image.ref===ref?image.ratio:4/3}} key={batch?.id||'empty'}>

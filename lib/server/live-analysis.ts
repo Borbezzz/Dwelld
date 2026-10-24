@@ -1,3 +1,4 @@
+import {damageViewSignature,damageCropSignature} from "./damage-signature";
 import {logAIFailure} from "./analysis-failure";
 import { randomUUID } from 'node:crypto';
 import sharp from 'sharp';
@@ -29,7 +30,8 @@ export async function analyzeLiveFrame(image: Buffer, input: LiveAnalysisInput):
     const analysisWarnings:string[]=[];
     try { damage=await inspectVisibleDamage(normalized); }
     catch(error) { logAIFailure('live.damage',error); analysisWarnings.push('Argon damage analysis could not finish. This view remains unassessed.'); }
-    const findings:LiveDamageFinding[]=damage.map(item=>({id:randomUUID(),parentObjectId:null,label:item.type,description:item.description,boundingBox:item.boundingBox,timestampSeconds:input.timestampSeconds,damageType:item.type,source:'ai',detectionSource:'gemini'}));
+    const viewSignature=await damageViewSignature(normalized);
+    const findings:LiveDamageFinding[]=await Promise.all(damage.map(async item=>({id:randomUUID(),viewSignature,cropSignature:await damageCropSignature(normalized,item.boundingBox),parentObjectId:null,label:item.type,description:item.description,boundingBox:item.boundingBox,timestampSeconds:input.timestampSeconds,damageType:item.type,source:'ai',detectionSource:'gemini'})));
     return {analysisWarnings,evidenceFrameRef:ref,sourceWidth:size.width!,sourceHeight:size.height!,findings,analyzedObjectIds:analysisWarnings.length?[]:input.objects.map(o=>o.objectId),surfacesAnalyzed:!analysisWarnings.length};
   }catch(error){await deleteMedia(ref).catch(()=>{});throw error;}
 }

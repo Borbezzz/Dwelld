@@ -1,5 +1,5 @@
 export type ReviewStatus = "pending" | "confirmed" | "rejected";
-export interface Finding {
+export interface Finding { sourceObservationIds?:string[];evidenceObservations?:import("./damage-identity").DamageEvidence[];
   visualCheck?:{status:"visible_damage"|"not_visible"|"unavailable";description:string};
   id: string; kind: "object" | "damage"; label: string; description?: string;
   timestampSeconds?: number; evidenceFrameUrl?: string; visibilityIntervals?: {startSeconds:number;endSeconds:number}[]; userNote?: string;

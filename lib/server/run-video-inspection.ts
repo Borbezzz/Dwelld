@@ -1,3 +1,4 @@
+import {canonicalDamageFindings} from "../damage-identity";
 import { finishScanReport } from "./scan-report";
 import { ObjectId, type Db } from "mongodb";
 import { analyzeVideo, type VideoCheckpoint } from "./inspection";
@@ -13,8 +14,11 @@ export async function runVideoInspection(db: Db, inspectionId: ObjectId, ownerId
  const persist=(point:VideoCheckpoint)=>{
   const write=async()=>{
    for(const f of point.findings)if(!ids.has(f.detectionId))ids.set(f.detectionId,new ObjectId());
-   const fresh=point.findings.filter(f=>!saved.has(f.detectionId));
+   const grouped=canonicalDamageFindings(point.findings);
+   for(const f of grouped)for(const alias of f.sourceObservationIds||[])ids.set(alias,ids.get(f.detectionId)!);
+   const fresh=grouped.filter(f=>!saved.has(f.detectionId));
    if(fresh.length){await db.collection('findings').insertMany(fresh.map(f=>({_id:ids.get(f.detectionId)!,ownerId,inspectionId,roomId,...f,objectId:f.parentDetectionId?ids.get(f.parentDetectionId)||null:null,source:'ai',reviewStatus:'pending',reviewHistory:[],createdAt:new Date()})));fresh.forEach(f=>saved.add(f.detectionId));}
+   for(const f of grouped)if(f.kind==='damage'&&(f.evidenceObservations?.length||0)>1)await db.collection('findings').updateOne({_id:ids.get(f.detectionId)},{$set:{evidenceObservations:f.evidenceObservations,sourceObservationIds:f.sourceObservationIds}});
    await inspections.updateOne({_id:inspectionId},{$set:{evidenceFrames:point.evidenceFrames,analysisRunId:point.analysisRunId,analysisWarnings:point.warnings,durationSeconds:point.durationSeconds,analysisProgress:{phase:point.phase,totalFrames:point.totalFrames,processedFrames:point.processedFrames,updatedAt:new Date().toISOString()}}});
   };
   writes=writes.then(write);return writes;

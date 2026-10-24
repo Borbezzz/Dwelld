@@ -1,3 +1,4 @@
+import {groupedDamage,canonicalMarkers} from "@/lib/server/damage-groups";
 import { sealLater } from "@/lib/server/ledger";
 import {readJsonBody,readTextBody} from "@/lib/server/request-body";
 import { NextResponse, after } from "next/server";
@@ -29,9 +30,12 @@ export async function GET(request: Request, { params }: Context) {
       const target=await db.collection("rooms").findOne({_id:targetId});
       if(!segment||!target||!await canReadRoom(target as never,user.id))return NextResponse.json({error:"Room not found"},{status:404});
     }
+    const findings=await db.collection('findings').find({inspectionId:inspection._id,kind:'damage'}).toArray();
+    const grouped=await groupedDamage(db,inspection._id,findings,markers);
+    const displayedMarkers=canonicalMarkers(markers,grouped);
     const manifest=capture?.manifest;
     const scoped=manifest&&segment?{...manifest,frames:manifest.frames.filter((f:{timestamp:number})=>f.timestamp>=segment.startTime&&f.timestamp<segment.endTime)}:manifest;
-    return NextResponse.json({ capture: capture ? { manifest: scoped, createdAt: capture.createdAt } : null, markers: markers.map(m => ({ id: String(m._id), position: m.position, label: m.label, elementId: m.elementId, findingId: m.findingId || null, reviewStatus: m.reviewStatus, version: m.version })) });
+    return NextResponse.json({ capture: capture ? { manifest: scoped, createdAt: capture.createdAt } : null, markers: displayedMarkers.map(m => ({ id: String(m._id), position: m.position, label: m.label, elementId: m.elementId, findingId: m.findingId || null, reviewStatus: m.reviewStatus, version: m.version })) });
   } catch (e) { return errorResponse(e, "spatial.read"); }
 }
 export async function POST(request: Request, { params }: Context) {

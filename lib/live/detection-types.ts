@@ -3,5 +3,5 @@ export type LiveBox = { x: number; y: number; width: number; height: number };
 export type LiveDetection = { objectId: string; label: string; classId: number; confidence: number; boundingBox: LiveBox };
 export type TrackedObject = LiveDetection & { firstSeenSeconds: number; lastSeenSeconds: number; observations: number };
 export type LiveAnalysisObject = Pick<LiveDetection, 'objectId'|'label'|'classId'|'boundingBox'>;
-export type LiveDamageFinding = { id: string; parentObjectId: string|null; label: string; description: string; boundingBox: LiveBox|null; timestampSeconds: number; damageType: string; source: 'ai'; detectionSource?:'gemini'|'crack-model' };
+export type LiveDamageFinding = Pick<import("../damage-identity").DamageEvidence,"viewSignature"|"cropSignature"|"objectBoundingBox"> & { id: string; parentObjectId: string|null; label: string; description: string; boundingBox: LiveBox|null; timestampSeconds: number; damageType: string; source: 'ai'; detectionSource?:'gemini'|'crack-model' };
 export type LiveAnalysisResult = { analysisWarnings?:string[]; evidenceFrameRef: string; sourceWidth: number; sourceHeight: number; findings: LiveDamageFinding[]; analyzedObjectIds: string[]; surfacesAnalyzed: boolean };

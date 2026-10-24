@@ -53,3 +53,8 @@ test('loose-item batch overlays use the source photo rather than a different fra
  const batches=batchSummaries([frame('done',{objects}),frame('done',{timestampSeconds:2,objects:[],views:[]})]);
  assert.deepEqual(batches[0].objects,objects);assert.equal(batches[0].timestampSeconds,1);
 });
+test('batch counts use distinct damage identities and distinguish already-noted marks from new findings',()=>{
+ const batches=batchSummaries([frame('done',{timestampSeconds:1,findingIds:['scuff'],newFindingIds:['scuff'],findings:1}),frame('done',{timestampSeconds:2,findingIds:['scuff'],newFindingIds:[],findings:0})]);
+ assert.equal(batches[0].findingCount,1);assert.equal(batches[0].newFindingCount,1);
+ const repeated=batchSummaries([frame('done',{findingIds:['scuff'],newFindingIds:[],findings:0})])[0];assert.equal(repeated.status,'findings');assert.equal(repeated.newFindingCount,0);assert.equal(repeated.findingCount,1);
+});

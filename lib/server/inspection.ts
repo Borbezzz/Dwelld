@@ -1,3 +1,4 @@
+import {damageViewSignature,damageCropSignature} from "./damage-signature";
 import { readMedia, writeMedia, deleteMedia, parseMediaId } from "./media";
 import { videoSampleTimes } from "../video-sampling";
 import { createHash, randomUUID } from "node:crypto";
@@ -10,7 +11,7 @@ export type { Box } from "./damage";
 export type ClientDetection = { objectId: string; label: string; boundingBox: Box; classId?: number; confidence?: number };
 export type ClientFrameDetections = { timestampSeconds: number; detections: ClientDetection[] };
 export type AnalyzedFinding = {
-  kind: "object" | "damage"; label: string; description: string; timestampSeconds: number;
+  viewSignature?:string;cropSignature?:string;objectBoundingBox?:Box|null; kind: "object" | "damage"; label: string; description: string; timestampSeconds: number;
   boundingBox: Box | null; originalVideoBoundingBox: Box | null;
   localizationStatus: "localized" | "uncertain"; objectLabel: string | null;
   evidenceFrameUrl: string | null; reviewStatus: "unreviewed";
@@ -189,11 +190,12 @@ export async function analyzeVideo(videoUrl: string, mimeType: string, clientFra
           const base = { timestampSeconds:frame.timestampSeconds, evidenceFrameUrl:frame.ref, originalVideoBoundingBox:null, reviewStatus:'unreviewed' as const, localizationStatus:'localized' as const, objectLabel:null, parentDetectionId:null };
           if (frame === extracted[0]) (supplemental || []).forEach((d,i)=>findings.push({...base, kind:'object', label:d.label, description:`${d.description} (Gemini-assisted observation; requires review.)`, boundingBox:d.boundingBox, detectionSource:'gemini', detectionId:`${key}_supplemental_${i}`}));
           (damage?.objects?.get(frame.timestampSeconds)||[]).forEach((d,i)=>findings.push({...base,kind:'object',label:d.label,description:`${d.description} (Argon source-view observation; repeated views may show the same item.)`,boundingBox:d.boundingBox,detectionSource:'gemini',detectionId:`${key}_loose_${i}`}));
-          (damage?.get(frame.timestampSeconds) || []).forEach((d,i)=>{
+          const viewSignature=await damageViewSignature(frame.image);
+          for(const [i,d] of (damage?.get(frame.timestampSeconds)||[]).entries()){
             const box=d.boundingBox;
             const owner=box?frame.detections.filter(o=>box.x+box.width/2>=o.boundingBox.x&&box.x+box.width/2<=o.boundingBox.x+o.boundingBox.width&&box.y+box.height/2>=o.boundingBox.y&&box.y+box.height/2<=o.boundingBox.y+o.boundingBox.height).sort((a,b)=>a.boundingBox.width*a.boundingBox.height-b.boundingBox.width*b.boundingBox.height)[0]:null;
-            findings.push({...base, kind:'damage', label:d.type, description:d.description, boundingBox:box, localizationStatus:box?'localized':'uncertain', detectionSource:'gemini', detectionId:`${key}_damage_${i}`, parentDetectionId:owner?seenObjects.get(owner.objectId)||null:null, objectLabel:owner?.label||null});
-          });
+            findings.push({...base,viewSignature,cropSignature:await damageCropSignature(frame.image,box),objectBoundingBox:owner?.boundingBox, kind:'damage', label:d.type, description:d.description, boundingBox:box, localizationStatus:box?'localized':'uncertain', detectionSource:'gemini', detectionId:`${key}_damage_${i}`, parentDetectionId:owner?seenObjects.get(owner.objectId)||null:null, objectLabel:owner?.label||null});
+          }
 
         }
         processedFrames+=batch.length;

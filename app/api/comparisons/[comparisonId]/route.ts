@@ -1,3 +1,4 @@
+import {groupedComparison} from "@/lib/server/comparison-dedup";
 import {readJsonBody} from "@/lib/server/request-body";
 import { ObjectId } from "mongodb";
 import { NextResponse } from "next/server";
@@ -25,8 +26,8 @@ export async function PATCH(request:Request,{params}:{params:Promise<{comparison
   if(baseline&&current){await db.collection<{_id:string;ownerId:string;roomId:ObjectId;comparisonId:ObjectId;changeId:string;baselineFindingId:string;currentFindingId:string;baselineInspectionId:ObjectId;currentInspectionId:ObjectId;kind:string;active:boolean;updatedAt:Date}>("observationCorrespondences").updateOne({_id:`${id}:${changeId}`},{$set:{ownerId:record.ownerId,roomId:record.roomId,comparisonId:id,changeId,baselineFindingId:baseline.id,currentFindingId:current.id,baselineInspectionId:record.baselineInspectionId,currentInspectionId:record.currentInspectionId,kind:baseline.kind===current.kind?baseline.kind:"mixed",active:status==="confirmed",updatedAt:new Date()}},{upsert:true,session});}
   await db.collection("inspections").updateOne({_id:record.currentInspectionId,"reportComparison.id":String(id)},{$set:{"reportComparison.flags":record.changes.filter(c=>c.reviewStatus!=="rejected"&&["missing_or_changed","potentially_new","uncertain"].includes(c.category))}},{session});
   return record;
- });if(!result)return NextResponse.json({error:"Comparison not found"},{status:404});return NextResponse.json({comparison:{...result,id:String(result._id)}});
+ });if(!result)return NextResponse.json({error:"Comparison not found"},{status:404});return NextResponse.json({comparison:{...await groupedComparison(db,result),id:String(result._id)}});
  }finally{await session.endSession();}
  }catch(e){return errorResponse(e,"comparison.review");}}
 
-export async function GET(request:Request,{params}:{params:Promise<{comparisonId:string}>}){try{const user=await requireUser(request);const id=parseObjectId((await params).comparisonId);const record=id?await(await getDb()).collection("comparisons").findOne({_id:id}):null;const room=record?await(await getDb()).collection("rooms").findOne({_id:record.roomId}):null;if(!record||!room||!await canReadRoom(room as never,user.id))return NextResponse.json({error:"Comparison not found"},{status:404});return NextResponse.json({comparison:{...record,id:String(record._id)}});}catch(e){return errorResponse(e,"comparison.read");}}
+export async function GET(request:Request,{params}:{params:Promise<{comparisonId:string}>}){try{const user=await requireUser(request);const id=parseObjectId((await params).comparisonId);const record=id?await(await getDb()).collection("comparisons").findOne({_id:id}):null;const room=record?await(await getDb()).collection("rooms").findOne({_id:record.roomId}):null;if(!record||!room||!await canReadRoom(room as never,user.id))return NextResponse.json({error:"Comparison not found"},{status:404});return NextResponse.json({comparison:{...await groupedComparison(await getDb(),record),id:String(record._id)}});}catch(e){return errorResponse(e,"comparison.read");}}

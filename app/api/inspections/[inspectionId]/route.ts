@@ -1,3 +1,5 @@
+import {groupedReportFlags} from "@/lib/server/comparison-dedup";
+import {groupedDamage} from "@/lib/server/damage-groups";
 import {recoverStalledInspection} from "@/lib/server/processing-recovery";
 import { requireUser, requireOwnedInspection } from "@/lib/server/access";
 import { canReadRoom,requireReadableInspection } from "@/lib/server/space-access";
@@ -27,9 +29,10 @@ export async function GET(request: Request, { params }: { params: Promise<{ insp
     }
     await recoverStalledInspection(db,inspection);
     const findingFilter={inspectionId:id,reportEntry:{$ne:true},...(segment?{timestampSeconds:{$gte:segment.startTime,$lt:segment.endTime}}:{})};
-    const findings = await db.collection("findings").find(findingFilter).sort({ createdAt: 1 }).toArray();
+    const rawFindings = await db.collection("findings").find(findingFilter).sort({ createdAt: 1 }).toArray();
+    const findings=await groupedDamage(db,id,rawFindings);
     const serializedFindings = findings.map((f) => ({
-      visualCheck:f.visualCheck, id: String(f._id), kind: f.kind, label: f.label, description: f.description,
+      evidenceObservations:f.evidenceObservations,sourceObservationIds:f.sourceObservationIds,visualCheck:f.visualCheck, id: String(f._id), kind: f.kind, label: f.label, description: f.description,
       timestampSeconds: f.timestampSeconds, evidenceFrameUrl: f.evidenceFrameUrl,
       detectionSource: f.detectionSource === "yolo" || f.detectionSource === "gemini" || f.detectionSource === "crack-model" || f.detectionSource === "roomplan" ? f.detectionSource : undefined,
       visibilityIntervals: f.visibilityIntervals, userNote:f.userNote, boundingBox: f.boundingBox ?? null, point: f.point ?? null, source: f.source ?? "ai", damageType: f.damageType ?? null, reviewStatus: f.reviewStatus, uncertain: !f.boundingBox && !f.point,
@@ -48,7 +51,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ insp
         scanReportStatus: inspection.scanReportStatus,
         scanReport: segment ? null : inspection.scanReport ?? null,
         scanReportError: inspection.scanReportError ?? null,
-        reportComparison: segment ? null : inspection.reportComparison ?? null,
+        reportComparison: segment ? null : await groupedReportFlags(db,inspection.reportComparison),
         reportComparisonError: inspection.reportComparisonError ?? null,
         analysisRunId: inspection.analysisRunId ?? null,
         analysisProgress: inspection.analysisProgress ?? null,

@@ -44,3 +44,15 @@ test('still-photo boxes appear only on their exact source second, never an adjac
  assert.deepEqual(findingsForSourceFrame(list,1.5).map(f=>f.id),['nearby']);
  assert.equal(findingsForSourceFrame(list,1.2).length,0);
 });
+test('one damage identity shows only its own supporting source box at each timestamp, with one timeline entry',()=>{
+ const f={...finding('scuff',1),boundingBox:{x:.1,y:.1,width:.1,height:.1},evidenceObservations:[{timestampSeconds:1,evidenceFrameUrl:'photo-a',boundingBox:{x:.1,y:.1,width:.1,height:.1}},{timestampSeconds:2,evidenceFrameUrl:'photo-b',boundingBox:{x:.6,y:.6,width:.1,height:.1}}]};
+ assert.equal(timelineGroups([f]).length,1);assert.equal(findingsAtTime([f],2)[0].id,'scuff');assert.equal(findingsAtTime([f],2)[0].boundingBox.x,.6);assert.equal(findingsAtTime([f],2)[0].evidenceFrameUrl,'photo-b');assert.equal(findingsAtTime([f],3).length,0);
+});
+test('video checkpoint repeats update supporting evidence rather than creating new damage or resetting review',async()=>{
+ const {ObjectId}=require('mongodb'),docs=[];
+ const damage=(id,t)=>({kind:'damage',label:'scuff',detectionId:id,parentDetectionId:null,timestampSeconds:t,viewSignature:'80'.repeat(256),boundingBox:{x:.2,y:.3,width:.1,height:.1},evidenceFrameUrl:'photo-'+t});
+ const db={collection:name=>name==='findings'?{insertMany:async rows=>docs.push(...rows),updateOne:async(q,u)=>Object.assign(docs.find(f=>String(f._id)===String(q._id)),u.$set)}:{updateOne:async()=>{}}};
+ const {runVideoInspection}=load('lib/server/run-video-inspection.ts',{'./inspection':{analyzeVideo:async(url,mime,frames,publish)=>{const point={phase:'checking',durationSeconds:3,totalFrames:2,processedFrames:1,findings:[damage('first',1)],evidenceFrames:[],analysisRunId:'test',warnings:[]};await publish(point);docs[0].reviewStatus='confirmed';await publish({...point,processedFrames:2,findings:[...point.findings,damage('second',2)]});return {...point,findings:[]};}},'./verify':{autoReviewInspection:async()=>null},'./scan-report':{finishScanReport:async()=>{}},'./search':{indexFindings:async()=>{}},'./api-error':{reportError:e=>{throw e;}}});
+ await runVideoInspection(db,new ObjectId(),'owner',new ObjectId(),'video','video/mp4',[]);
+ assert.equal(docs.length,1);assert.equal(docs[0].reviewStatus,'confirmed');assert.equal(docs[0].evidenceObservations.length,2);assert.deepEqual(docs[0].sourceObservationIds,['first','second']);
+});

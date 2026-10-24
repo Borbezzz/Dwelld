@@ -1,3 +1,4 @@
+import {canonicalDamageFindings,sameDamage,damageEvidence} from "../damage-identity";
 import {representativeLooseViews, type LooseView} from "./loose-inventory";
 import { retryAnalysis } from "./analysis-retry";
 import { finishScanReport } from "./scan-report";
@@ -64,14 +65,17 @@ export async function analyzeLiveEvidenceFrame(sessionId: ObjectId, _name: strin
           const assessed=outcome.assessed;
           for (const { frame, result } of assessed) {
             await db.collection('liveEvidence').updateOne({ sessionId, observationId: `frame-${frame.name}` }, { $setOnInsert: { sessionId, observationId: `frame-${frame.name}`, ref: frame.ref, createdAt: new Date() } }, { upsert: true });
+            const findingIds:string[]=[],newFindingIds:string[]=[];
             for (const f of result.findings) {
-              const previous = f.worldPosition && f.elementId ? await db.collection('liveFindings').find({ sessionId, damageType: f.damageType, elementId: f.elementId, worldPosition: { $exists: true }, reviewStatus: { $ne: 'rejected' } }).toArray() : [];
-              if (previous.some(p => p.worldPosition && Math.hypot(...f.worldPosition!.map((n, i) => n - p.worldPosition[i])) < .12)) continue;
+              const previous=await db.collection('liveFindings').find({sessionId,kind:'damage',source:{$ne:'manual'}}).toArray();
+              const candidate={...f,kind:'damage',timestampSeconds:frame.timestampSeconds,evidenceFrameUrl:frame.ref};
+              const duplicate=previous.find(p=>sameDamage(p,candidate));
+              if(duplicate){findingIds.push(duplicate.id);await db.collection('liveFindings').updateOne({sessionId,id:duplicate.id},{$addToSet:{evidenceObservations:{$each:[damageEvidence(duplicate),damageEvidence(candidate)]}}});continue;}
               // Frame id + index also prevents a retry from duplicating this same observation.
-              const id = `${frame._id}-${result.findings.indexOf(f)}`;
-              await db.collection('liveFindings').updateOne({ sessionId, id }, { $setOnInsert: { ...f, id, sessionId, kind: 'damage', source: 'ai', frameName: frame.name, evidenceFrameRef: frame.ref, timestampSeconds: frame.timestampSeconds, pose: frame.pose, createdAt: new Date(), reviewHistory: [] } }, { upsert: true });
+              const id = `${frame._id}-${result.findings.indexOf(f)}`;findingIds.push(id);newFindingIds.push(id);
+              await db.collection('liveFindings').updateOne({ sessionId, id }, { $setOnInsert: { ...f,evidenceObservations:[damageEvidence(candidate)], id, sessionId, kind: 'damage', source: 'ai', frameName: frame.name, evidenceFrameRef: frame.ref, timestampSeconds: frame.timestampSeconds, pose: frame.pose, createdAt: new Date(), reviewHistory: [] } }, { upsert: true });
             }
-            await frames.updateOne({ _id: frame._id }, { $set: { status: 'done', views: result.views, objects:(result.objects||[]).map((o,i)=>({...o,id:`argon-${frame.name}-${i}`,label:`${o.label} · Argon`})), findings: result.findings.length, observations:result.findings.map(f=>({label:f.label,description:f.description,boundingBox:f.boundingBox,point:null})), warnings: result.warnings, finishedAt: new Date() } });
+            await frames.updateOne({ _id: frame._id }, { $set: { status: 'done', views: result.views, objects:(result.objects||[]).map((o,i)=>({...o,id:`argon-${frame.name}-${i}`,label:`${o.label} · Argon`})), findingIds,newFindingIds,findings:newFindingIds.length, observations:result.findings.map(f=>({label:f.label,description:f.description,boundingBox:f.boundingBox,point:null})), warnings: result.warnings, finishedAt: new Date() } });
           }
         } catch(error){
           waveFailed=true;
@@ -130,13 +134,13 @@ export async function analyzeNativeInspection(inspection: Document, manifest: Sp
     const liveFrames = sessionId ? (await db.collection("liveFrames").find({ sessionId, status: "done" }).toArray()).map<Document>(f=>({...f,timestampSeconds:f.timestampSeconds+(options.timestampOffset||0)})) : [];
     const liveFindings = sessionId ? await db.collection("liveFindings").find({ sessionId, source: "ai", frameName: { $in: liveFrames.map(f => f.name) } }).toArray() : [];
     const looseViews:LooseView[]=liveFrames.map(f=>({ref:f.ref,timestampSeconds:f.timestampSeconds,objects:(f.objects||[]).map((o:{label:string})=>({...o,label:o.label.replace(/ · Argon$/,'')}))}));
-    const collected: (FrameFinding & { ref: string; timestampSeconds: number; liveId?: string })[] = [];
+    const collected: (FrameFinding & { ref: string; timestampSeconds: number; liveId?: string;groupId?:string })[] = [];
     // Reuse what the scan already found.
     for (const f of liveFindings) if (f.reviewStatus !== "rejected") {
       // RoomPlan may not have recognized this furniture when the live photo was first checked.
       // Reproject using THAT photo's calibrated pose against the final room, without another AI call.
       const located = f.pose ? localizeDamageBox(f.boundingBox, f.pose, elements as RoomElement[], true) : null;
-      collected.push({ ...(f as unknown as FrameFinding), ...(located ? { elementId: located.owner?.id ?? null, elementCategory: located.owner?.category ?? 'unassigned', worldPosition: located.worldPosition } : {}), ref: f.evidenceFrameRef, timestampSeconds: f.timestampSeconds + (options.timestampOffset||0), liveId: f.id, reviewStatus: f.reviewStatus });
+      collected.push({ ...(f as unknown as FrameFinding), ...(located ? { elementId: located.owner?.id ?? null, elementCategory: located.owner?.category ?? 'unassigned', worldPosition: located.worldPosition } : {}), ref: f.evidenceFrameRef, timestampSeconds: f.timestampSeconds + (options.timestampOffset||0), liveId: f.id,groupId:f.id, reviewStatus: f.reviewStatus });
     }
     // Check all remaining evidence in timestamped batches, rather than running separate calls per crop.
     const sampled = oneFramePerSecond(manifest.frames.map(fr => ({ ...fr, timestampSeconds: fr.timestamp })));
@@ -162,9 +166,17 @@ export async function analyzeNativeInspection(inspection: Document, manifest: Sp
           const assessed=await retryAnalysis(()=>analyzeFurnitureVideoFrames(inputs,elements as RoomElement[]),{deadlineMs:deadline,onRetry:async(attempt,message)=>{if(sessionId)await db.collection('liveFrames').updateMany({sessionId,batchId,status:'analyzing'},{$set:{attempt,retryMessage:message}});}});
           for (const { frame: { fr }, result } of assessed) {
             looseViews.push({ref:imageRef(fr.image)!,timestampSeconds:fr.timestamp,objects:result.objects||[]});
-            result.findings.forEach(f => collected.push({ ...f, ref: imageRef(fr.image)!, timestampSeconds: fr.timestamp })); analysed++;
+            const findingIds:string[]=[],newFindingIds:string[]=[];
+            for(const [index,f] of result.findings.entries()){
+              const candidate={...f,kind:'damage',ref:imageRef(fr.image)!,timestampSeconds:fr.timestamp};
+              const previous=collected.find(p=>sameDamage(p,candidate));
+              const groupId=previous?.groupId||`${batchId}-${fr.image}-${index}`;
+              findingIds.push(groupId);if(!previous)newFindingIds.push(groupId);
+              collected.push({...f,ref:imageRef(fr.image)!,timestampSeconds:fr.timestamp,groupId});
+            }
+            analysed++;
             warnings.push(...result.warnings);
-            if (sessionId) await db.collection('liveFrames').updateOne({sessionId,name:fr.image},{$set:{status:'done',ref:imageRef(fr.image),timestampSeconds:fr.timestamp,finishedAt:new Date(),warnings:result.warnings,views:result.views,objects:(result.objects||[]).map((o,i)=>({...o,id:`argon-${fr.image}-${i}`,label:`${o.label} · Argon`})),findings:result.findings.length,observations:result.findings.map(f=>({label:f.label,description:f.description,boundingBox:f.boundingBox}))}},{upsert:true});
+            if (sessionId) await db.collection('liveFrames').updateOne({sessionId,name:fr.image},{$set:{status:'done',ref:imageRef(fr.image),timestampSeconds:fr.timestamp,finishedAt:new Date(),warnings:result.warnings,views:result.views,objects:(result.objects||[]).map((o,i)=>({...o,id:`argon-${fr.image}-${i}`,label:`${o.label} · Argon`})),findingIds,newFindingIds,findings:newFindingIds.length,observations:result.findings.map(f=>({label:f.label,description:f.description,boundingBox:f.boundingBox}))}},{upsert:true});
           }
         } catch (error) {
           logAIFailure('saved.batch', error);
@@ -180,15 +192,11 @@ export async function analyzeNativeInspection(inspection: Document, manifest: Sp
     if(failedWorker)throw failedWorker.reason;
     if (skipped) warnings.push(`${skipped} photos were not analysed because analysis was unavailable or its time budget ran out.`);
     // Repeated views of the same measured mark are a single finding, not new damage each second.
-    const unique: typeof collected = [];
-    for (const f of collected.sort((a,b)=>a.timestampSeconds-b.timestampSeconds)) {
-      if (f.worldPosition && f.elementId && unique.some(p => p.worldPosition && p.elementId === f.elementId && p.damageType === f.damageType && Math.hypot(...f.worldPosition!.map((n, i) => n - p.worldPosition![i])) < .12)) continue;
-      unique.push(f);
-    }
+    const unique=canonicalDamageFindings(collected.sort((a,b)=>a.timestampSeconds-b.timestampSeconds).map(f=>({...f,kind:'damage',evidenceFrameUrl:f.ref})));
     // Damage findings and their 3D markers.
     for (const f of unique) {
       const id = new ObjectId(), elementId = ownerFor(f, elements);
-      await db.collection("findings").insertOne({ ...base, _id: id, kind: "damage", label: f.label, description: f.description, damageType: f.damageType, evidenceFrameUrl: f.ref, boundingBox: f.boundingBox, timestampSeconds: f.timestampSeconds, source: "ai", detectionSource: f.detectionSource, spatialElementId: elementId, reviewStatus: f.reviewStatus, autoApproved: !!f.autoApproved, ...(f.confidence != null ? { confidence: f.confidence } : {}), ...(f.verification ? { verification: { ...f.verification, model: process.env.GEMINI_VERIFY_MODEL || process.env.GEMINI_MODEL || "gemini-4-argon", at: new Date() } } : {}), reviewHistory: f.autoApproved ? [{ from: "pending", to: "confirmed", at: new Date(), by: "auto-verifier", confidence: f.verification?.confidence }] : [], ...(f.liveId ? { liveFindingId: f.liveId } : {}), createdAt: new Date() });
+      await db.collection("findings").insertOne({ ...base, _id: id, kind: "damage",worldPosition:f.worldPosition,elementId:f.elementId,viewSignature:f.viewSignature,cropSignature:f.cropSignature,objectBoundingBox:f.objectBoundingBox,evidenceObservations:f.evidenceObservations,sourceObservationIds:f.sourceObservationIds, label: f.label, description: f.description, damageType: f.damageType, evidenceFrameUrl: f.ref, boundingBox: f.boundingBox, timestampSeconds: f.timestampSeconds, source: "ai", detectionSource: f.detectionSource, spatialElementId: elementId, reviewStatus: f.reviewStatus, autoApproved: !!f.autoApproved, ...(f.confidence != null ? { confidence: f.confidence } : {}), ...(f.verification ? { verification: { ...f.verification, model: process.env.GEMINI_VERIFY_MODEL || process.env.GEMINI_MODEL || "gemini-4-argon", at: new Date() } } : {}), reviewHistory: f.autoApproved ? [{ from: "pending", to: "confirmed", at: new Date(), by: "auto-verifier", confidence: f.verification?.confidence }] : [], ...(f.liveId ? { liveFindingId: f.liveId } : {}), createdAt: new Date() });
       if (f.worldPosition) await db.collection("spatialMarkers").insertOne({ ...base, sessionId: manifest.sessionId, findingId: String(id), position: f.worldPosition, label: f.description || f.label, elementId, reviewStatus: f.reviewStatus, version: 1, source: "photo-projection", createdAt: new Date(), reviewHistory: [{ action: "projected", at: new Date() }] });
     }
     // Where each piece of furniture was seen best.

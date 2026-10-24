@@ -38,7 +38,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ in
     if (!updated) return NextResponse.json({ error: "Finding not found" }, { status: 404 });
     await db.collection("spatialMarkers").updateMany({ inspectionId: inspectionObjectId, findingId: String(findingObjectId), deletedAt: { $exists: false } }, { $set: { reviewStatus: body.reviewStatus }, $inc: { version: 1 }, $push: { reviewHistory: { action: body.reviewStatus, at: new Date(), by: user.id, via: "finding" } } } as never);
     return NextResponse.json({ finding: {
-      id: String(updated._id), kind: updated.kind, label: updated.label, description: updated.description,
+      evidenceObservations:updated.evidenceObservations,sourceObservationIds:updated.sourceObservationIds,id: String(updated._id), kind: updated.kind, label: updated.label, description: updated.description,
       userNote:updated.userNote,visibilityIntervals:updated.visibilityIntervals,spatialElementId:updated.spatialElementId, timestampSeconds: updated.timestampSeconds, evidenceFrameUrl: updated.evidenceFrameUrl,
       detectionSource: updated.detectionSource === "yolo" || updated.detectionSource === "gemini" || updated.detectionSource === "crack-model" || updated.detectionSource === "roomplan" ? updated.detectionSource : undefined,
       boundingBox: updated.boundingBox ?? null, point: updated.point ?? null, source: updated.source ?? "ai", damageType: updated.damageType ?? null, reviewStatus: updated.reviewStatus,
