@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import BrandLogo from "./brand-logo";
 import {authClient} from "@/lib/auth-client";
 import { useEffect, useState } from "react";
 import { ArrowUpRight } from "lucide-react";
@@ -31,7 +32,7 @@ export default function Dashboard() {
 
   return <main className={`landing ${session?"landing-account":""}`}>
     <header className="landing-header">
-      <Link href="/" className="landing-wordmark" aria-label="Dwelld home">dwelld.</Link>
+      <BrandLogo linked />
       <nav aria-label="Main navigation"><a href="#spaces">Your spaces</a><a href="#history">History</a><Link href={session?"/profile":"/sign-in"}>{session?"Profile":"Sign in"}</Link></nav>
     </header>
 
@@ -64,6 +65,6 @@ export default function Dashboard() {
     </section>
 
     <details className="landing-search"><summary>Find something in your records <span aria-hidden="true">+</span></summary><FindingsSearch rooms={rooms}/></details>
-    </>}<footer className="landing-footer"><span className="landing-wordmark">dwelld.</span><p>Your room remembers.</p><a href="#landing-title">Back to top ↑</a></footer>
+    </>}<footer className="landing-footer"><BrandLogo compact /><p>Your room remembers.</p><a href="#landing-title">Back to top ↑</a></footer>
   </main>;
 }
