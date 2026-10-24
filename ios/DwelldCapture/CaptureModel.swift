@@ -259,7 +259,7 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
             await previous?.value
             for (name, type) in files {
                 guard let self, self.preUploaded[name] == nil else { continue }
-                if let ref = try? await self.uploadNow(name, contentType: type) { self.preUploaded[name] = ref; self.sentDuringScan += 1 }
+                do { let ref = try await self.uploadNow(name, contentType: type); self.preUploaded[name] = ref; self.sentDuringScan += 1 } catch { /* Retried at Finish. */ }
             }
             // The photo is on the server: ask for it to be analysed against the measured furniture now.
             if let self, let evidence, let ref = self.preUploaded[evidence.image] { await self.requestAnalysis(evidence, ref: ref) }
@@ -270,7 +270,7 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
         request.setValue("Bearer \(phoneToken)", forHTTPHeaderField: "Authorization"); request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let body: [String: Any] = ["name": f.image, "ref": ref, "timestampSeconds": f.timestamp, "pose": ["transform": f.transform, "intrinsics": f.intrinsics, "width": f.width, "height": f.height]]
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        _ = try? await URLSession.shared.data(for: request)
+        do { _ = try await URLSession.shared.data(for: request) } catch { /* Analysis also runs after saving. */ }
     }
     /// Camera movement between two consecutive frames: metres moved plus half the radians turned.
     private func motion(from previous: [Float]?, to current: simd_float4x4) -> Float {
