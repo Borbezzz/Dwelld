@@ -1,4 +1,5 @@
 import {readJsonBody} from "@/lib/server/request-body";
+import { canReadRoom } from "@/lib/server/space-access";
 import { requireUser } from "@/lib/server/access";
 import { errorResponse } from "@/lib/server/api-error";
 import { ObjectId } from "mongodb";
@@ -13,9 +14,9 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 
-function serializeInspection(doc: Record<string, any>) {
+function serializeInspection(doc: Record<string, any>, viewerId: string) {
   return {
-    id: String(doc._id), roomId: String(doc.roomId), status: doc.status, type: doc.type || "move-in",
+    id: String(doc._id), roomId: String(doc.roomId), status: doc.status, type: doc.type || "move-in", isOwner: doc.ownerId===viewerId,
     createdAt: new Date(doc.createdAt).toISOString(),
     videoUrl: "/api/inspections/" + String(doc._id) + "/video",
   };
@@ -30,8 +31,19 @@ export async function GET(request: Request) {
     if (roomParam && !roomId) return NextResponse.json({ error: "Invalid roomId" }, { status: 400 });
     const db = await getDb();
     await ensureIndexes(db);
-    const docs = await db.collection("inspections").find({ownerId:user.id,...(roomId ? {roomId} : {})}).sort({ createdAt: -1 }).limit(100).toArray();
-    return NextResponse.json({ inspections: docs.map(serializeInspection) });
+    const memberships=await db.collection("spaceMembers").find({userId:user.id},{projection:{spaceId:1}}).toArray();
+    const ownedSpaces=await db.collection("spaces").find({ownerId:user.id},{projection:{_id:1}}).toArray();
+    const visibleSpaceIds=[...ownedSpaces.map(s=>s._id),...memberships.map(m=>m.spaceId)];
+    const sharedRooms=visibleSpaceIds.length?await db.collection("rooms").find({spaceId:{$in:visibleSpaceIds}},{projection:{_id:1}}).toArray():[];
+    const accessible=[...sharedRooms.map(r=>r._id),...(await db.collection("rooms").find({ownerId:user.id},{projection:{_id:1}}).toArray()).map(r=>r._id)];
+    const docs = await db.collection("inspections").find({$or:[{ownerId:user.id},{roomId:{$in:accessible}}],...(roomId ? {roomId} : {})}).sort({ createdAt: -1 }).limit(100).toArray();
+    const segments=accessible.length?await db.collection("roomScanSegments").find({roomId:{$in:accessible},...(roomId?{roomId}:{})}).limit(100).toArray():[];
+    const sources=segments.length?await db.collection("inspections").find({_id:{$in:segments.map(s=>s.sourceInspectionId)}}).toArray():[];
+    const virtual=segments.flatMap(s=>{const source=sources.find(i=>String(i._id)===String(s.sourceInspectionId));if(!source||String(source.roomId)===String(s.roomId))return [];
+      return [{...serializeInspection(source,user.id),roomId:String(s.roomId),virtual:true,segment:{startTime:s.startTime,endTime:s.endTime}}];
+    });
+    const inspections=[...docs.map(d=>serializeInspection(d,user.id)),...virtual].sort((a,b)=>+new Date(b.createdAt)-+new Date(a.createdAt)).slice(0,100);
+    return NextResponse.json({inspections},{headers:{"Cache-Control":"private, no-store"}});
   } catch (error) { return errorResponse(error, "app/api/inspections/route.ts"); }
 }
 
@@ -60,8 +72,8 @@ export async function POST(request: Request) {
     catch { return NextResponse.json({ error: "Invalid browser detection frames" }, { status: 400 }); }
     const db = await getDb();
     await ensureIndexes(db);
-    const room = await db.collection("rooms").findOne({ _id: roomId, ownerId:user.id }, { projection: { _id: 1 } });
-    if (!room) return NextResponse.json({ error: "Room not found" }, { status: 404 });
+    const room = await db.collection("rooms").findOne({ _id: roomId });
+    if (!room || !await canReadRoom(room as never,user.id)) return NextResponse.json({ error: "Room not found" }, { status: 404 });
     const inspections = db.collection("inspections");
     const inspectionId = new ObjectId();
     const createdAt = new Date();

@@ -1,3 +1,4 @@
+import { requireReadableInspection } from "@/lib/server/space-access";
 import { requireUser } from "@/lib/server/access";
 import { errorResponse } from "@/lib/server/api-error";
 import { mediaResponse, parseMediaId } from "@/lib/server/media";
@@ -13,7 +14,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ insp
   if (!id) return new NextResponse("Not found", { status: 404 });
   try {
     const user = await requireUser(request);
-    const inspection = await (await getDb()).collection("inspections").findOne({ _id: id, ownerId:user.id }, { projection: { sourceUrl: 1, videoMimeType: 1 } });
+    const inspection = await requireReadableInspection(id,user.id);
     if (!inspection || typeof inspection.sourceUrl !== "string") return new NextResponse("Not found", { status: 404 });
     if (!parseMediaId(inspection.sourceUrl)) return new NextResponse("Not found", { status: 404 });
     return await mediaResponse(inspection.sourceUrl, request);

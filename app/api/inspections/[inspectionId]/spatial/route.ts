@@ -1,7 +1,8 @@
 import {readJsonBody,readTextBody} from "@/lib/server/request-body";
 import { NextResponse, after } from "next/server";
 import { analyzeSpatialInspection } from "@/lib/server/spatial-analysis";
-import { getDb } from "@/lib/server/db";
+import {canReadRoom,requireReadableInspection} from "@/lib/server/space-access";
+import { getDb,parseObjectId } from "@/lib/server/db";
 import { requireUser, requireOwnedInspection } from "@/lib/server/access";
 import { errorResponse } from "@/lib/server/api-error";
 import { getMediaFile } from "@/lib/server/media";
@@ -13,10 +14,21 @@ type Context = { params: Promise<{ inspectionId: string }> };
 export async function GET(request: Request, { params }: Context) {
   try {
     const user = await requireUser(request), { inspectionId } = await params;
-    const inspection = await requireOwnedInspection(inspectionId, user.id), db = await getDb();
+    const id=parseObjectId(inspectionId); if(!id)return NextResponse.json({error:"Inspection not found"},{status:404});
+    const inspection = await requireReadableInspection(id, user.id), db = await getDb();
     const capture = await db.collection("spatialCaptures").findOne({ inspectionId: inspection._id });
+    const requestedRoom=new URL(request.url).searchParams.get("roomId");
+    const targetId=requestedRoom?parseObjectId(requestedRoom):inspection.roomId;
+    if(!targetId)return NextResponse.json({error:"Invalid room"},{status:400});
+    const segment=await db.collection("roomScanSegments").findOne({sourceInspectionId:inspection._id,roomId:targetId});
+    if(String(targetId)!==String(inspection.roomId)){
+      const target=await db.collection("rooms").findOne({_id:targetId});
+      if(!segment||!target||!await canReadRoom(target as never,user.id))return NextResponse.json({error:"Room not found"},{status:404});
+    }
+    const manifest=capture?.manifest;
+    const scoped=manifest&&segment?{...manifest,frames:manifest.frames.filter((f:{timestamp:number})=>f.timestamp>=segment.startTime&&f.timestamp<segment.endTime)}:manifest;
     const markers = await db.collection("spatialMarkers").find({ inspectionId: inspection._id, deletedAt: { $exists: false } }).toArray();
-    return NextResponse.json({ capture: capture ? { manifest: capture.manifest, createdAt: capture.createdAt } : null, markers: markers.map(m => ({ id: String(m._id), position: m.position, label: m.label, elementId: m.elementId, findingId: m.findingId || null, reviewStatus: m.reviewStatus, version: m.version })) });
+    return NextResponse.json({ capture: capture ? { manifest: scoped, createdAt: capture.createdAt } : null, markers: markers.map(m => ({ id: String(m._id), position: m.position, label: m.label, elementId: m.elementId, findingId: m.findingId || null, reviewStatus: m.reviewStatus, version: m.version })) });
   } catch (e) { return errorResponse(e, "spatial.read"); }
 }
 export async function POST(request: Request, { params }: Context) {
