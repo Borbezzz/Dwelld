@@ -1,13 +1,12 @@
 import {readJsonBody} from "@/lib/server/request-body";
-import {indexFindings} from "@/lib/server/search";
 import { requireUser } from "@/lib/server/access";
-import { errorResponse, reportError } from "@/lib/server/api-error";
+import { errorResponse } from "@/lib/server/api-error";
 import { ObjectId } from "mongodb";
 import { parseMediaId, getMediaFile } from "@/lib/server/media";
 import { after, NextResponse } from "next/server";
 import { getDb, ensureIndexes, parseObjectId } from "@/lib/server/db";
-import { analyzeVideo, validateDetectionFrames } from "@/lib/server/inspection";
-import { autoReviewInspection } from "@/lib/server/verify";
+import { validateDetectionFrames } from "@/lib/server/inspection";
+import { runVideoInspection } from "@/lib/server/run-video-inspection";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -72,30 +71,7 @@ export async function POST(request: Request) {
     };
     await inspections.insertOne(inspectionDoc);
 
-    after(async () => {
-      try {
-        const result = await analyzeVideo(videoUrl, mimeType, detectionFrames);
-        // Every observation has its own identity, including objects sharing a label.
-        const ids = result.findings.map(() => new ObjectId());
-        const objectIds = new Map<string, ObjectId>();
-        result.findings.forEach((finding, index) => {
-          if (finding.kind === "object" && finding.detectionId) objectIds.set(finding.detectionId, ids[index]);
-        });
-        const docs = result.findings.map((finding, index) => ({
-          _id: ids[index], ownerId:user.id, inspectionId, roomId, ...finding,
-          objectId: finding.parentDetectionId ? objectIds.get(finding.parentDetectionId) || null : null,
-          source: "ai", reviewStatus: "pending", reviewHistory: [], createdAt: new Date(),
-        }));
-        if (docs.length) await db.collection("findings").insertMany(docs);
-        const review = await autoReviewInspection(inspectionId).catch(() => null);
-        await indexFindings(user.id,inspectionId).catch(()=>{});
-        await inspections.updateOne({ _id: inspectionId }, { $set: { ...(review ? { autoReview: review } : {}), status: result.warnings.length ? "partial" : "completed", analysisWarnings: result.warnings, durationSeconds: result.durationSeconds, completedAt: new Date() } });
-      } catch (error) {
-        const failure = reportError(error, "inspection.analyze");
-        const message = `${failure.error} Request ID: ${failure.requestId}`;
-        await inspections.updateOne({ _id: inspectionId }, { $set: { status: "failed", error: message, failedAt: new Date() } });
-      }
-    });
+    after(() => runVideoInspection(db, inspectionId, user.id, roomId, videoUrl, mimeType, detectionFrames));
     return NextResponse.json({
       inspection: { id: String(inspectionId), roomId: String(roomId), status: "processing", createdAt: createdAt.toISOString(), videoUrl: "/api/inspections/" + String(inspectionId) + "/video" },
     }, { status: 201 });

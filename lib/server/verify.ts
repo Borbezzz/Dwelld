@@ -45,7 +45,7 @@ export async function verifyFinding(image: Buffer, finding: { label: string; des
  * approved automatically (recorded as the model's decision, reversible). Everything else stays
  * for the tenant, now with the verifier's verdict and confidence attached.
  */
-export async function autoReviewInspection(inspectionId: ObjectId, options: { limit?: number; concurrency?: number } = {}) {
+export async function autoReviewInspection(inspectionId: ObjectId, options: { limit?: number; concurrency?: number; timeoutMs?: number; deadlineMs?: number } = {}) {
   const db = await getDb(), threshold = autoApproveThreshold();
   const findings = await db.collection("findings").find({ inspectionId, kind: "damage", source: "ai", reviewStatus: "pending", verification: { $exists: false }, evidenceFrameUrl: { $type: "string" }, boundingBox: { $ne: null } }).limit(options.limit ?? 40).toArray();
   const images = new Map<string, Promise<Buffer>>();
@@ -53,13 +53,13 @@ export async function autoReviewInspection(inspectionId: ObjectId, options: { li
   const one = async (f: Document) => {
     try {
       const ref = String(f.evidenceFrameUrl); if (!images.has(ref)) images.set(ref, readMedia(ref, 16 * 1024 * 1024));
-      const v = await verifyFinding(await images.get(ref)!, { label: f.label, description: f.description, boundingBox: f.boundingBox });
+      const v = await verifyFinding(await images.get(ref)!, { label: f.label, description: f.description, boundingBox: f.boundingBox }, {timeoutMs:options.timeoutMs});
       const auto = v.verdict === "damage" && v.confidence >= threshold;
       checked++; if (auto) approved++;
       await db.collection("findings").updateOne({ _id: f._id, reviewStatus: "pending" }, { $set: { verification: { ...v, threshold, model: process.env.GEMINI_VERIFY_MODEL || process.env.GEMINI_MODEL || "gemini-4-argon", at: new Date() }, confidence: v.verdict === "damage" ? v.confidence : 1 - v.confidence, ...(auto ? { reviewStatus: "confirmed", autoApproved: true, reviewedAt: new Date() } : {}) }, ...(auto ? { $push: { reviewHistory: { from: "pending", to: "confirmed", at: new Date(), by: "auto-verifier", confidence: v.confidence } } } : {}) } as Document);
     } catch { /* Unverified findings simply stay pending for a person. */ }
   };
-  const queue = [...findings], workers = Array.from({ length: Math.min(options.concurrency ?? 4, queue.length) }, async () => { while (queue.length) await one(queue.shift()!); });
+  const queue = [...findings], workers = Array.from({ length: Math.min(options.concurrency ?? 4, queue.length) }, async () => { while (queue.length && Date.now() < (options.deadlineMs ?? Infinity)) await one(queue.shift()!); });
   await Promise.all(workers);
   return { checked, approved, threshold };
 }

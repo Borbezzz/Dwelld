@@ -31,6 +31,8 @@ export async function GET(request: Request, { params }: { params: Promise<{ insp
         videoUrl: "/api/inspections/" + String(inspection._id) + "/video",
         durationSeconds: inspection.durationSeconds ?? null,
         analysisWarnings: inspection.analysisWarnings ?? [],
+        evidenceFrames: inspection.evidenceFrames ?? [],
+        analysisRunId: inspection.analysisRunId ?? null,
         error: inspection.status === "failed" ? "Video analysis failed. Check service configuration and retry with a supported video." : null,
       },
       findings: serializedFindings,

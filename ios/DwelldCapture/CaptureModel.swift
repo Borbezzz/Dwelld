@@ -483,6 +483,9 @@ struct PhoneFinding: Decodable, Identifiable {
         guard !pairedSession.isEmpty else { status = "Scan your laptop inspection QR to connect before saving. No phone sign-in is required."; return }
         guard !uploadComplete else { status = "This inspection is already saved."; return }
         uploading = true
+        status = "Preparing your saved scan…"
+        pendingEvidence = nil
+        preUploadTask?.cancel()
         UIApplication.shared.isIdleTimerDisabled = true
         defer { uploading = false; UIApplication.shared.isIdleTimerDisabled = false }
         if inspectionId.isEmpty && pairedSession.isEmpty { await createInspection(base: base, roomId: roomId, type: type) }
@@ -494,11 +497,42 @@ struct PhoneFinding: Decodable, Identifiable {
         guard base.scheme == "https" else { status = "Use your HTTPS deployment for authenticated capture upload."; return }
         let cookies = await login.configuration.websiteDataStore.httpCookieStore.allCookies()
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 60; configuration.timeoutIntervalForResource = 600
+        configuration.timeoutIntervalForRequest = 30; configuration.timeoutIntervalForResource = 120
         let session = URLSession(configuration: configuration)
         defer { session.invalidateAndCancel() }
         var cookieHeader = HTTPCookie.requestHeaderFields(with: cookies.filter { base.host == $0.domain.trimmingCharacters(in: CharacterSet(charactersIn: ".")) || base.host?.hasSuffix("." + $0.domain.trimmingCharacters(in: CharacterSet(charactersIn: "."))) == true })
         if !pairedSession.isEmpty { cookieHeader = ["Authorization": "Bearer \(phoneToken)"] }
+        func finishSaved(_ id: String?) {
+            if let id, !id.isEmpty { self.inspectionId = id }
+            uploadComplete = true; uploadProgress = 1
+            if var saved = connection { saved.completed = true; connection = saved; try? CaptureConnectionStore.save(saved) }
+            status = "Saved to your laptop inspection. You can close Dwelld."
+        }
+        func checkRemoteSave() async -> Bool {
+            var check = URLRequest(url: base.appendingPathComponent("api/live/\(self.pairedSession)"))
+            check.timeoutInterval = 10
+            check.setValue("Bearer \(self.phoneToken)", forHTTPHeaderField: "Authorization")
+            do {
+                let (data, response) = try await URLSession.shared.data(for: check)
+                guard !Task.isCancelled else { return false }
+                if let http = response as? HTTPURLResponse, http.statusCode == 200,
+                   let body = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let remote = body["session"] as? [String: Any], remote["status"] as? String == "saved" {
+                    finishSaved(remote["inspectionId"] as? String); return true
+                }
+            } catch { /* The upload itself reports connection failures. */ }
+            return false
+        }
+        // Recover a lost final response without waiting for stalled asset requests.
+        let completionWatch = Task { @MainActor in
+            while !Task.isCancelled && self.uploading && !self.uploadComplete {
+                do { try await Task.sleep(for: .seconds(3)) } catch { return }
+                if await checkRemoteSave() {
+                    self.preUploadTask?.cancel(); session.invalidateAndCancel(); return
+                }
+            }
+        }
+        defer { completionWatch.cancel() }
         func request(_ path: String, method: String = "POST", data: Data, type: String = "application/json") async throws -> [String: Any] {
             var req = URLRequest(url: base.appendingPathComponent(path)); req.httpMethod = method; req.httpBody = data; req.setValue(type, forHTTPHeaderField: "Content-Type"); req.setValue(base.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")), forHTTPHeaderField: "Origin")
             for (key, value) in cookieHeader { req.setValue(value, forHTTPHeaderField: key) }
@@ -507,15 +541,18 @@ struct PhoneFinding: Decodable, Identifiable {
             return (try JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
         }
         do {
+            if await checkRemoteSave() { return }
             await preUploadTask?.value
+            if uploadComplete { return }
             for i in m.assets.indices where !m.assets[i].mediaRef.hasPrefix("gridfs:") { if let ref = preUploaded[m.assets[i].name] { m.assets[i].mediaRef = ref } }
             await publishStream()
+            if uploadComplete { return }
             let pending = m.assets.indices.filter { !m.assets[$0].mediaRef.hasPrefix("gridfs:") }
             let totalBytes = m.assets.reduce(0) { sum, asset in sum + ((try? dir.appendingPathComponent(asset.name).resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) }
             var completedCount = m.assets.count - pending.count
             uploadProgress = Double(completedCount) / Double(max(1, m.assets.count))
             status = "Saving to your laptop inspection… Keep Dwelld open."
-            // Eight independent assets at a time. Chunks within each asset remain ordered.
+            // Four independent assets at a time. Chunks within each asset remain ordered.
             var uploadError: Error?
             await withTaskGroup(of: Result<(Int, String), Error>.self) { group in
                 var next = 0
@@ -537,8 +574,9 @@ struct PhoneFinding: Decodable, Identifiable {
                         } catch { return .failure(error) }
                     }
                 }
-                while next < min(8, pending.count) { enqueue(pending[next]); next += 1 }
+                while next < min(4, pending.count) { enqueue(pending[next]); next += 1 }
                 for await result in group {
+                    if uploadComplete { group.cancelAll(); continue }
                     guard case .success(let (i, ref)) = result else {
                         if case .failure(let error) = result { uploadError = error }; continue
                     }
@@ -550,13 +588,18 @@ struct PhoneFinding: Decodable, Identifiable {
                     if uploadError == nil, next < pending.count { enqueue(pending[next]); next += 1 }
                 }
             }
+            if uploadComplete { return }
             if let uploadError { throw uploadError }
-            for mark in marks where !mark.sent { _ = await sendMark(mark) }
-            _ = try await request(pairedSession.isEmpty ? "api/inspections/\(inspectionId)/spatial" : "api/live/\(pairedSession)/spatial", data: JSONEncoder().encode(m))
-            uploadComplete = true; uploadProgress = 1
-            if var saved = connection { saved.completed = true; connection = saved; try CaptureConnectionStore.save(saved) }
-            status = "Saved to your laptop inspection. You can close Dwelld."; manifest = m
-        } catch { status = "Upload: \(error.localizedDescription). Local capture is retained; retry resumes saved assets." }
+            for mark in marks where !mark.sent {
+                status = "Saving a marked damage photo… Your room files have uploaded."
+                _ = await sendMark(mark)
+            }
+            status = "Confirming your saved room…"
+            let saved = try await request(pairedSession.isEmpty ? "api/inspections/\(inspectionId)/spatial" : "api/live/\(pairedSession)/spatial", data: JSONEncoder().encode(m))
+            finishSaved(saved["inspectionId"] as? String); manifest = m
+        } catch {
+            if !uploadComplete, !(await checkRemoteSave()) { status = "Upload: \(error.localizedDescription). Local capture is retained; tap Retry save to resume." }
+        }
     }
 }
 

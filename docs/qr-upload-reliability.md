@@ -40,3 +40,21 @@ The QR fixes were developed on an isolated branch and combined with the native
 live-splat renderer. The combined simulator build passes. An updated native app
 installation and a physical QR-to-save run are still required; a web deployment
 cannot update an already-installed iPhone app.
+
+## Lost save acknowledgement recovery (24 October 2026)
+
+A native session could be `saved` with its last progress still showing 96% uploading.
+The server now writes terminal upload progress on manifest acceptance and normalizes older
+saved sessions to 100% in its public projection. The laptop gives saved status precedence
+over stale progress.
+
+The native saver cancels the optional live-evidence task before uploading remaining files,
+limits parallel assets to four, and uses 30-second request / 120-second resource timeouts.
+It checks remote saved status before starting, while saving, and after an upload error.
+A confirmed server save cancels remaining requests and persists completion locally so a lost
+final HTTP response does not leave the phone waiting. Late asset responses cannot overwrite
+that terminal state. Connection failures retain the local manifest and completed asset refs.
+
+Validation: signed physical-device build and TypeScript checks pass; saved-state regression
+coverage is included in the Node suite. Installation does not itself verify a fresh physical
+scan, network interruption, or RoomPlan processing callback.
