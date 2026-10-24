@@ -57,33 +57,47 @@ The web application is a **Next.js App Router application** with React client in
 
 ```mermaid
 flowchart TD
-    Web[React / Next.js web client]
-    Phone[SwiftUI / RoomPlan / ARKit companion]
-    BrowserModel[Browser YOLO11n / ONNX WASM]
-    API[Next.js Node.js route handlers]
-    Auth[Better Auth / ownership checks]
-    Processing[FFmpeg / Sharp / ONNX Runtime Node]
-    AI[Google Gen AI]
-    DB[(MongoDB Atlas records / auth / live state)]
-    Media[(GridFS media)]
-    Search[Atlas Search / Vector Search]
-    GPU[Optional offline CUDA / COLMAP / gsplat]
+    Web["Web app: review, search, 3D room"]
+    Phone["iPhone app: RoomPlan and LiDAR"]
+    Yolo["Browser YOLO, video uploads only"]
+    API["Next.js API: sign-in, uploads, review"]
 
-    Web --> BrowserModel
+    subgraph checks [Three ways a room is checked]
+        Video["Uploaded video: FFmpeg, Gemini, crack model"]
+        Paired["Paired scan: Gemini and crack model on each photo"]
+        Direct["Direct import: server YOLO, then Gemini and crack model"]
+    end
+
+    Gemini["Gemini: damage, compare, embed, answer"]
+    DB[("MongoDB Atlas: records, accounts, live session")]
+    Media[("GridFS: video, photos, splats")]
+    Search["Atlas text and vector search"]
+    GPU["Optional CUDA machine: COLMAP and gsplat"]
+
+    Web --> Yolo --> API
     Web --> API
-    Phone -->|Assets, manifest, progress, preview| API
-    API --> Auth
-    Auth --> DB
-    API --> Processing
-    Processing --> AI
-    API --> AI
+    Phone -->|photos, manifest, progress| API
     API --> DB
     API --> Media
+    API --> Video
+    API --> Paired
+    API --> Direct
+    Video --> Gemini
+    Paired --> Gemini
+    Direct --> Gemini
+    API -->|questions and comparisons| Gemini
     API --> Search
     Search --> DB
-    Phone -->|Export original capture folder| GPU
-    GPU -->|Import PLY and registration through web| API
+    Phone -.->|export the capture folder| GPU
+    GPU -.->|import a trained PLY| API
 ```
+
+How to read it:
+
+- An uploaded video is detected in the browser, on three frames. The server extracts those frames with FFmpeg and uses those boxes. Gemini looks for damage, and the crack model adds its own candidates.
+- A paired iPhone scan sends the measured room and photos during the walk. Gemini and the crack model inspect each photo, then a second Gemini pass checks the suggestions. Two database leases keep that work to two photos at a time.
+- A capture manifest saved without the live session is the path that runs YOLO on the server. It samples the first, middle, and last frame, then Gemini and the crack model.
+- Gemini also compares two inspections, embeds findings, and answers questions about saved records. Atlas Search queries those records. The dotted line is a manual export to a separate computer, not a service the app calls. QR pairing opens the iPhone app; retained browser WebRTC is not how a scan is uploaded.
 
 ### Layers and responsibilities
 
@@ -94,8 +108,8 @@ flowchart TD
 | API | Next.js route handlers, Node.js | Authorization, validation, uploads, analysis orchestration, persistence. |
 | Authentication | Better Auth + MongoDB adapter | Password accounts and cookie sessions. |
 | Storage | MongoDB driver 7, Atlas, GridFS | Structured records and private original/evidence bytes. |
-| Browser inference | YOLO11n, ONNX Runtime Web | Local object detection using CPU/WASM. |
-| Server processing | FFmpeg, Sharp, ONNX Runtime Node | Frame extraction, normalization/crops, native-frame YOLO and specialized crack inference. |
+| Browser inference | YOLO11n, ONNX Runtime Web | Object detection for an uploaded video, in the browser, on CPU/WASM. |
+| Server processing | FFmpeg, Sharp, ONNX Runtime Node | Video frame extraction, image crops, server YOLO for a direct capture import, and the crack model on every photo check. |
 | Generative AI | `@google/genai` | Damage observations, supplemental furniture, comparison, embeddings, answers. |
 | Spatial display | Three.js, GaussianSplats3D | Measured room geometry, splats, spatial annotations. |
 | Native app | SwiftUI, RoomPlan, ARKit, Metal | LiDAR capture, calibrated evidence, depth-based Gaussian preview, upload. |
