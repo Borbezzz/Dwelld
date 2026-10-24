@@ -3,7 +3,7 @@ import {createHash,randomUUID} from "node:crypto";
 import { NextResponse } from "next/server";
 import {requireReadableInspection,canReadRoom} from "@/lib/server/space-access";
 import { getDb,parseObjectId } from "@/lib/server/db";
-import { requireUser, requireOwnedRoom, requireOwnedInspection } from "@/lib/server/access";
+import { requireUser } from "@/lib/server/access";
 import { errorResponse } from "@/lib/server/api-error";
 import { deleteMedia } from "@/lib/server/media";
 import { compareInspections } from "@/lib/server/comparison";

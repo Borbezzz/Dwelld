@@ -2,7 +2,7 @@
 import Link from "next/link";
 import RoomHistory from "./room-history";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeft, Camera, Circle, CloudUpload, FileVideo2, LoaderCircle, Pause, Play, RotateCcw, ShieldCheck, Sparkles, StopCircle, X } from "lucide-react";
+import { ArrowLeft, Camera, Circle, CloudUpload, FileVideo2, LoaderCircle, ShieldCheck, Sparkles, StopCircle, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { detectVideoFrames } from "@/lib/client/video-detection";
 import { MAX_VIDEO_BYTES, uploadVideo } from "@/lib/client/upload-video";

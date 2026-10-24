@@ -3,7 +3,7 @@ import { requireUser } from "@/lib/server/access";
 import { errorResponse } from "@/lib/server/api-error";
 import { mediaResponse, parseMediaId } from "@/lib/server/media";
 import { NextResponse } from "next/server";
-import { getDb, parseObjectId } from "@/lib/server/db";
+import { parseObjectId } from "@/lib/server/db";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

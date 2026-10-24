@@ -1,7 +1,6 @@
 import {NextResponse} from "next/server";
 import {getDb,parseObjectId} from "@/lib/server/db";
 import {requireUser} from "@/lib/server/access";
-import {canReadRoom} from "@/lib/server/space-access";
 import {readJsonBody} from "@/lib/server/request-body";
 import {errorResponse} from "@/lib/server/api-error";
 export const runtime="nodejs";

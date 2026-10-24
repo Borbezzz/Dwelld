@@ -59,7 +59,7 @@ export async function detectVideoFrames(file: File, onProgress: (message: string
       const detections = tracker.update(detected, detected.map(d => cropSignature(canvas, d.boundingBox)), timestampSeconds);
       signal?.throwIfAborted();
       // Keep empty frames: Gemini can still inspect walls, floors and other surfaces.
-      frames.push({ timestampSeconds, detections: detections.slice(0, 20).map((detection, detectionIndex) => ({
+      frames.push({ timestampSeconds, detections: detections.slice(0, 20).map(detection => ({
         ...detection,
       })) });
     }

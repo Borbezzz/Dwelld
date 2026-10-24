@@ -1,6 +1,6 @@
 import {canReadRoom,requireReadableInspection} from '@/lib/server/space-access';
 import { getDb, parseObjectId } from '@/lib/server/db';
-import { requireUser, requireOwnedInspection } from '@/lib/server/access';
+import { requireUser } from '@/lib/server/access';
 import { errorResponse } from '@/lib/server/api-error';
 import { isFurniture } from '@/lib/spatial/furniture';
 export const runtime='nodejs';

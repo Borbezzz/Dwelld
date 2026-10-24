@@ -418,8 +418,8 @@ struct PhoneFinding: Decodable, Identifiable {
         return FrameRecord(timestamp: f.timestamp, image: name, depth: f.depth, confidence: f.confidence, width: width, height: height, depthWidth: f.depthWidth, depthHeight: f.depthHeight, intrinsics: intrinsics, transform: f.transform)
     }
     /// Uploads run one after another in the background while the scan continues.
-    private func queueUpload(_ files: [(String, String)], analyse evidence: FrameRecord? = nil) {
-        guard !pairedSession.isEmpty, let evidence else { return }
+    private func queueUpload(_ evidence: FrameRecord) {
+        guard !pairedSession.isEmpty else { return }
         // Keep each sampled second in capture order. Unsent samples survive in the saved manifest.
         pendingEvidence.append(evidence)
         guard preUploadTask == nil else { return }
@@ -494,32 +494,6 @@ struct PhoneFinding: Decodable, Identifiable {
         let turned = acos(max(-1, min(1, simd_dot(simd_normalize(before), simd_normalize(after)))))
         return moved + turned * 0.5
     }
-    private func uploadNow(_ name: String, contentType: String) async throws -> String {
-        guard let dir = directory else { throw CocoaError(.fileNoSuchFile) }
-        let data = try Data(contentsOf: dir.appendingPathComponent(name))
-        let generation = connectionGeneration, token = phoneToken
-        let path = "api/live/\(pairedSession)/upload", origin = pairedBase.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        func call(_ url: URL, method: String, body: Data, type: String) async throws -> Data {
-            try Task.checkCancellation()
-            guard generation == connectionGeneration, !uploadComplete else { throw CancellationError() }
-            var req = URLRequest(url: url); req.httpMethod = method; req.httpBody = body; req.timeoutInterval = 60
-            req.setValue(type, forHTTPHeaderField: "Content-Type"); req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization"); req.setValue(origin, forHTTPHeaderField: "Origin")
-            let (out, response) = try await URLSession.shared.data(for: req)
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw httpFailure(response, data: out) }
-            return out
-        }
-        let started = try JSONSerialization.jsonObject(with: try await call(pairedBase.appendingPathComponent(path), method: "POST", body: try JSONSerialization.data(withJSONObject: ["filename": name, "contentType": contentType, "size": data.count]), type: "application/json")) as? [String: Any]
-        guard let id = started?["uploadId"] as? String, let chunk = started?["chunkSize"] as? Int, chunk > 0 else { throw CocoaError(.fileWriteUnknown) }
-        var offset = 0
-        while offset < data.count {
-            let url = URL(string: "\(path)?uploadId=\(id)&part=\(offset / chunk)", relativeTo: pairedBase.appendingPathComponent("/"))!
-            _ = try await call(url, method: "PATCH", body: data.subdata(in: offset..<min(data.count, offset + chunk)), type: "application/octet-stream")
-            offset += chunk
-        }
-        let done = try JSONSerialization.jsonObject(with: try await call(pairedBase.appendingPathComponent(path), method: "POST", body: try JSONSerialization.data(withJSONObject: ["action": "complete", "uploadId": id]), type: "application/json")) as? [String: Any]
-        guard let ref = done?["url"] as? String else { throw CocoaError(.fileWriteUnknown) }
-        return ref
-    }
     func stop() {
         guard scanning else { return }
         videoTimer?.invalidate(); videoTimer = nil
@@ -581,7 +555,7 @@ struct PhoneFinding: Decodable, Identifiable {
             let window = (frames.count - 2)..<frames.count
             if let index = window.min(by: { motions[$0] < motions[$1] }), let evidence = try? makeEvidence(frames[index], dir: dir) {
                 liveEvidence[index] = evidence
-                queueUpload([(evidence.image, "image/jpeg")], analyse: evidence)
+                queueUpload(evidence)
             }
         }
         } catch { stop(); status = "Local evidence write failed. Capture stopped." }
