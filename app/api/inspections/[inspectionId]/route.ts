@@ -56,6 +56,9 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
   try {
     const user = await requireUser(request);
     const inspection = await requireOwnedInspection((await params).inspectionId, user.id);
+    const db=await getDb();const segments=await db.collection("roomScanSegments").find({sourceInspectionId:inspection._id},{projection:{roomId:1}}).toArray();
+    if(segments.some(s=>String(s.roomId)!==String(inspection.roomId)))return NextResponse.json({error:"This scan supplies evidence for linked rooms. Remove those room sections first."},{status:409});
+    if(segments.length)await db.collection("roomScanSegments").deleteMany({sourceInspectionId:inspection._id,roomId:inspection.roomId});
     if (inspection.status === "processing" || inspection.status === "queued") {
       const started = new Date(inspection.updatedAt || inspection.createdAt).getTime();
       if (Date.now() - started < 10 * 60_000) return NextResponse.json({ error: "This scan is still being analysed. Try deleting it in a few minutes." }, { status: 409 });
