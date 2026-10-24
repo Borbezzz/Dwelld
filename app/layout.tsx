@@ -7,6 +7,7 @@ import "./globals.css";
 import "./experience.css";
 import "./landing.css";
 import "./editorial.css";
+import "./brand.css";
 import "./room.css";
 
 export const metadata: Metadata = {
