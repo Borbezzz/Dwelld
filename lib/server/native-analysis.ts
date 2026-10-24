@@ -1,3 +1,4 @@
+import {analysisFailure} from "./analysis-failure";
 import { inspectVideoDamageBatch } from "./damage";
 import { ObjectId, type Document } from "mongodb";
 import { randomUUID } from "node:crypto";
@@ -34,6 +35,7 @@ export async function analyzeLiveEvidenceFrame(sessionId: ObjectId, _name: strin
         const result = await analyzeEvidenceFrame(image, frame.pose as FramePose, (session?.nativeLive?.elements || []) as RoomElement[], { walls: true, onCandidates: async findings => {
           await db.collection("liveEvidence").updateOne({ sessionId, observationId: `frame-${frame.name}` }, { $setOnInsert: { sessionId, observationId: `frame-${frame.name}`, ref: frame.ref, createdAt: new Date() } }, { upsert: true });
           for (const f of findings) {
+            if (ids.has(f)) continue;
             // Match only measured points of the same damage type on the same element.
             const previous = f.worldPosition && f.elementId ? await db.collection("liveFindings").findOne({ sessionId, damageType: f.damageType, elementId: f.elementId, worldPosition: { $exists: true }, reviewStatus: { $ne: 'rejected' } }) : null;
             if (previous?.worldPosition && Math.hypot(...f.worldPosition!.map((n, i) => n - previous.worldPosition[i])) < .12) continue;
@@ -45,9 +47,12 @@ export async function analyzeLiveEvidenceFrame(sessionId: ObjectId, _name: strin
           const rejected = !result.findings.includes(f);
           await db.collection('liveFindings').updateOne({ sessionId, id, reviewStatus: 'pending' }, { $set: { ...(f.verification ? { verification: f.verification, confidence: f.confidence } : {}), reviewStatus: rejected ? 'rejected' : f.reviewStatus, autoApproved: !rejected && f.autoApproved, ...(rejected ? { rejectedBy: 'auto-verifier' } : {}) } });
         }
+        if(result.warnings.length)await sessions.updateOne({_id:sessionId},{$set:{analysisIssue:{code:'ANALYSIS_INCOMPLETE',message:result.warnings.join(' '),at:new Date().toISOString()}}});
         await frames.updateOne({ _id: frame._id }, { $set: { status: 'done', views: result.views, findings: result.findings.length, warnings: result.warnings, dropped: result.dropped, finishedAt: new Date() } });
-      } catch {
-        await frames.updateOne({ _id: frame._id }, { $set: { status: 'failed', error: 'Damage analysis could not finish. Photo retained for retry.' } });
+      } catch (error) {
+        const failure = analysisFailure(error);
+        await frames.updateOne({ _id: frame._id }, { $set: { status: 'failed', error: failure.message, errorCode: failure.code, finishedAt: new Date() } });
+        await sessions.updateOne({_id:sessionId},{$set:{analysisIssue:{...failure,at:new Date().toISOString()}}});
       }
     }
   } finally {
@@ -98,9 +103,11 @@ export async function analyzeNativeInspection(inspection: Document, manifest: Sp
         }
         try {
           const images = await Promise.all(batch.map(async fr => ({ image: await readMedia(imageRef(fr.image)!, 12 * 1024 * 1024), timestampSeconds: fr.timestamp, fr })));
-          const observations = await inspectVideoDamageBatch(images);
+          let batchIssue: string | undefined;
+          const observations = await inspectVideoDamageBatch(images).catch(error=>{batchIssue=analysisFailure(error).message;warnings.push(batchIssue);return new Map();});
           for (const { image, fr } of images) {
-            const result = await analyzeEvidenceFrame(image, fr, elements as RoomElement[], { walls: true, observations: observations.get(fr.timestamp), verify: false });
+            const result = await analyzeEvidenceFrame(image, fr, elements as RoomElement[], { walls: true, observations: observations.get(fr.timestamp) ?? [], verify: false });
+            if(batchIssue)result.warnings.push(batchIssue);
             result.findings.forEach(f => collected.push({ ...f, ref: imageRef(fr.image)!, timestampSeconds: fr.timestamp })); analysed++;
             warnings.push(...result.warnings);
             if (sessionId) await db.collection('liveFrames').updateOne({sessionId,name:fr.image},{$set:{status:'done',finishedAt:new Date(),warnings:result.warnings}});

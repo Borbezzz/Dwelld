@@ -88,3 +88,28 @@ responses; chunk requests keep the original session and token. Saved phone claim
 from secure storage. Original capture files remain on the phone. The laptop remounts the live
 workspace on room/session navigation, aborts outgoing polls and closes media resources after
 save; continuing analysis is viewed from the saved room record.
+
+## Live video is separate from inference
+
+Native ARKit camera buffers now feed a WebRTC video source targeting 24 FPS at 960 × 540
+(before portrait rotation). RoomPlan keeps its own ARSession; no second camera is opened.
+Only offer/answer/ICE metadata passes through the authenticated signalling API. Video goes
+over the negotiated peer connection, using configured TURN credentials when needed. The native
+sender polls a lightweight signalling endpoint instead of downloading its own JPEG preview.
+
+Furniture boxes and damage pins travel over a bounded, unordered metadata channel at about
+6 Hz. They use the current AR camera and measured world geometry; the browser rejects invalid,
+out-of-order and stale marks. Unlocalized damage remains on its exact source photo. Incoming
+findings do not replace the live video unless the user selects evidence. The once-per-second
+JPEG is a fallback, labelled as connecting while WebRTC is unavailable.
+
+Evidence upload and Gemini calls keep their separate, slower schedule. Crack candidates publish
+as soon as the specialist finishes, even while Gemini is pending or unavailable. Service failures
+are classified and shown on the laptop and phone; a provider spending cap is not described as
+slow inference. Saved analysis also retains specialist results if a Gemini batch fails. All crack
+candidates remain pending unless verified or reviewed; a quick candidate is not confirmed damage.
+
+Google's Live API is a separate model interface accepting sampled image inputs (documented at
+up to 1 FPS), not a replacement for the display video stream. This change does not switch the
+app to Live API or repair provider billing. Browser loopback transport tests use synthetic media;
+actual iPhone FPS and cross-network connectivity still require a physical scan.

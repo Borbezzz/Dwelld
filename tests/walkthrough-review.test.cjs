@@ -29,3 +29,10 @@ test('video checkpoints publish evidence before AI and retain reviewed findings 
  await runVideoInspection(db,new ObjectId(),'owner',new ObjectId(),'gridfs:video','video/mp4',[]);
  assert(checkpointsVisible);assert.equal(docs.length,2);assert.equal(docs[0].reviewStatus,'confirmed');assert.equal(String(docs[1].objectId),String(docs[0]._id));assert.equal(updates.at(-1).status,'completed');assert.equal(updates.at(-1)['analysisProgress.phase'],'complete');
 });
+test('live camera metadata accepts measured boxes and damage pins but rejects invalid peer payloads',()=>{
+ const {parseVideoMarkers}=load('lib/client/live-markers.ts');
+ const box={id:'chair',kind:'object',label:'Chair',boundingBox:{x:.1,y:.2,width:.3,height:.4}},pin={id:'scratch',kind:'damage',label:'Scratch',point:{x:.5,y:.6}};
+ assert.deepEqual(parseVideoMarkers([box,pin]),[box,pin]);
+ assert.deepEqual(parseVideoMarkers([{...box,boundingBox:{x:.9,y:0,width:.5,height:.2}},{...pin,point:{x:Infinity,y:0}},{...box,kind:'arbitrary'},null]),[]);
+ assert.equal(parseVideoMarkers(Array(150).fill(box)).length,100);
+});

@@ -15,7 +15,7 @@ export async function PUT(request:Request,{params}:Context){try{const {session}=
  const {sessions}=await liveCollections();await sessions.updateOne({_id:session._id,status:{$ne:'saved'}},{$set:{nativeCapture:true,...(b.preview?{nativePreview:b.preview}:{}),nativeProgress:{stage:b.stage,frames:b.frames,depthFrames:b.depthFrames,...(upload!==undefined?{upload}:{})},nativeLive:live,status:b.stage==='scanning'?'recording':'connected'}});
  const {db}=await liveCollections();
  const [findings,analysisProgress]=await Promise.all([db.collection('liveFindings').find({sessionId:session._id,reviewStatus:{$ne:'rejected'}},{projection:{_id:0,id:1,label:1,worldPosition:1,boundingBox:1,evidenceFrameRef:1,reviewStatus:1,timestampSeconds:1}}).sort({timestampSeconds:-1}).limit(80).toArray(),liveFrameProgress(session._id)]);
- return Response.json({stopRequested:!!session.stopRequested,findings,analysisProgress});}catch(e){return liveFailure(e)}}
+ return Response.json({stopRequested:!!session.stopRequested,findings,analysisProgress,analysisIssue:session.analysisIssue});}catch(e){return liveFailure(e)}}
 export async function POST(request:Request,{params}:Context){try{const {session}=await authenticateLive(request,(await params).sessionId,'phone');const {db,sessions}=await liveCollections();const manifest=validateManifest(await readJsonBody(request,2*1024*1024));const inspectionId=session.inspectionId||session._id;
  for(const asset of manifest.assets){const file=await getMediaFile(asset.mediaRef);if(file?.metadata?.ownerId!==session.ownerId||file.metadata.liveSessionId!==String(session._id))throw new LiveError('Asset does not belong to this paired scan',403);}
  if(session.continueFrom){

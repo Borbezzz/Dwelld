@@ -171,6 +171,7 @@ struct CaptureScreen: View {
                         Text("Source photo · suggestions update after cross-checking. Scanning continues.").font(.system(size: 10)).foregroundStyle(Dwelld.muted)
                     }
                 }
+                if model.scanning { Text(model.videoStatus).font(.system(size: 11)).foregroundStyle(Dwelld.muted) }
                 if model.processing { LineLoader(label: "Building your measured room") }
                 if model.uploading { LineLoader(label: "Sending to your laptop", progress: model.uploadProgress) }
                 VStack(spacing: 10) {

@@ -152,3 +152,14 @@ test('checkpoint failure keeps already published evidence readable',async()=>{
  await assert.rejects(service.analyzeVideo('gridfs:video','video/mp4',[{timestampSeconds:0,detections:[]}],async point=>{if(point.evidenceFrames.length)throw new Error('checkpoint unavailable')}),/checkpoint unavailable/);
  assert(service.saved.length>0);assert.deepEqual(service.deleted,[]);
 });
+test('specialist candidates publish before Gemini finishes and survive a billing block',async()=>{
+ let release, published=false, verifications=0;
+ const generation=new Promise((resolve,reject)=>{release=()=>reject(Object.assign(new Error('Monthly spending cap exceeded'),{status:429}));});
+ const {analyzeEvidenceFrame}=load('lib/server/frame-analysis.ts',{
+  './damage':{inspectVisibleDamage:()=>generation},
+  './crack-detector':{inspectCracks:async()=>[{boundingBox:observation.boundingBox,confidence:.8}]},
+  './verify':{autoApproveThreshold:()=>.85,reviewDecision:()=> 'pending',verifyFinding:async()=>{verifications++;}},
+ });
+ const result=await analyzeEvidenceFrame(await image(),pose,[],{walls:true,onCandidates:async candidates=>{assert.equal(candidates[0].detectionSource,'crack-model');published=true;release();}});
+ assert(published);assert.equal(result.findings.length,1);assert.equal(result.findings[0].reviewStatus,'pending');assert.equal(verifications,0);assert(result.warnings.some(w=>w.includes('billing')));
+});

@@ -1,3 +1,4 @@
+import {analysisFailure} from "./analysis-failure";
 import sharp from "sharp";
 import { inspectCracks } from "./crack-detector";
 import { inspectVisibleDamage, scopeForName, type DamageObservation, type Box } from "./damage";
@@ -120,17 +121,35 @@ export async function analyzeEvidenceFrame(image: Buffer, pose: FramePose, eleme
     out.push({ label: `${label}: ${o.type}`, description: o.description, damageType: o.type, boundingBox: o.boundingBox, elementId: owner?.id ?? null, elementCategory: owner?.category ?? (element ? element.category : "unassigned"), worldPosition, detectionSource: source, reviewStatus: "pending", autoApproved: false });
   };
   // Inspect the entire photo even before RoomPlan has recognized a surface or object.
-  const [whole, cracks] = await Promise.all([
-    options.observations ? Promise.resolve(options.observations) : inspectVisibleDamage(image),
-    inspectCracks(image).catch(() => { warnings.push('Specialist crack check was unavailable.'); return []; }),
+  let wholeFailure: unknown;
+  let publications: Promise<void> = Promise.resolve();
+  const publish = () => {
+    const snapshot = [...out];
+    if (snapshot.length) publications = publications.then(async () => { await options.onCandidates?.(snapshot); });
+    return publications;
+  };
+  // Independent services publish as they finish. Gemini failure must not discard crack candidates.
+  await Promise.all([
+    (async () => {
+      let whole: DamageObservation[] = [];
+      try { whole = options.observations ?? await inspectVisibleDamage(image); }
+      catch (error) { wholeFailure = error; warnings.push(analysisFailure(error).message); }
+      whole.forEach(o => add('Visible damage', o, null, 'gemini'));
+      await publish();
+    })(),
+    (async () => {
+      let cracks: Awaited<ReturnType<typeof inspectCracks>> = [];
+      try { cracks = await inspectCracks(image); }
+      catch { warnings.push('Specialist crack check was unavailable.'); }
+      cracks.forEach(o => add('Potential crack', { type: 'crack', description: 'Specialist crack candidate; requires cross-checking against the photo.', boundingBox: o.boundingBox }, null, 'crack-model'));
+      await publish();
+    })(),
   ]);
-  whole.forEach(o => add('Visible damage', o, null, 'gemini'));
-  cracks.forEach(o => add('Potential crack', { type: 'crack', description: 'Specialist crack candidate; requires cross-checking against the photo.', boundingBox: o.boundingBox }, null, 'crack-model'));
-  // Publish suggestions immediately; verification updates them in place afterwards.
-  await options.onCandidates?.(out);
+  await publications;
+  if (wholeFailure && !out.length) throw wholeFailure;
   // Cross-check: a second, adversarial Gemini look at each finding.
   const threshold = autoApproveThreshold();
-  const pending = (options.verify === false ? [] : out.filter(f => f.boundingBox).slice(0, 6));
+  const pending = (options.verify === false || (wholeFailure && analysisFailure(wholeFailure).blocksService) ? [] : out.filter(f => f.boundingBox).slice(0, 6));
   let cursor = 0;
   await Promise.all(Array.from({ length: Math.min(3, pending.length) }, async () => {
     while (cursor < pending.length) {

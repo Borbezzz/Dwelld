@@ -42,6 +42,11 @@ struct PhoneFinding: Decodable, Identifiable {
     private var connection: CaptureConnection?
     private var connectionGeneration = UUID()
     @Published var captureViewID = UUID()
+    @Published var videoStatus = "Video connects when scanning starts"
+    private var liveVideo: NativeVideoStream?
+    private var videoTimer: Timer?
+    private var videoTick = 0
+    private var videoServers: [[String: Any]] = []
     private var phoneToken = ""
     private var progressInFlight = false
     /// Latest RoomPlan furniture and walls, streamed to the laptop while scanning.
@@ -66,6 +71,7 @@ struct PhoneFinding: Decodable, Identifiable {
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw httpFailure(response, data: data) }
             let body = try JSONSerialization.jsonObject(with: data) as? [String: Any]
             let remote = body?["session"] as? [String: Any]
+            let servers = body?["iceServers"] as? [[String: Any]] ?? []
             claim.paired = true
             if let expiry = remote?["expiresAt"] as? String { let formatter = ISO8601DateFormatter(); formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; claim.expiresAt = formatter.date(from: expiry) ?? claim.expiresAt }
             if remote?["status"] as? String == "saved" { claim.completed = true }
@@ -73,7 +79,7 @@ struct PhoneFinding: Decodable, Identifiable {
             claim.continueFrom = remote?["continueFrom"] as? String
             try CaptureConnectionStore.save(claim); connection = claim
             continueFrom = claim.continueFrom ?? ""
-            phoneToken = claim.phone; pairedSession = session; uploadComplete = claim.completed
+            phoneToken = claim.phone; pairedSession = session; uploadComplete = claim.completed; videoServers = servers
             if !ready { inspectionId = "" }
             status = uploadComplete ? "Inspection already saved. Start a new inspection on your laptop for another scan." : "Connected. Finish & save sends your scan to the laptop automatically."
             if !uploadComplete { await publishProgress(stage: "ready") }
@@ -118,7 +124,8 @@ struct PhoneFinding: Decodable, Identifiable {
             guard generation == connectionGeneration, !uploadComplete else { return }
             if let http = response as? HTTPURLResponse, http.statusCode == 200, let body = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
                 if let raw = body["findings"], let encoded = try? JSONSerialization.data(withJSONObject: raw), let findings = try? JSONDecoder().decode([PhoneFinding].self, from: encoded) { liveFindings = findings }
-                if let p = body["analysisProgress"] as? [String: Int] { damageCheckStatus = "\(p["checked"] ?? 0) photos checked · \(p["checking"] ?? 0) checking · \(p["queued"] ?? 0) waiting" }
+                if let issue = body["analysisIssue"] as? [String: Any], let message = issue["message"] as? String { damageCheckStatus = message }
+                else if let p = body["analysisProgress"] as? [String: Int] { damageCheckStatus = "\(p["checked"] ?? 0) photos checked · \(p["checking"] ?? 0) checking · \(p["queued"] ?? 0) waiting" }
                 Task { await refreshDamageEvidence() }
                 if body["stopRequested"] as? Bool == true, scanning { stop() }
             }
@@ -175,6 +182,8 @@ struct PhoneFinding: Decodable, Identifiable {
     /// A pairing owns its capture state. Retained files stay on disk, never in the next room.
     private func resetCaptureState() {
         connectionGeneration = UUID()
+        liveVideo?.close(); liveVideo = nil; videoTimer?.invalidate(); videoTimer = nil
+        videoStatus = "Video connects when scanning starts"
         timer?.invalidate(); timer = nil
         preUploadTask?.cancel(); preUploadTask = nil; pendingEvidence = nil
         replaceCaptureView()
@@ -276,8 +285,52 @@ struct PhoneFinding: Decodable, Identifiable {
             view.captureSession.run(configuration: RoomCaptureSession.Configuration())
             // Read the current frame without replacing RoomPlan's ARSession delegate.
             timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in Task { @MainActor in self?.recordFrame() } }
-            scanning = true; status = "Move slowly. Capture surfaces from several angles. Stop within 120 seconds."
+            scanning = true
+            startLiveVideo()
+            status = "Move slowly. Capture surfaces from several angles. Stop within 120 seconds."
         } catch { status = "Could not create local capture directory." }
+    }
+    private func startLiveVideo() {
+        liveVideo?.close(); videoTimer?.invalidate()
+        let transport = NativeVideoStream(base: pairedBase, sessionID: pairedSession, token: phoneToken, servers: videoServers.isEmpty ? [["urls":"stun:stun.l.google.com:19302"]] : videoServers)
+        let generation = connectionGeneration
+        transport.onStatus = { [weak self] value in guard let self, self.connectionGeneration == generation else { return }; self.videoStatus = value }
+        liveVideo = transport; transport.start()
+        // Only copy the current AR buffer here. Evidence encoding and inference have their own cadence.
+        videoTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 24, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.scanning, let frame = self.view.captureSession.arSession.currentFrame else { return }
+                self.videoTick += 1
+                self.liveVideo?.send(frame.capturedImage, timestamp: frame.timestamp, markers: self.videoTick % 4 == 0 ? self.videoMarkers(frame) : nil)
+            }
+        }
+    }
+    private func videoMarkers(_ frame: ARFrame) -> [[String: Any]] {
+        let size = CGSize(width: 540, height: 960), inverse = simd_inverse(frame.camera.transform)
+        func project(_ world: SIMD3<Float>) -> CGPoint? {
+            let camera = inverse * SIMD4<Float>(world, 1)
+            guard camera.z < -0.1 else { return nil }
+            return frame.camera.projectPoint(world, orientation: .portrait, viewportSize: size)
+        }
+        var result: [[String: Any]] = []
+        for item in liveElements.prefix(80) where !["wall","floor","door","window","opening"].contains(item.category.lowercased()) {
+            guard item.transform.count == 16, item.dimensions.count == 3 else { continue }
+            let t = simd_float4x4(columns: (SIMD4<Float>(item.transform[0...3]),SIMD4<Float>(item.transform[4...7]),SIMD4<Float>(item.transform[8...11]),SIMD4<Float>(item.transform[12...15])))
+            var points: [CGPoint] = []
+            for x: Float in [-0.5,0.5] { for y: Float in [-0.5,0.5] { for z: Float in [-0.5,0.5] {
+                let world = t * SIMD4<Float>(x * item.dimensions[0],y * item.dimensions[1],z * item.dimensions[2],1)
+                if let point = project(SIMD3<Float>(world.x,world.y,world.z)) { points.append(point) }
+            } } }
+            guard points.count == 8 else { continue }
+            let left = max(0,points.map(\.x).min()! / size.width), right = min(1,points.map(\.x).max()! / size.width)
+            let top = max(0,points.map(\.y).min()! / size.height), bottom = min(1,points.map(\.y).max()! / size.height)
+            if right > left, bottom > top { result.append(["id":item.id,"kind":"object","label":item.category,"boundingBox":["x":left,"y":top,"width":right-left,"height":bottom-top]]) }
+        }
+        for finding in liveFindings where finding.reviewStatus != "rejected" {
+            guard let p = finding.worldPosition, p.count == 3, let point = project(SIMD3<Float>(p)), point.x >= 0, point.y >= 0, point.x <= size.width, point.y <= size.height else { continue }
+            result.append(["id":finding.id,"kind":"damage","label":finding.label,"point":["x":point.x / size.width,"y":point.y / size.height]])
+        }
+        return result
     }
     /// Mark whatever is under the centre crosshair. Scanning carries on; nothing resets.
     func markDamage() {
@@ -460,9 +513,10 @@ struct PhoneFinding: Decodable, Identifiable {
     }
     func stop() {
         guard scanning else { return }
+        videoTimer?.invalidate(); videoTimer = nil
         timer?.invalidate(); timer = nil; scanning = false; processing = true
         status = "Saving where everything is, so you can continue this scan later…"
-        let capture = view.captureSession
+        guard let capture = view.captureSession else { processing = false; status = "The capture session is unavailable. Your local files are retained."; return }
         Task { @MainActor in
             await saveWorldMap(from: capture.arSession)
             capture.stop()
@@ -531,6 +585,7 @@ struct PhoneFinding: Decodable, Identifiable {
     }
     func captureView(shouldPresent roomDataForProcessing: CapturedRoomData, error: Error?) -> Bool {
         guard scanning || processing else { return false }
+        videoTimer?.invalidate(); videoTimer = nil
         timer?.invalidate(); timer = nil; scanning = false; processing = true
         if let error { processing = false; status = "Room scan stopped: \(error.localizedDescription). Start a new scan in good light."; return false }
         status = "Processing measured room geometry…"; return true
@@ -636,7 +691,7 @@ struct PhoneFinding: Decodable, Identifiable {
             if var saved = connection { saved.completed = true; connection = saved }
             try? CaptureConnectionStore.clear()
             timer?.invalidate(); timer = nil; pendingEvidence = nil; preUploadTask?.cancel()
-            view.captureSession.arSession.pause()
+            view.captureSession.arSession.pause(); liveVideo?.close(); liveVideo = nil; videoTimer?.invalidate(); videoTimer = nil
             status = "Saved to your laptop inspection. You can close Dwelld."
         }
         func checkRemoteSave() async -> Bool {
