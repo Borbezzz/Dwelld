@@ -106,3 +106,16 @@ body:has(.landing) { background: #f7f5ef; }
 .space-group h3{font:400 19px Georgia,serif;margin:0}.space-group span{font-size:11px;color:var(--landing-muted)}
 .room-space-select{font-size:11px;max-width:125px;padding:6px}
 @media(max-width:600px){.space-create{align-items:stretch;flex-direction:column}.space-create input{max-width:100%;width:100%}.room-space-select{max-width:95px}}
+
+.space-sharing{flex-basis:100%;width:100%;padding:18px 0;border-top:1px solid var(--landing-line);font-size:13px}
+.space-sharing h4{font:400 19px Georgia,serif;margin:0 0 12px}
+.space-sharing form{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+.space-sharing input,.space-sharing select,.space-sharing button{min-width:0;border:1px solid var(--landing-line);background:transparent;color:inherit;padding:10px;font:inherit}
+.space-sharing input[type=email]{flex:1}.space-sharing p{overflow-wrap:anywhere}.space-sharing small{color:var(--landing-muted)}
+.space-sharing li{padding:8px 0;list-style:none}.space-group:has(.space-sharing){flex-wrap:wrap}
+.boundary-row{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:10px 0;border-top:1px solid var(--landing-line)}
+.boundary-row input{margin-left:10px;padding:8px;border:1px solid var(--landing-line);background:transparent;color:inherit}
+.space-room-card{padding:25px 0;border-top:1px solid var(--landing-line)}
+.space-room-card h3{font:400 27px Georgia,serif;margin:0 0 6px}.space-room-card p{font-size:12px;color:var(--landing-muted)}
+.space-room-actions{display:flex;gap:18px;flex-wrap:wrap;margin:14px 0}.space-room-actions a{text-decoration:underline;text-underline-offset:4px}
+.space-room-card li{list-style:none;padding:6px 0;font-size:12px;color:var(--landing-muted)}
