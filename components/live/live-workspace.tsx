@@ -38,6 +38,7 @@ function LiveWorkspaceInner({sessionId,phone=false,initialRoomId='',newRoom=fals
  const [connectionPhase,setConnectionPhase]=useState<ConnectionPhase>('Waiting for phone'),[diagnostics,setDiagnostics]=useState<string[]>([]);
  const negotiation=useRef(''),signalQueue=useRef(new SignalQueue()),processedSignals=useRef(new Set<string>()),negotiating=useRef(false),videoReceived=useRef(false);
  const lastNativeMarkerTime=useRef(-1);
+ const [receivedFps,setReceivedFps]=useState<number|null>(null);
  const [videoMarkers,setVideoMarkers]=useState<VideoMarker[]>([]),[markerAt,setMarkerAt]=useState(0);
  const [connected,setConnected]=useState(false),[camera,setCamera]=useState(false),[recording,setRecording]=useState(false),[elapsed,setElapsed]=useState(0),[ratio,setRatio]=useState(16/9),[latency,setLatency]=useState<number|null>(null);
  const [pollError,setPollError]=useState(''),[clockNow,setClockNow]=useState(Date.now());
@@ -74,6 +75,21 @@ function LiveWorkspaceInner({sessionId,phone=false,initialRoomId='',newRoom=fals
  const offer=useCallback(async()=>{if(!stream.current||negotiating.current)return;negotiating.current=true;setConnectionPhase('Establishing video');try{const {pc,sendDescription}=makePeer(crypto.randomUUID());stream.current.getTracks().forEach(t=>pc.addTrack(t,stream.current!));channel.current=pc.createDataChannel('detections');await pc.setLocalDescription(await pc.createOffer());await sendDescription('offer');}finally{negotiating.current=false}},[makePeer]);
  useEffect(()=>{const element=video.current;if(!element)return;const playing=()=>{if(!phone&&videoReceived.current){setConnected(true);setConnectionPhase('Connected');diagnose('Remote video playing')}};element.addEventListener('playing',playing);return()=>element.removeEventListener('playing',playing)},[phone,diagnose]);
  useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;stopDetection.current?.();peer.current?.close();stream.current?.getTracks().forEach(t=>t.stop());if(recorder.current?.state==='recording'){recorder.current.onstop=null;recorder.current.stop();}}},[]);
+ useEffect(()=>{
+  if(!connected||!session?.nativeCapture||!credentials||savedId)return;
+  const controller=new AbortController();let active=true,running=false,previous:{frames:number;at:number}|null=null;
+  const sample=async()=>{if(running||!active||!peer.current)return;running=true;try{
+   const stats=await peer.current.getStats();
+   const report=[...stats.values()].find(r=>r.type==='inbound-rtp'&&(r.kind==='video'||r.mediaType==='video'||r.framesDecoded!=null));
+   if(!report||!active)return;
+   const frames=Number(report.framesDecoded||0),at=Number(report.timestamp);
+   const fps=Number.isFinite(report.framesPerSecond)?Number(report.framesPerSecond):previous&&at>previous.at?(frames-previous.frames)*1000/(at-previous.at):null;
+   previous={frames,at};if(fps==null||!Number.isFinite(fps)||fps<0||fps>240)return;
+   setReceivedFps(Math.round(fps));
+   await liveRequest(id,credentials.token,'/video-health',{method:'POST',signal:controller.signal,body:JSON.stringify({fps,decoded:frames,dropped:Number(report.framesDropped||0)})});
+  }catch{}finally{running=false}};
+  void sample();const timer=setInterval(()=>void sample(),3000);return()=>{active=false;controller.abort();clearInterval(timer)};
+ },[connected,session?.nativeCapture,credentials,savedId,id]);
  useEffect(()=>{if(!markerAt)return;const timer=setTimeout(()=>setVideoMarkers([]),1500);return()=>clearTimeout(timer);},[markerAt]);
  useEffect(()=>{if(!savedId)return;
   stopDetection.current?.();stopDetection.current=null;
@@ -186,7 +202,7 @@ function LiveWorkspaceInner({sessionId,phone=false,initialRoomId='',newRoom=fals
   <div className="live-columns"><section className="live-stage-panel"><div className="live-stage-heading"><span>{manual?'MARK A SOURCE FRAME':evidence?'PRESERVED EVIDENCE':savedId?'YOUR INSPECTION':uploading?'RECORDED WALKTHROUGH':'THE ROOM, IN VIEW'}</span><div>{recording&&<span className="recording-dot"/>}{!uploading&&<time>{Math.floor(elapsed/60)}:{String(elapsed%60).padStart(2,'0')}</time>}</div></div>
    {uploadWaiting&&<div className="notice analysis-notice" role="status"><div><strong>Waiting for the phone to finish sending.</strong><p>The scan has not been marked as failed. Keep Dwelld open on the iPhone; if it shows Retry save, use it to resume the remaining files. Next becomes available after the final save is confirmed.</p></div></div>}
    <div className="feed-anchor">{session?.nativeCapture&&!phone&&!evidence&&<div className="native-live">
-     <LiveDamagePreview finished={!!savedId} videoRef={video} videoConnected={connected} videoMarkers={videoMarkers} onVideoReady={()=>{setConnected(true);setConnectionPhase('Connected');}} key={id} sessionId={id} token={credentials?.token||""} findings={findings} preview={session.nativePreview} selectedId={selected} onSelect={setSelected}/>
+     <LiveDamagePreview receivedFps={receivedFps} finished={!!savedId} videoRef={video} videoConnected={connected} videoMarkers={videoMarkers} onVideoReady={()=>{setConnected(true);setConnectionPhase('Connected');}} key={id} sessionId={id} token={credentials?.token||""} findings={findings} preview={session.nativePreview} selectedId={selected} onSelect={setSelected}/>
      <div className="native-model"><LiveRoomView key={id} baseInspectionId={continueFrom||session.continueFrom} live={streamElements?{...session.nativeLive,elements:streamElements}:session.nativeLive} stream={roomStream} findings={findings} selected={selected} onSelect={id=>{const f=findings.find(x=>x.id===id);if(f)void viewFinding(f);}}/></div>
      <div className="native-status">{!savedId&&(session.nativeProgress?.stage==='uploading'||session.nativeProgress?.upload!==undefined)?<PixelLoader label={session.nativeProgress?.upload!==undefined&&session.nativeProgress.upload>0?`Sending your scan from the phone · ${Math.round(session.nativeProgress.upload*100)}%`:'Sending your scan from the phone. Its screen shows the exact progress'} startedAt={busyStarted.current}/>:<p>{savedId?'Your room is saved and the phone connection is closed. Select Next to review ongoing analysis.':session.nativeProgress?.stage==='scanning'?`Move slowly · ${session.nativeProgress.frames} frames · ${session.nativeProgress.depthFrames} with depth. Damage checks run every few seconds.`:session.nativeProgress?.stage==='processing'?'The phone is finishing the measured room…':session.continueFrom?'Tap Continue scan on your phone, then point it at a part you already scanned.':'Tap Start scan on your phone.'}</p>}</div>
     </div>}
