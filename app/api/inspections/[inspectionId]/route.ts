@@ -1,5 +1,5 @@
 import { requireUser, requireOwnedInspection } from "@/lib/server/access";
-import { requireReadableInspection } from "@/lib/server/space-access";
+import { canReadRoom,requireReadableInspection } from "@/lib/server/space-access";
 import { deleteInspection } from "@/lib/server/delete";
 import { errorResponse } from "@/lib/server/api-error";
 import { NextResponse } from "next/server";
@@ -16,7 +16,16 @@ export async function GET(request: Request, { params }: { params: Promise<{ insp
     const user = await requireUser(request);
     const db = await getDb();
     const inspection = await requireReadableInspection(id,user.id);
-    const findings = await db.collection("findings").find({ inspectionId: id }).sort({ createdAt: 1 }).toArray();
+    const requestedRoom=new URL(request.url).searchParams.get("roomId");
+    const targetId=requestedRoom?parseObjectId(requestedRoom):inspection.roomId;
+    if(!targetId)return NextResponse.json({error:"Invalid room"},{status:400});
+    const segment=await db.collection("roomScanSegments").findOne({sourceInspectionId:id,roomId:targetId});
+    if(String(targetId)!==String(inspection.roomId)){
+      const target=await db.collection("rooms").findOne({_id:targetId});
+      if(!segment||!target||!await canReadRoom(target as never,user.id))return NextResponse.json({error:"Room not found"},{status:404});
+    }
+    const findingFilter={inspectionId:id,...(segment?{timestampSeconds:{$gte:segment.startTime,$lt:segment.endTime}}:{})};
+    const findings = await db.collection("findings").find(findingFilter).sort({ createdAt: 1 }).toArray();
     const serializedFindings = findings.map((f) => ({
       id: String(f._id), kind: f.kind, label: f.label, description: f.description,
       timestampSeconds: f.timestampSeconds, evidenceFrameUrl: f.evidenceFrameUrl,
@@ -26,12 +35,12 @@ export async function GET(request: Request, { params }: { params: Promise<{ insp
     }));
     return NextResponse.json({
       inspection: {
-        id: String(inspection._id), roomId: String(inspection.roomId), status: inspection.status, type: inspection.type || "move-in",
+        id: String(inspection._id), roomId: String(targetId), status: inspection.status, type: inspection.type || "move-in",isOwner:inspection.ownerId===user.id,virtual:String(targetId)!==String(inspection.roomId),
         createdAt: new Date(inspection.createdAt).toISOString(),
         videoUrl: typeof inspection.sourceUrl === "string" ? "/api/inspections/" + String(inspection._id) + "/video" : undefined,
         durationSeconds: inspection.durationSeconds ?? null,
         analysisWarnings: inspection.analysisWarnings ?? [],
-        evidenceFrames: inspection.evidenceFrames ?? [],
+        evidenceFrames: segment?(inspection.evidenceFrames??[]).filter((f:{timestampSeconds:number})=>f.timestampSeconds>=segment.startTime&&f.timestampSeconds<segment.endTime):inspection.evidenceFrames??[],
         analysisRunId: inspection.analysisRunId ?? null,
         analysisProgress: inspection.analysisProgress ?? null,
         error: inspection.status === "failed" ? "Video analysis failed. Check service configuration and retry with a supported video." : null,
