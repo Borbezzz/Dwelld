@@ -1,10 +1,11 @@
+import {requireReadableInspection} from '@/lib/server/space-access';
 import { getDb, parseObjectId } from '@/lib/server/db';
 import { requireUser, requireOwnedInspection } from '@/lib/server/access';
 import { errorResponse } from '@/lib/server/api-error';
 export const runtime='nodejs';
 export async function GET(request:Request,{params}:{params:Promise<{inspectionId:string}>}){
  try{
-  const user=await requireUser(request);const {inspectionId}=await params;const inspection=await requireOwnedInspection(inspectionId,user.id);const db=await getDb();
+  const user=await requireUser(request);const {inspectionId}=await params;const id=parseObjectId(inspectionId);if(!id)return Response.json({error:'Inspection not found'},{status:404});const inspection=await requireReadableInspection(id,user.id);const db=await getDb();
   const room=await db.collection('rooms').findOne({_id:inspection.roomId});
   const findings=await db.collection('findings').find({inspectionId:parseObjectId(inspectionId)!}).sort({timestampSeconds:1,createdAt:1}).toArray();
   const serialize=(f:typeof findings[number])=>({id:String(f._id),kind:f.kind,label:f.label,description:f.description||'',reviewStatus:f.reviewStatus||'pending',timestampSeconds:f.timestampSeconds??null,point:f.point??null,boundingBox:f.boundingBox??null,evidenceFrameUrl:f.evidenceFrameUrl?`/api/media?url=${encodeURIComponent(f.evidenceFrameUrl)}`:null,source:f.source||'ai',detectionSource:f.detectionSource||null,objectId:f.objectId?String(f.objectId):null});
