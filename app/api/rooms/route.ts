@@ -15,7 +15,9 @@ export async function GET(request: Request) {
     const db = await getDb();
     await ensureIndexes(db);
     const memberships = await db.collection("spaceMembers").find({userId:user.id},{projection:{spaceId:1}}).toArray();
-    const docs = await db.collection("rooms").find({$or:[{ownerId:user.id},...(memberships.length?[{spaceId:{$in:memberships.map(m=>m.spaceId)}}]:[])]}).sort({ createdAt: -1 }).limit(100).toArray();
+    const ownedSpaces=await db.collection("spaces").find({ownerId:user.id},{projection:{_id:1}}).toArray();
+    const accessibleIds=[...ownedSpaces.map(s=>s._id),...memberships.map(m=>m.spaceId)];
+    const docs = await db.collection("rooms").find({$or:[{ownerId:user.id},...(accessibleIds.length?[{spaceId:{$in:accessibleIds}}]:[])]}).sort({ createdAt: -1 }).limit(100).toArray();
     const rooms = docs.map((r) => ({ id: String(r._id), name: r.name, createdAt: new Date(r.createdAt).toISOString(), spaceId: r.spaceId ? String(r.spaceId) : null, isOwner: r.ownerId === user.id }));
     return NextResponse.json({ rooms });
   } catch (error) { return errorResponse(error, "app/api/rooms/route.ts"); }
@@ -31,8 +33,9 @@ export async function POST(request: Request) {
     await ensureIndexes(db);
     const spaceId = typeof body.spaceId === "string" ? parseObjectId(body.spaceId) : null;
     if (body.spaceId !== undefined && !spaceId) return NextResponse.json({ error: "Invalid spaceId" }, { status: 400 });
-    if (spaceId && !await db.collection("spaces").findOne({ _id: spaceId, ownerId: user.id }, { projection: { _id: 1 } })) return NextResponse.json({ error: "Space not found" }, { status: 404 });
-    const doc = { _id: new ObjectId(), ownerId:user.id, name, ...(spaceId ? { spaceId } : {}), createdAt: new Date() };
+    const space=spaceId?await db.collection("spaces").findOne({_id:spaceId}):null;
+    if(spaceId&&(!space||!(space.ownerId===user.id||await db.collection("spaceMembers").findOne({spaceId,userId:user.id}))))return NextResponse.json({error:"Space not found"},{status:404});
+    const doc = { _id: new ObjectId(), ownerId:space?.ownerId||user.id, createdBy:user.id, name, ...(spaceId ? { spaceId } : {}), createdAt: new Date() };
     await db.collection("rooms").insertOne(doc);
     return NextResponse.json({ room: { id: String(doc._id), name: doc.name, createdAt: doc.createdAt.toISOString(), spaceId: spaceId ? String(spaceId) : null } }, { status: 201 });
   } catch (error) { return errorResponse(error, "app/api/rooms/route.ts"); }
