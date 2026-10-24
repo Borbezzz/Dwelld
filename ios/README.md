@@ -28,3 +28,11 @@ Create a laptop inspection and scan its QR. The HTTPS handoff page offers **Open
 The paired capture selects a steady evidence photo every second, queues frames chronologically, and retains the other evidence photos for the final save. RGB evidence has a maximum 1600-pixel edge; depth/confidence uploads stay sparse. The server checks obvious basic-furniture damage using Argon in batches of up to six timestamped photos. Edge/crack specialist inference is retired. Findings remain pending human review.
 
 The phone shows marked source-photo evidence and projects findings with measured world coordinates into the current camera viewport. The laptop shows the same evidence and 3D markers. The phone progress response reports checked, processing and queued photo counts. These are asynchronous checks, not guaranteed one-result-per-second video inference. Mark damage freezes the exact aimed-at frame and opens an optional note field. Saving sends that snapshot, aim point and note for grounded localization; the scan continues behind the sheet. A new native build is required; web deployment alone does not update an installed iPhone app.
+
+## Session reset and unfinished captures
+
+A failed upload no longer locks the phone into Retry sending. Scan a different inspection QR, or choose **Start fresh inspection**, to clear active capture state and pair a clean session. Before switching, the app keeps the old capture folder and its original session-scoped credentials in a separate Keychain recovery list. **Unsent captures** offers Resume sending while that connection is valid, or Export capture when it has expired; old assets are never attached to a new room.
+
+After the server acknowledges a successful save, the app clears the active manifest, camera/session, evidence images, markers, splats, counters, credentials and upload state. Local originals stay on disk for export. Delayed upload callbacks are fenced by the session generation so they cannot repopulate a new session's state.
+
+On macOS, run `python3 ios/Tests/check-session-lifecycle.py` to exercise the production Keychain store using a unique, disposable test namespace. It checks active-session clearing, retained recovery, isolated credentials, replacement of retry snapshots and per-capture acknowledgement cleanup. The regular Node test suite runs this check automatically on macOS.

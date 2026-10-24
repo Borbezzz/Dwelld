@@ -78,8 +78,8 @@ struct MarkCrosshair: View {
 struct CaptureScreen: View {
     @StateObject private var model = CaptureModel()
     private var title: String {
-        if model.pairedSession.isEmpty { return "Connect from your laptop." }
         if model.uploadComplete { return "Saved to your laptop." }
+        if model.pairedSession.isEmpty { return "Connect from your laptop." }
         if model.uploading { return "Sending your room." }
         if model.processing { return "Measuring your room." }
         if model.relocalizing { return "Find where you left off." }
@@ -95,13 +95,13 @@ struct CaptureScreen: View {
                     Spacer()
                     HStack(spacing: 7) {
                         Circle().fill(model.pairedSession.isEmpty ? Dwelld.muted.opacity(0.6) : (model.scanning ? Color(red: 0.73, green: 0.33, blue: 0.25) : Color(red: 0.38, green: 0.51, blue: 0.34))).frame(width: 6, height: 6)
-                        Text(model.pairedSession.isEmpty ? "Not connected" : (model.uploadComplete ? "Saved" : "Connected to laptop")).font(.system(size: 11)).foregroundStyle(Dwelld.muted)
+                        Text(model.uploadComplete ? "Saved" : (model.pairedSession.isEmpty ? "Not connected" : "Connected to laptop")).font(.system(size: 11)).foregroundStyle(Dwelld.muted)
                     }
                 }
                 Rectangle().fill(Dwelld.rule).frame(height: 1)
                 VStack(alignment: .leading, spacing: 8) {
                     Text(title).font(Dwelld.serif(30)).foregroundStyle(Dwelld.ink).fixedSize(horizontal: false, vertical: true)
-                    Text(model.pairedSession.isEmpty ? "Start an inspection on the website, scan its QR code with your iPhone camera, then tap Open Dwelld Capture." : (model.relocalizing || (!model.continueFrom.isEmpty && !model.scanning && !model.ready && !model.uploadComplete)) ? "Stand where you scanned before and point at something you already captured. Once the phone recognises it, scan the new part." : "Move slowly. Keep the details in view. Your laptop shows the room building as you go.")
+                    Text(model.uploadComplete ? "Your session has been cleared. Start a new inspection on the website and scan its QR." : model.pairedSession.isEmpty ? "Start an inspection on the website, scan its QR code with your iPhone camera, then tap Open Dwelld Capture." : (model.relocalizing || (!model.continueFrom.isEmpty && !model.scanning && !model.ready && !model.uploadComplete)) ? "Stand where you scanned before and point at something you already captured. Once the phone recognises it, scan the new part." : "Move slowly. Keep the details in view. Your laptop shows the room building as you go.")
                         .font(.system(size: 13)).foregroundStyle(Dwelld.muted).fixedSize(horizontal: false, vertical: true)
                 }
                 if model.pairing { LineLoader(label: "Connecting securely") }
@@ -185,8 +185,24 @@ struct CaptureScreen: View {
                     if model.ready && !model.uploadComplete && !model.uploading {
                         Button("Retry sending") { Task { await model.savePairedCapture() } }.buttonStyle(DwelldButtonStyle()).disabled(model.processing || model.pairing)
                     }
-                    if model.uploadComplete {
-                        Button("New inspection") { model.prepareNewInspection() }.buttonStyle(DwelldButtonStyle(filled: false)).disabled(model.pairing || model.processing || model.uploading)
+                    if model.uploadComplete || (model.ready && !model.uploading) {
+                        Button(model.uploadComplete ? "New inspection" : "Start fresh inspection") { model.prepareNewInspection() }.buttonStyle(DwelldButtonStyle(filled: false)).disabled(model.pairing || model.processing || model.uploading)
+                    }
+                }
+                if !model.recoverableCaptures.isEmpty {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Label("Unsent captures", systemImage: "tray.and.arrow.up").font(Dwelld.serif(18)).foregroundStyle(Dwelld.ink)
+                        Text("Kept separately from this inspection. Starting fresh never attaches these files to the new room.").font(.system(size: 11)).foregroundStyle(Dwelld.muted)
+                        ForEach(model.recoverableCaptures) { capture in
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(capture.createdAt, format: .dateTime.day().month().hour().minute()).font(.system(size: 12, weight: .medium))
+                                if capture.expired { Text("Connection expired. Your local capture can still be exported.").font(.system(size: 11)).foregroundStyle(Dwelld.muted) }
+                                HStack(spacing: 14) {
+                                    if !capture.expired { Button("Resume sending") { model.resumeCapture(capture.id) }.font(.system(size: 12)).disabled(model.scanning || model.uploading || model.processing || model.pairing) }
+                                    ShareLink("Export capture", item: capture.folder).font(.system(size: 12))
+                                }
+                            }.padding(10).frame(maxWidth: .infinity, alignment: .leading).background(Dwelld.well.opacity(0.06)).clipShape(RoundedRectangle(cornerRadius: 4))
+                        }
                     }
                 }
                 VStack(alignment: .leading, spacing: 8) {
