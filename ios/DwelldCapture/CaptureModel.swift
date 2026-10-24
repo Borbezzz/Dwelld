@@ -304,6 +304,7 @@ struct PhoneFinding: Decodable, Identifiable {
                 self.liveVideo?.send(frame.capturedImage, timestamp: frame.timestamp, markers: self.videoTick % 4 == 0 ? self.videoMarkers(frame) : nil)
             }
         }
+        if let videoTimer { RunLoop.main.add(videoTimer, forMode: .common) }
     }
     private func videoMarkers(_ frame: ARFrame) -> [[String: Any]] {
         let size = CGSize(width: 540, height: 960), inverse = simd_inverse(frame.camera.transform)

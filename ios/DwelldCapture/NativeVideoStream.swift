@@ -59,7 +59,9 @@ import WebRTC
         }
     }
     func send(_ pixel: CVPixelBuffer, timestamp: Double, markers: [[String: Any]]?) {
-        guard active, peer != nil, timestamp - lastFrame >= 1.0 / 24 else { return }
+        // The capture timer owns cadence. ARKit timestamps are quantized to camera ticks;
+        // a second 1/24 gate would incorrectly discard alternating 60 Hz camera samples.
+        guard active, peer != nil, timestamp > lastFrame else { return }
         lastFrame = timestamp
         let frame = RTCVideoFrame(buffer: RTCCVPixelBuffer(pixelBuffer: pixel), rotation: ._90, timeStampNs: Int64(timestamp * 1_000_000_000))
         source.capturer(capturer, didCapture: frame)
