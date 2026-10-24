@@ -113,3 +113,9 @@ Google's Live API is a separate model interface accepting sampled image inputs (
 up to 1 FPS), not a replacement for the display video stream. This change does not switch the
 app to Live API or repair provider billing. Browser loopback transport tests use synthetic media;
 actual iPhone FPS and cross-network connectivity still require a physical scan.
+
+Before installing a native build with embedded frameworks, run
+`python3 scripts/verify-ios-bundle.py /path/to/DwelldCapture.app`. It checks dynamic-library
+resolution using the built Mach-O runtime search paths, then verifies nested signatures.
+The app target requires `@executable_path/Frameworks` for both Debug and Release. A successful
+compile alone does not verify that dyld can load WebRTC on an iPhone.
