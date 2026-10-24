@@ -1,0 +1,10 @@
+"use client";
+import {useEffect,useState} from "react";
+type Member={id:string;email:string;role:string};type Invite={id:string;email:string;role:string;expiresAt:string};
+export default function ShareSpace({spaceId}:{spaceId:string}){
+ const [email,setEmail]=useState(""),[role,setRole]=useState<"tenant"|"landlord">("landlord"),[link,setLink]=useState(""),[error,setError]=useState(""),[members,setMembers]=useState<Member[]>([]),[invites,setInvites]=useState<Invite[]>([]),[busy,setBusy]=useState(false);
+ async function refresh(){const r=await fetch(`/api/spaces/${spaceId}/invites`);if(r.ok){const b=await r.json();setMembers(b.members);setInvites(b.invites);}}
+ useEffect(()=>{void refresh()},[spaceId]);
+ async function create(e:React.FormEvent){e.preventDefault();setBusy(true);setError("");setLink("");try{const r=await fetch(`/api/spaces/${spaceId}/invites`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email,role})});const b=await r.json();if(!r.ok)throw new Error(b.error);setLink(b.url);setEmail("");await refresh();}catch(e){setError(e instanceof Error?e.message:"Could not invite");}finally{setBusy(false);}}
+ return <section className="space-sharing"><h4>Invite someone to this property</h4><form onSubmit={e=>void create(e)}><input type="email" aria-label="Invitee email" required maxLength={254} placeholder="Email address" value={email} onChange={e=>setEmail(e.target.value)}/><select aria-label="Role" value={role} onChange={e=>setRole(e.target.value as "tenant"|"landlord")}><option value="landlord">Landlord</option><option value="tenant">Tenant</option></select><button disabled={busy}>Create invite</button></form>{error&&<p role="alert">{error}</p>}{link&&<p>Share this one-use link securely with the invited email: <input aria-label="Invitation link" readOnly value={link} onFocus={e=>e.target.select()}/><button type="button" onClick={()=>void navigator.clipboard.writeText(link)}>Copy</button></p>}<small>Links expire after seven days. Members must sign in with their invited email.</small><p>{members.length} accepted members · {invites.length} pending invitations</p></section>;
+}
