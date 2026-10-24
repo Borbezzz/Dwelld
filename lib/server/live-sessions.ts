@@ -1,3 +1,4 @@
+import {canReadRoom} from "./space-access";
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { ObjectId } from "mongodb";
 import { getDb, parseObjectId } from "./db";
@@ -39,7 +40,8 @@ export function iceServers(): RTCIceServer[] {
 export async function createLive(roomId:string, ownerId:string, type:"move-in"|"move-out"="move-in", continueFrom?:string) {
  if(!["move-in","move-out"].includes(type))throw new LiveError("Invalid inspection type");
  const id=parseObjectId(roomId); const {db,sessions}=await liveCollections();
- if(!id || !await db.collection("rooms").findOne({_id:id,ownerId})) throw new LiveError("Room not found",404);
+ const room=id&&await db.collection("rooms").findOne({_id:id});
+ if(!id || !room || !await canReadRoom(room as never,ownerId)) throw new LiveError("Room not found",404);
  // Continuing a scan: the phone relocalizes into the earlier scan's saved world map.
  let base:ObjectId|undefined;
  if(continueFrom!==undefined&&continueFrom!==null&&continueFrom!==""){
