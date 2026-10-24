@@ -1,8 +1,9 @@
 import {inspectCracks, CRACK_MODEL} from './crack-detector';
 import { readMedia, writeMedia, deleteMedia, parseMediaId } from "./media";
+import { videoSampleTimes } from "../video-sampling";
 import { createHash } from "node:crypto";
 import { openVideoFrames } from "./video-frames";
-import { inspectObjectDamage, inspectSurfaceDamage, inspectUnsupportedFurniture, validBox, type Box, type DamageObservation } from "./damage";
+import { inspectVideoDamageBatch, inspectObjectDamage, inspectSurfaceDamage, inspectUnsupportedFurniture, validBox, type Box, type DamageObservation } from "./damage";
 export type { Box } from "./damage";
 
 export type ClientDetection = { objectId: string; label: string; boundingBox: Box; classId?: number; confidence?: number };
@@ -20,7 +21,7 @@ export type AnalyzedFinding = {
 const classes: Record<number, string> = { 56: "chair", 57: "couch", 58: "potted plant", 59: "bed", 60: "dining table", 61: "toilet", 62: "tv", 63: "laptop", 68: "microwave", 69: "oven", 70: "toaster", 71: "sink", 72: "refrigerator", 74: "clock", 75: "vase" };
 const labels = new Set(Object.values(classes));
 export function validateClientFrames(value: unknown, durationSeconds = Infinity): ClientFrameDetections[] {
-  if (!Array.isArray(value) || value.length < 1 || value.length > 3) throw new Error("Provide between one and three analyzed video frames");
+  if (!Array.isArray(value) || value.length < 1 || value.length > 121) throw new Error("Provide between one and 121 analyzed video frames");
   const times = new Set<number>();
   return value.map((raw: unknown) => {
     if (!raw || typeof raw !== "object") throw new Error("Invalid analyzed frame");
@@ -115,21 +116,51 @@ export async function analyzeVideo(videoUrl: string, mimeType: string, clientFra
   const frames = await openVideoFrames(video);
   const storedFrames: string[] = [];
   try {
-    const selected = validateClientFrames(requested, frames.durationSeconds);
+    const client = validateClientFrames(requested, frames.durationSeconds);
+    const selected = videoSampleTimes(Math.min(frames.durationSeconds, 120)).map(timestampSeconds => ({ timestampSeconds, detections: client.find(f => Math.abs(f.timestampSeconds - timestampSeconds) < .01)?.detections || [] }));
     const findings: AnalyzedFinding[] = [];
     const seenFrames = new Set<string>();
-    for (const frame of selected) {
-      const image = await frames.extract(frame.timestampSeconds);
-      const imageHash = createHash("sha256").update(image).digest("hex");
-      if (seenFrames.has(imageHash)) continue;
-      seenFrames.add(imageHash);
-      const key = createHash("sha256").update(`${videoUrl}:${frame.timestampSeconds}`).digest("hex").slice(0, 16);
-      const observations = await analyzeDetectedImage(image, frame.detections, frame.timestampSeconds, key, warnings, deadlineMs);
-      if (observations.length === 0) continue;
-      const stored = await writeMedia(image, `evidence/${crypto.randomUUID()}.png`, "image/png");
-      storedFrames.push(stored);
-      findings.push(...observations.map((item) => ({ ...item, evidenceFrameUrl: stored })));
+    const seenObjects = new Map<string, string>();
+    let cursor = 0;
+    async function worker() {
+      while (cursor < selected.length) {
+        const batch = selected.slice(cursor, cursor += 6);
+        if (Date.now() > deadlineMs - 65_000) { warnings.push(`${batch.length} evidence frames starting at ${batch[0].timestampSeconds}s were not analysed because the time budget ran out.`); continue; }
+        try {
+          const extracted: { image: Buffer; timestampSeconds: number; detections: ClientDetection[] }[] = [];
+          for (const frame of batch) {
+            const image = await frames.extract(frame.timestampSeconds);
+            const hash = createHash("sha256").update(image).digest("hex");
+            if (seenFrames.has(hash)) continue;
+            seenFrames.add(hash); extracted.push({ ...frame, image });
+          }
+          if (!extracted.length) continue;
+          const [damage, supplemental] = await Promise.all([
+            inspectVideoDamageBatch(extracted),
+            inspectUnsupportedFurniture(extracted[0].image, extracted[0].detections.map(d => d.boundingBox)).catch(() => { warnings.push(`Supplementary furniture check at ${extracted[0].timestampSeconds}s could not finish.`); return []; }),
+          ]);
+          for (const frame of extracted) {
+            const key = `video_${Math.round(frame.timestampSeconds * 1000)}`;
+            const stored = await writeMedia(frame.image, `evidence/${crypto.randomUUID()}.png`, "image/png");
+            storedFrames.push(stored);
+            const base = { timestampSeconds: frame.timestampSeconds, evidenceFrameUrl: stored, originalVideoBoundingBox: null, reviewStatus: 'unreviewed' as const, localizationStatus: 'localized' as const, objectLabel: null, parentDetectionId: null };
+            frame.detections.filter(d => { if(seenObjects.has(d.objectId)) return false; seenObjects.set(d.objectId, `${key}_${d.objectId}`); return true; }).forEach(d => findings.push({ ...base, kind: 'object', label: d.label, description: `${d.label} detected by the browser object model.`, boundingBox: d.boundingBox, detectionId: `${key}_${d.objectId}`, detectionSource: 'yolo', classId: d.classId, confidence: d.confidence }));
+            if (frame === extracted[0]) supplemental.forEach((d, i) => findings.push({ ...base, kind: 'object', label: d.label, description: `${d.description} (Gemini-assisted observation; requires review.)`, boundingBox: d.boundingBox, detectionSource: 'gemini', detectionId: `${key}_supplemental_${i}` }));
+            (damage.get(frame.timestampSeconds) || []).forEach((d, i) => {
+              const box = d.boundingBox;
+              const owner = box ? frame.detections.filter(o => box.x + box.width / 2 >= o.boundingBox.x && box.x + box.width / 2 <= o.boundingBox.x + o.boundingBox.width && box.y + box.height / 2 >= o.boundingBox.y && box.y + box.height / 2 <= o.boundingBox.y + o.boundingBox.height).sort((a,b) => a.boundingBox.width*a.boundingBox.height-b.boundingBox.width*b.boundingBox.height)[0] : null;
+              findings.push({ ...base, kind: 'damage', label: d.type, description: d.description, boundingBox: box, localizationStatus: box ? 'localized' : 'uncertain', detectionSource: 'gemini', detectionId: `${key}_damage_${i}`, parentDetectionId: owner ? seenObjects.get(owner.objectId) || null : null, objectLabel: owner?.label || null });
+            });
+            try {
+              const cracks = await inspectCracks(frame.image);
+              cracks.forEach((d, i) => findings.push({ ...base, kind: 'damage', label: 'Potential crack', description: 'Specialist crack candidate. Review against the source photo.', boundingBox: d.boundingBox, detectionSource: 'crack-model', detectionId: `${key}_crack_${i}`, confidence: d.confidence }));
+            } catch { warnings.push(`Specialist crack check at ${frame.timestampSeconds}s could not finish.`); }
+          }
+        } catch { warnings.push(`Damage analysis for frames ${batch[0].timestampSeconds}s–${batch[batch.length - 1].timestampSeconds}s failed. These views remain unassessed.`); }
+      }
     }
+    await Promise.all([worker(), worker()]);
+    findings.sort((a, b) => a.timestampSeconds - b.timestampSeconds);
     return { durationSeconds: frames.durationSeconds, findings, warnings, incomplete: warnings.length > 0 };
   } catch (error) {
     await Promise.all(storedFrames.map((url) => deleteMedia(url).catch(() => undefined)));

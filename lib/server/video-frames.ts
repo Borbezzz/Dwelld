@@ -30,9 +30,10 @@ export async function openVideoFrames(bytes: Buffer) {
       durationSeconds, close,
       async extract(timestampSeconds: number) {
         if (!Number.isFinite(timestampSeconds) || timestampSeconds < 0 || timestampSeconds >= durationSeconds) throw new Error("Evidence timestamp is outside the source video");
-        const output = join(directory, "frame.png");
-        // Accurate output seek; no scaling. FFmpeg applies source rotation metadata.
-        await run(["-y", "-i", source, "-ss", String(timestampSeconds), "-map", "0:v:0", "-frames:v", "1", output]);
+        const output = join(directory, `frame-${timestampSeconds}.png`);
+        // Accurate input seek avoids decoding the whole preceding video for every one-second sample.
+        // FFmpeg discards frames between the seek point and timestamp, and applies source rotation.
+        await run(["-y", "-ss", String(timestampSeconds), "-i", source, "-map", "0:v:0", "-frames:v", "1", output]);
         return readFile(output);
       },
     };

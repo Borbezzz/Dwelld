@@ -26,9 +26,9 @@ async function zoom(image: Buffer, box: Box) {
  * Second, independent look at one AI finding. The verifier sees a zoomed crop with the claimed
  * region outlined and is asked to try to prove it wrong (shadow, texture, reflection, seam).
  */
-export async function verifyFinding(image: Buffer, finding: { label: string; description?: string; boundingBox: Box }): Promise<Verdict> {
+export async function verifyFinding(image: Buffer, finding: { label: string; description?: string; boundingBox: Box }, options: { timeoutMs?: number } = {}): Promise<Verdict> {
   const apiKey = process.env.GEMINI_API_KEY; if (!apiKey) throw new Error("Verification requires GEMINI_API_KEY");
-  const ai = new GoogleGenAI({ apiKey, httpOptions: { timeout: 60_000 } });
+  const ai = new GoogleGenAI({ apiKey, httpOptions: { timeout: options.timeoutMs ?? 60_000 } });
   const crop = await zoom(image, finding.boundingBox);
   const response = await ai.models.generateContent({
     model: process.env.GEMINI_VERIFY_MODEL || process.env.GEMINI_MODEL || "gemini-4-argon",

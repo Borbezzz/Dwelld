@@ -9,7 +9,7 @@ function load(damage) {
   const mod = new Module(filename, module);
   mod.filename = filename; mod.paths = module.paths;
   const original = mod.require.bind(mod);
-  mod.require = (id) => id === './crack-detector' ? {inspectCracks:async()=>[],CRACK_MODEL:'unit-test-stub'} : id === './damage' ? { validBox: (box) => box, ...damage } : id === './media' || id === './video-frames' ? {} : original(id);
+  mod.require = (id) => id === '../video-sampling' ? {videoSampleTimes:()=>[]} : id === './crack-detector' ? {inspectCracks:async()=>[],CRACK_MODEL:'unit-test-stub'} : id === './damage' ? { validBox: (box) => box, ...damage } : id === './media' || id === './video-frames' ? {} : original(id);
   mod._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS, esModuleInterop: true } }).outputText, filename);
   return mod.exports;
 }

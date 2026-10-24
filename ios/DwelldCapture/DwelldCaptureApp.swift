@@ -110,6 +110,18 @@ struct CaptureScreen: View {
                         Dwelld.well.overlay(Text(model.processing ? "Finishing capture…" : (model.uploadComplete ? "Inspection saved" : "Capture ready")).font(Dwelld.serif(20)).foregroundStyle(Dwelld.ink))
                     }
                     if model.scanning {
+                        TimelineView(.animation(minimumInterval: 1.0 / 30)) { _ in
+                            GeometryReader { geometry in
+                                ForEach(model.liveFindings) { finding in
+                                    if let point = model.projectedDamage(finding, viewport: geometry.size) {
+                                        VStack(spacing: 3) {
+                                            Text(finding.label).font(.system(size: 10, weight: .medium)).padding(4).background(Dwelld.paper.opacity(0.95)).foregroundStyle(Dwelld.ink)
+                                            Image(systemName: "exclamationmark.circle.fill").foregroundStyle(Color.orange).background(Circle().fill(.white)).font(.system(size: 22))
+                                        }.position(point)
+                                    }
+                                }
+                            }
+                        }.allowsHitTesting(false)
                         MarkCrosshair(pulse: model.markPulse).frame(maxWidth: .infinity, maxHeight: .infinity).allowsHitTesting(false)
                         VStack {
                             Spacer()
@@ -128,6 +140,28 @@ struct CaptureScreen: View {
                         }.foregroundStyle(Dwelld.ink).padding(10).background(Dwelld.paper.opacity(0.92)).clipShape(RoundedRectangle(cornerRadius: 3)).padding(12)
                     }
                 }.background(Dwelld.well).clipShape(RoundedRectangle(cornerRadius: 2))
+                if model.scanning || model.processing || model.ready {
+                    Text(model.damageCheckStatus).font(.system(size: 11)).foregroundStyle(Dwelld.muted)
+                }
+                if let image = model.damageEvidence {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Damage spotted").font(Dwelld.serif(18)).foregroundStyle(Dwelld.ink)
+                        Image(uiImage: image).resizable().aspectRatio(contentMode: .fit)
+                            .overlay {
+                                GeometryReader { geometry in
+                                    ForEach(model.damageEvidenceFindings) { finding in
+                                        if let box = finding.boundingBox {
+                                            Rectangle().stroke(Color.orange, lineWidth: 2)
+                                                .frame(width: geometry.size.width * box.width, height: geometry.size.height * box.height)
+                                                .position(x: geometry.size.width * (box.x + box.width / 2), y: geometry.size.height * (box.y + box.height / 2))
+                                        }
+                                    }
+                                }
+                            }
+                        Text(model.damageEvidenceFindings.map { $0.label }.joined(separator: " · ")).font(.system(size: 12)).foregroundStyle(Dwelld.ink)
+                        Text("Source photo · suggestions update after cross-checking. Scanning continues.").font(.system(size: 10)).foregroundStyle(Dwelld.muted)
+                    }
+                }
                 if model.processing { LineLoader(label: "Building your measured room") }
                 if model.uploading { LineLoader(label: "Sending to your laptop", progress: model.uploadProgress) }
                 VStack(spacing: 10) {

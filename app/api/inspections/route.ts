@@ -39,7 +39,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const user = await requireUser(request);
-    const body = await readJsonBody(request, 512*1024) as { roomId?: unknown; videoUrl?: unknown; videoMimeType?: unknown; detectionFrames?: unknown; type?: unknown };
+    const body = await readJsonBody(request, 1024*1024) as { roomId?: unknown; videoUrl?: unknown; videoMimeType?: unknown; detectionFrames?: unknown; type?: unknown };
     if (body.type !== undefined && !["move-in","move-out"].includes(String(body.type))) return NextResponse.json({error:"Invalid inspection type"},{status:400});
     const roomId = typeof body.roomId === "string" ? parseObjectId(body.roomId) : null;
     const videoUrl = typeof body.videoUrl === "string" ? body.videoUrl : "";

@@ -22,3 +22,9 @@ The live RoomPlan view occupies at least 320pt and includes live tracking state,
 ## Website QR pairing
 
 Create a laptop inspection and scan its QR. The HTTPS handoff page offers **Open Dwelld Capture** using the registered `dwelld://pair` scheme, or browser video. The native app redeems the one-use pairing token and uses a session-scoped phone token, without acquiring an account session. It reports real frame/depth counts and a 480px JPEG preview about every two seconds. The laptop previews those frames; RoomPlan outlines are native-only during capture. After Finish scan and Upload, the same laptop session links to the saved measured room. Native paired assets carry both owner and live-session metadata; the manifest route validates both. This is a refreshed preview, not a native WebRTC stream. Gaussian training remains an offline step.
+
+## Continuous damage feedback — 24 October 2026
+
+The paired capture selects a steady evidence photo every second, uploads the newest pending view first, and retains the other evidence photos for the final save. RGB evidence has a maximum 1600-pixel edge; depth/confidence uploads stay sparse. The server checks all visible furniture and surfaces with Gemini and the specialist crack model. Potential damage appears before the bounded Gemini cross-check finishes.
+
+The phone shows marked source-photo evidence and projects findings with measured world coordinates into the current camera viewport. The laptop shows the same evidence and 3D markers. The phone progress response reports checked, processing and queued photo counts. These are asynchronous checks, not guaranteed one-result-per-second video inference. A new native build is required; web deployment alone does not update an installed iPhone app.

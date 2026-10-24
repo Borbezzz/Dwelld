@@ -1,5 +1,6 @@
 import sharp from "sharp";
-import { inspectScoped, type Box } from "./damage";
+import { inspectCracks } from "./crack-detector";
+import { inspectVisibleDamage, type DamageObservation, type Box } from "./damage";
 import { verifyFinding, autoApproveThreshold, type Verdict } from "./verify";
 
 /** Camera pose of one evidence photo, in the scan's world space (ARKit, metres, Y up, column-major). */
@@ -71,47 +72,54 @@ const centre = (b: Box): [number, number] => [b.x + b.width / 2, b.y + b.height 
 const iou = (a: Box, b: Box) => { const w = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x)), h = Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y)), i = w * h; return i / (a.width * a.height + b.width * b.height - i || 1); };
 
 /**
- * One evidence photo: inspect the tables, cabinets and doors RoomPlan says are in view (cropped from
- * their projected 3D boxes, so every finding belongs to a real measured piece), optionally the walls,
- * then let a second Gemini pass try to disprove each finding. Confident ones are auto-approved.
+ * Inspect all visible damage, associate boxes with measured geometry when possible, and publish
+ * candidates before bounded verification. Findings without geometry keep their source-photo box.
  */
-export async function analyzeEvidenceFrame(image: Buffer, pose: FramePose, elements: RoomElement[], options: { walls: boolean }) {
+export async function analyzeEvidenceFrame(image: Buffer, pose: FramePose, elements: RoomElement[], options: { walls: boolean; onCandidates?: (findings: FrameFinding[]) => Promise<void>; observations?: DamageObservation[]; verify?: boolean }) {
   const meta = await sharp(image).metadata();
   // The pose was recorded for the encoded size; rescale if the stored image differs.
   const scaled: FramePose = meta.width && meta.height && (meta.width !== pose.width || meta.height !== pose.height)
     ? { ...pose, intrinsics: pose.intrinsics.map((v, i) => i === 0 || i === 6 ? v * meta.width! / pose.width : i === 4 || i === 7 ? v * meta.height! / pose.height : v), width: meta.width, height: meta.height } : pose;
   const views = elements.map(e => elementInView(e, scaled)).filter((v): v is ElementView => !!v);
-  const targets = views.filter(v => scopeFor(v.category)).sort((a, b) => b.area - a.area).slice(0, 3);
-  const walls = elements.filter(e => /wall|door/i.test(e.category));
+  const warnings: string[] = [];
   const out: FrameFinding[] = [];
   const add = (label: string, o: { type: string; description: string; boundingBox: Box | null }, element: RoomElement | null, source: FrameFinding["detectionSource"]) => {
     let worldPosition: V3 | null = null, owner = element;
     if (o.boundingBox) {
       const [px, py] = centre(o.boundingBox);
       if (element) worldPosition = hitElement(px, py, scaled, element)?.point ?? null;
-      else { const hits = walls.map(w => ({ w, h: hitElement(px, py, scaled, w) })).filter(x => x.h).sort((a, b) => a.h!.t - b.h!.t); if (hits[0]) { owner = hits[0].w; worldPosition = hits[0].h!.point; } }
+      else { const hits = elements.map(w => ({ w, h: hitElement(px, py, scaled, w) })).filter(x => x.h).sort((a, b) => a.h!.t - b.h!.t); if (hits[0]) { owner = hits[0].w; worldPosition = hits[0].h!.point; } }
     }
     const ownerScope = owner && scopeFor(owner.category);
-    if (!element && ownerScope === "door") label = NAMES.door;
-    // The same mark seen by a furniture crop and by the whole-photo pass is reported once.
+    if (!element && owner) label = ownerScope ? NAMES[ownerScope] : owner.category;
+    // Overlapping Gemini and specialist hypotheses are reported once.
     if (o.boundingBox && out.some(f => f.boundingBox && iou(f.boundingBox, o.boundingBox!) > .35)) return;
-    out.push({ label: `${label}: ${o.type}`, description: o.description, damageType: o.type, boundingBox: o.boundingBox, elementId: owner?.id ?? null, elementCategory: owner?.category ?? (element ? element.category : "wall"), worldPosition, detectionSource: source, reviewStatus: "pending", autoApproved: false });
+    out.push({ label: `${label}: ${o.type}`, description: o.description, damageType: o.type, boundingBox: o.boundingBox, elementId: owner?.id ?? null, elementCategory: owner?.category ?? (element ? element.category : "unassigned"), worldPosition, detectionSource: source, reviewStatus: "pending", autoApproved: false });
   };
-  // Both passes run at once; crop results are added first so they win when the same mark is seen twice.
-  const [crops, whole] = await Promise.all([
-    Promise.all(targets.map(async v => ({ v, list: await inspectScoped(image, scopeFor(v.category)!, v.box).catch(() => []) }))),
-    options.walls && walls.length ? inspectScoped(image, "wall").catch(() => []) : Promise.resolve([]),
+  // Inspect the entire photo even before RoomPlan has recognized a surface or object.
+  const [whole, cracks] = await Promise.all([
+    options.observations ? Promise.resolve(options.observations) : inspectVisibleDamage(image),
+    inspectCracks(image).catch(() => { warnings.push('Specialist crack check was unavailable.'); return []; }),
   ]);
-  for (const { v, list } of crops) { const scope = scopeFor(v.category)!, el = elements.find(e => e.id === v.elementId)!; list.forEach(o => add(NAMES[scope], o, el, "gemini")); }
-  whole.forEach(o => add(NAMES.wall, o, null, "gemini"));
+  whole.forEach(o => add('Visible damage', o, null, 'gemini'));
+  cracks.forEach(o => add('Potential crack', { type: 'crack', description: 'Specialist crack candidate; requires cross-checking against the photo.', boundingBox: o.boundingBox }, null, 'crack-model'));
+  // Publish suggestions immediately; verification updates them in place afterwards.
+  await options.onCandidates?.(out);
   // Cross-check: a second, adversarial Gemini look at each finding.
   const threshold = autoApproveThreshold();
-  await Promise.allSettled(out.filter(f => f.boundingBox).map(async f => {
-    const v = await verifyFinding(image, { label: f.label, description: f.description, boundingBox: f.boundingBox! });
-    f.verification = { ...v, threshold }; f.confidence = v.verdict === "damage" ? v.confidence : 1 - v.confidence;
-    if (v.verdict === "damage" && v.confidence >= threshold) { f.reviewStatus = "confirmed"; f.autoApproved = true; }
+  const pending = (options.verify === false ? [] : out.filter(f => f.boundingBox).slice(0, 6));
+  let cursor = 0;
+  await Promise.all(Array.from({ length: Math.min(3, pending.length) }, async () => {
+    while (cursor < pending.length) {
+      const f = pending[cursor++];
+      try {
+        const v = await verifyFinding(image, { label: f.label, description: f.description, boundingBox: f.boundingBox! }, { timeoutMs: 20_000 });
+        f.verification = { ...v, threshold }; f.confidence = v.verdict === 'damage' ? v.confidence : 1 - v.confidence;
+        if (v.verdict === 'damage' && v.confidence >= threshold) { f.reviewStatus = 'confirmed'; f.autoApproved = true; }
+      } catch { /* Keep unverified candidates available for human review. */ }
+    }
   }));
   // Findings the verifier is confident are not damage are dropped rather than shown.
   const kept = out.filter(f => !(f.verification?.verdict === "not_damage" && f.verification.confidence >= .6));
-  return { findings: kept, views, dropped: out.length - kept.length };
+  return { findings: kept, views, dropped: out.length - kept.length, warnings };
 }

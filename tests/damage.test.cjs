@@ -9,7 +9,7 @@ function load(relative) {
   const filename = path.resolve(relative), mod = new Module(filename, module);
   mod.filename = filename; mod.paths = module.paths;
   const original = mod.require.bind(mod);
-  mod.require = (id) => id.startsWith('./') ? load(path.join(path.dirname(relative), id + '.ts')) : original(id);
+  mod.require = (id) => id.startsWith('./') || id.startsWith('../') ? load(path.join(path.dirname(relative), id + '.ts')) : original(id);
   mod._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS, esModuleInterop: true } }).outputText, filename);
   return mod.exports;
 }

@@ -237,15 +237,14 @@ sequenceDiagram
     B->>A: Reopen/poll and review
 ```
 
-1. The browser samples unique timestamps at 15%, 50%, and 85% of duration. Server validation accepts one to three frames and up to 20 detections per frame.
+1. The browser samples at one-second intervals, including the beginning and end (up to 121 images for a two-minute video). Nearby object observations use the live tracker to reduce repeated inventory entries.
 2. YOLO applies 640×640 letterboxing and class-aware non-maximum suppression, then maps boxes to normalized source coordinates. Browser detections are validated; this path does not independently rerun server YOLO against the uploaded recording.
-3. FFmpeg extracts matching original-resolution PNGs. Identical frames are deduplicated by hash.
-4. Gemini inspects detected-object crops in bounded batches. Crop-local damage coordinates map into the original frame. Damage links to specific object IDs rather than labels alone.
-5. This path also asks Gemini for up to four supplemental objects per frame from wardrobe, bookshelf, desk, chest of drawers, sideboard, and nightstand. Invalid/overlapping proposals are discarded and provenance remains distinct from YOLO.
-6. Whole-frame checks inspect room surfaces. A specialized crack model adds separately attributed candidate boxes.
-7. Findings and evidence are saved with review status `pending`. Embeddings are indexed in a bounded batch; failed indexing can be resumed separately.
+3. The server independently selects one-second timestamps, including for older clients that submitted only three frames. FFmpeg extracts original-resolution PNGs using accurate input seeking. Byte-identical photos are deduplicated by hash.
+4. Gemini checks every selected photo for damage on all visible furniture, fixtures and room surfaces. Requests contain up to six timestamped photos, with at most two batches in flight. Missing, duplicated or invented response timestamps fail validation. Each box belongs to its exact source photo.
+5. A specialized crack model adds separately attributed candidate boxes. YOLO supplies the main video inventory. One supplementary furniture check per batch preserves Gemini-assisted observations for categories YOLO does not support.
+6. Findings and evidence are saved with review status `pending`; a bounded second look can auto-confirm findings. Embeddings are indexed in a bounded batch; failed indexing can be resumed separately.
 
-The working analysis budget is approximately 240 seconds within a route declaring `maxDuration=300`. Gemini damage calls have 45-second timeouts; selected transient errors receive one bounded retry if time remains. Incomplete checks preserve successful work as `partial` with explicit warnings. Fatal orchestration failures record `failed`.
+The working analysis budget is approximately 240 seconds within a route declaring `maxDuration=300`. Batch requests have 60-second timeouts. Unchecked batches or failed services produce explicit warnings and `partial` status; a partial inspection is not evidence that unassessed views are undamaged.
 
 Supported YOLO room classes are chair, couch, potted plant, bed, dining table, toilet, TV, laptop, microwave, oven, toaster, sink, refrigerator, clock, and vase. It is not open-vocabulary inventory. Repeated video views do not establish stable physical identity.
 
@@ -255,9 +254,9 @@ The companion can scan locally before sign-in. Direct upload uses a web-account 
 
 1. RoomPlan captures element UUIDs, dimensions, transforms, and a local USDZ. ARKit captures RGB frames, intrinsics, camera poses, and depth/confidence when available, at up to roughly 2 Hz and 240 frames over a scan bounded to 120 seconds.
 2. The compact path builds an **untrained LiDAR-initialized Gaussian preview** from measured high-confidence depth. Samples deduplicate into 2.5 cm world voxels with a 150,000-splat cap. An on-device Metal preview renders up to 40,000 accumulated samples.
-3. Compact upload sends the preview PLY, up to 24 resized JPEGs, corresponding depth/confidence assets, and a manifest. Up to four assets upload concurrently, each with sequential chunks; completed references persist for retry.
+3. Paired compact upload sends the preview PLY, roughly one resized RGB evidence photo per second plus up to sixteen extra coverage views, sparse depth/confidence assets, and a manifest. Up to four assets upload concurrently, each with sequential chunks; completed references persist for retry.
 4. The backend validates the manifest and asset ownership. Paired assets must also belong to the session. Reposting the same saved manifest is idempotent; replacing it with a different scan is rejected.
-5. Server analysis samples first/middle/last manifest frames and runs server-side YOLO. The shared live-image service checks up to three object crops plus surfaces/cracks per frame. Other detected objects remain inventory observations without individual damage checks.
+5. Paired native analysis inspects whole photos even before RoomPlan recognizes furniture, publishes candidates before verification, and checks them with Gemini plus the specialist crack model. Two database-leased live workers prioritize recent queued views. Saving reuses completed live checks and analyses remaining photos in batches of six, with explicit warnings for failed/unassessed photos. The older standalone spatial-import service still samples first/middle/last frames.
 6. High-confidence depth projects evidence into world coordinates. Compatible RoomPlan elements can group object observations within the scan; unresolved identity stays explicit. Marker creation preserves existing user edits.
 
 World coordinates are ARKit right-handed, Y-up, in metres; matrices are column-major. Depth is little-endian float32 metres and confidence is uint8 0–2. Camera intrinsics must match encoded image dimensions. Stored registration does not itself prove good alignment.

@@ -46,6 +46,14 @@ export async function recordLiveAnalysis(session:SessionDoc,observationId:string
 }
 export async function getLiveState(session:SessionDoc,role:LiveRole,_after:string|null) {
  const {db}=await liveCollections();
- const [objects,findings,signals]=await Promise.all([db.collection("liveObjects").find({sessionId:session._id},{projection:{_id:0,sessionId:0}}).limit(100).toArray(),db.collection("liveFindings").find({sessionId:session._id},{projection:{_id:0,sessionId:0}}).limit(200).toArray(),db.collection("liveSignals").find({sessionId:session._id,to:role}).sort({sequence:-1,createdAt:-1,_id:-1}).limit(200).toArray()]);
- return {session:safeSession(session),objects:objects as unknown as LiveObject[],findings,signals:signals.reverse().map(s=>({id:String(s._id),eventId:s.eventId,type:s.type,data:s.data,from:s.from}))};
+ const [objects,findings,signals]=await Promise.all([db.collection("liveObjects").find({sessionId:session._id},{projection:{_id:0,sessionId:0}}).limit(100).toArray(),db.collection("liveFindings").find({sessionId:session._id},{projection:{_id:0,sessionId:0}}).sort({timestampSeconds:-1,createdAt:-1}).limit(200).toArray(),db.collection("liveSignals").find({sessionId:session._id,to:role}).sort({sequence:-1,createdAt:-1,_id:-1}).limit(200).toArray()]);
+ const progress = session.nativeCapture ? await liveFrameProgress(session._id) : undefined;
+ return {session:{...safeSession(session),...(progress?{analysisProgress:progress}:{})},objects:objects as unknown as LiveObject[],findings,signals:signals.reverse().map(s=>({id:String(s._id),eventId:s.eventId,type:s.type,data:s.data,from:s.from}))};
+}
+
+export async function liveFrameProgress(sessionId: ObjectId) {
+ const {db} = await liveCollections();
+ const counts = await db.collection('liveFrames').aggregate<{_id:string;count:number}>([{ $match: {sessionId} }, { $group: {_id:'$status',count:{$sum:1}} }]).toArray();
+ const count = (status:string) => counts.find(c=>c._id===status)?.count || 0;
+ return { checked:count('done'),checking:count('analyzing'),queued:count('queued'),failed:count('failed') };
 }

@@ -17,7 +17,20 @@ struct Asset: Codable { let name: String; var mediaRef: String; let kind: String
 struct PhoneMark: Codable { let id: String; let position: [Float]; let timestamp: Double; let image: String; var sent = false }
 struct Manifest: Codable { var version = 1; let sessionId: String; var coordinateSystem = "arkit-right-handed-y-up-metres"; var elements: [Element]; var frames: [FrameRecord]; var assets: [Asset] }
 
+struct PhoneDamageBox: Decodable { let x: Double; let y: Double; let width: Double; let height: Double }
+struct PhoneFinding: Decodable, Identifiable {
+    let id: String; let label: String; let worldPosition: [Float]?; let boundingBox: PhoneDamageBox?
+    let evidenceFrameRef: String?; let reviewStatus: String?; let timestampSeconds: Double?
+}
+
 @MainActor final class CaptureModel: NSObject, ObservableObject, @preconcurrency RoomCaptureViewDelegate, @preconcurrency RoomCaptureSessionDelegate {
+    @Published var liveFindings: [PhoneFinding] = []
+    @Published var damageEvidence: UIImage?
+    @Published var damageEvidenceFindings: [PhoneFinding] = []
+    @Published var damageCheckStatus = "Damage checks begin with the scan"
+    private var evidenceRef = ""
+    private var evidenceLoading = false
+    private var pendingEvidence: FrameRecord?
     @Published var status = "Start an inspection on your laptop, then scan its QR code to connect this phone."
     @Published var pairedSession = ""
     @Published var pairing = false
@@ -93,7 +106,12 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
             if uploading { progress["upload"] = uploadProgress }
             request.httpBody = try JSONSerialization.data(withJSONObject: progress)
             let (data, response) = try await URLSession.shared.data(for: request)
-            if let http = response as? HTTPURLResponse, http.statusCode == 200, let body = try JSONSerialization.jsonObject(with: data) as? [String: Any], body["stopRequested"] as? Bool == true, scanning { stop() }
+            if let http = response as? HTTPURLResponse, http.statusCode == 200, let body = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                if let raw = body["findings"], let encoded = try? JSONSerialization.data(withJSONObject: raw), let findings = try? JSONDecoder().decode([PhoneFinding].self, from: encoded) { liveFindings = findings }
+                if let p = body["analysisProgress"] as? [String: Int] { damageCheckStatus = "\(p["checked"] ?? 0) photos checked · \(p["checking"] ?? 0) checking · \(p["queued"] ?? 0) waiting" }
+                Task { await refreshDamageEvidence() }
+                if body["stopRequested"] as? Bool == true, scanning { stop() }
+            }
         } catch { /* Capture continues locally if the laptop connection drops. */ }
     }
     @Published var liveSplats: [LiveGaussian] = []
@@ -160,7 +178,7 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
             uploadComplete = false; uploadProgress = 0
             if var saved = self.connection { saved.captureFolder = dir.lastPathComponent; try CaptureConnectionStore.save(saved); self.connection = saved }
             splatBuilder.reset(); liveSplats = []; splatCount = 0; splatRevision += 1
-            marks = []; markCount = 0
+            marks = []; markCount = 0; liveFindings = []; damageEvidence = nil; damageEvidenceFindings = []; evidenceRef = ""; pendingEvidence = nil
             streamCursor = 0; preUploaded = [:]; preUploadTask = nil; liveEvidence = [:]; motions = []; sentDuringScan = 0
             view.captureSession.run(configuration: RoomCaptureSession.Configuration())
             // Read the current frame without replacing RoomPlan's ARSession delegate.
@@ -241,7 +259,7 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
     private func makeEvidence(_ f: FrameRecord, dir: URL) throws -> FrameRecord {
         let name = "evidence-" + f.image
         guard let source = CIImage(contentsOf: dir.appendingPathComponent(f.image)) else { throw CocoaError(.fileReadCorruptFile) }
-        let scale = min(1, 1280 / max(source.extent.width, source.extent.height))
+        let scale = min(1, 1600 / max(source.extent.width, source.extent.height))
         let image = source.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
         guard let jpeg = context.jpegRepresentation(of: image, colorSpace: CGColorSpaceCreateDeviceRGB(), options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.78]) else { throw CocoaError(.fileWriteUnknown) }
         try jpeg.write(to: dir.appendingPathComponent(name))
@@ -253,17 +271,53 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
     }
     /// Uploads run one after another in the background while the scan continues.
     private func queueUpload(_ files: [(String, String)], analyse evidence: FrameRecord? = nil) {
-        guard !pairedSession.isEmpty else { return }
-        let previous = preUploadTask
+        guard !pairedSession.isEmpty, let evidence else { return }
+        // Keep only the newest pending view when the network is slower than capture.
+        // All other one-second evidence photos are still retained in the final manifest.
+        pendingEvidence = evidence
+        guard preUploadTask == nil else { return }
         preUploadTask = Task { [weak self] in
-            await previous?.value
-            for (name, type) in files {
-                guard let self, self.preUploaded[name] == nil else { continue }
-                do { let ref = try await self.uploadNow(name, contentType: type); self.preUploaded[name] = ref; self.sentDuringScan += 1 } catch { /* Retried at Finish. */ }
+            guard let self else { return }
+            defer { self.preUploadTask = nil }
+            while let current = self.pendingEvidence {
+                self.pendingEvidence = nil
+                do {
+                    if self.preUploaded[current.image] == nil {
+                        self.preUploaded[current.image] = try await self.uploadNow(current.image, contentType: "image/jpeg")
+                        self.sentDuringScan += 1
+                    }
+                    if let ref = self.preUploaded[current.image] { await self.requestAnalysis(current, ref: ref) }
+                } catch { /* Retried when the complete capture is saved. */ }
             }
-            // The photo is on the server: ask for it to be analysed against the measured furniture now.
-            if let self, let evidence, let ref = self.preUploaded[evidence.image] { await self.requestAnalysis(evidence, ref: ref) }
         }
+    }
+    private func refreshDamageEvidence() async {
+        guard let latest = liveFindings.first, let ref = latest.evidenceFrameRef else {
+            damageEvidence = nil; damageEvidenceFindings = []; evidenceRef = ""; return
+        }
+        guard !evidenceLoading else { return }
+        let marks = liveFindings.filter { $0.evidenceFrameRef == ref }
+        if evidenceRef == ref { damageEvidenceFindings = marks; return }
+        evidenceLoading = true; defer { evidenceLoading = false }
+        var parts = URLComponents(url: pairedBase.appendingPathComponent("api/live/\(pairedSession)/media"), resolvingAgainstBaseURL: false)!
+        parts.queryItems = [URLQueryItem(name: "ref", value: ref)]
+        guard let url = parts.url else { return }
+        var request = URLRequest(url: url); request.setValue("Bearer \(phoneToken)", forHTTPHeaderField: "Authorization")
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            if let http = response as? HTTPURLResponse, http.statusCode == 200, let image = UIImage(data: data), liveFindings.first?.evidenceFrameRef == ref {
+                evidenceRef = ref; damageEvidence = image; damageEvidenceFindings = marks
+            }
+        } catch { /* Keep scanning if an evidence preview cannot load. */ }
+    }
+    func projectedDamage(_ finding: PhoneFinding, viewport: CGSize) -> CGPoint? {
+        guard let p = finding.worldPosition, p.count == 3, let frame = view.captureSession.arSession.currentFrame else { return nil }
+        let world = SIMD3<Float>(p[0], p[1], p[2])
+        let camera = simd_inverse(frame.camera.transform) * SIMD4<Float>(world, 1)
+        guard camera.z < -0.1 else { return nil }
+        let point = frame.camera.projectPoint(world, orientation: view.window?.windowScene?.interfaceOrientation ?? .portrait, viewportSize: viewport)
+        guard point.x >= 0, point.y >= 0, point.x <= viewport.width, point.y <= viewport.height else { return nil }
+        return point
     }
     private func requestAnalysis(_ f: FrameRecord, ref: String) async {
         var request = URLRequest(url: pairedBase.appendingPathComponent("api/live/\(pairedSession)/frame")); request.httpMethod = "POST"; request.timeoutInterval = 15
@@ -335,13 +389,12 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
         frameCount = frames.count; depthCount = frames.filter { $0.depth != nil }.count
         if frameCount % 2 == 0 { Task { await publishProgress(stage: "scanning") } }
         if frameCount % 2 == 0 { Task { await publishStream() } }
-        // Every 4 s, send the steadiest of the last 8 frames (least camera motion = least blur) for analysis.
-        if !pairedSession.isEmpty, frames.count % 8 == 0 {
-            let window = (frames.count - 8)..<frames.count
+        // Every second, send the steadier of the last two frames for continuous damage coverage.
+        if !pairedSession.isEmpty, frames.count % 2 == 0 {
+            let window = (frames.count - 2)..<frames.count
             if let index = window.min(by: { motions[$0] < motions[$1] }), let evidence = try? makeEvidence(frames[index], dir: dir) {
-                let record = frames[index]
                 liveEvidence[index] = evidence
-                queueUpload([(evidence.image, "image/jpeg")] + [record.depth, record.confidence].compactMap { $0 }.map { ($0, "application/octet-stream") }, analyse: evidence)
+                queueUpload([(evidence.image, "image/jpeg")], analyse: evidence)
             }
         }
         } catch { stop(); status = "Local evidence write failed. Capture stopped." }
@@ -372,20 +425,22 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
             // Retain the full calibrated capture on the phone for later training/export.
             let original = Manifest(sessionId: processedResult.identifier.uuidString, elements: elements, frames: frames, assets: assets + [Asset(name: "room.usdz", mediaRef: "", kind: "usdz")])
             try JSONEncoder().encode(original).write(to: dir.appendingPathComponent("original-manifest.json"))
-            // Sixteen evenly spaced evidence samples bound upload time without changing their timestamps.
+            // Preserve every one-second evidence photo, plus sparse depth samples.
             let count = min(16, frames.count)
             let sentKeys = liveEvidence.keys.sorted()
-            let indices: [Int] = sentKeys.count >= 4
-                ? (sentKeys.count <= 16 ? sentKeys : (0..<16).map { sentKeys[$0 * (sentKeys.count - 1) / 15] })
-                : (count > 1 ? (0..<count).map { $0 * (frames.count - 1) / (count - 1) } : Array(0..<count))
+            let fallback = count > 1 ? (0..<count).map { $0 * (frames.count - 1) / (count - 1) } : Array(0..<count)
+            let indices = Array(Set(sentKeys + fallback)).sorted()
             var evidence: [FrameRecord] = []
             var cloudAssets = assets.filter { $0.kind == "splat" }
             for i in indices {
                 let f = frames[i]
-                let record = try liveEvidence[i] ?? makeEvidence(f, dir: dir)
+                let sampled = try liveEvidence[i] ?? makeEvidence(f, dir: dir)
+                // Dense RGB evidence; keep depth uploads sparse to avoid blocking damage feedback.
+                let keepDepth = fallback.contains(i)
+                let record = FrameRecord(timestamp: sampled.timestamp, image: sampled.image, depth: keepDepth ? sampled.depth : nil, confidence: keepDepth ? sampled.confidence : nil, width: sampled.width, height: sampled.height, depthWidth: keepDepth ? sampled.depthWidth : nil, depthHeight: keepDepth ? sampled.depthHeight : nil, intrinsics: sampled.intrinsics, transform: sampled.transform)
                 evidence.append(record)
                 cloudAssets.append(Asset(name: record.image, mediaRef: preUploaded[record.image] ?? "", kind: "image"))
-                cloudAssets.append(contentsOf: assets.filter { $0.name == f.depth || $0.name == f.confidence }.map { a in var a = a; a.mediaRef = preUploaded[a.name] ?? ""; return a })
+                cloudAssets.append(contentsOf: assets.filter { keepDepth && ($0.name == f.depth || $0.name == f.confidence) }.map { a in var a = a; a.mediaRef = preUploaded[a.name] ?? ""; return a })
             }
             manifest = Manifest(sessionId: processedResult.identifier.uuidString, elements: elements, frames: evidence, assets: cloudAssets)
             try JSONEncoder().encode(manifest).write(to: dir.appendingPathComponent("manifest.json"))

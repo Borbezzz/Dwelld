@@ -1,12 +1,12 @@
 import {inspectCracks, CRACK_MODEL} from './crack-detector';
 import { randomUUID } from 'node:crypto';
 import sharp from 'sharp';
-import { inspectObjectDamage, inspectSurfaceDamage, validBox } from './damage';
+import { inspectVisibleDamage, inspectObjectDamage, inspectSurfaceDamage, validBox } from './damage';
 import { deleteMedia, writeMedia } from './media';
 import type { LiveAnalysisObject, LiveAnalysisResult, LiveDamageFinding } from '../live/detection-types';
 
 const LABELS: Record<number,string> = {56:'chair',57:'couch',58:'potted plant',59:'bed',60:'dining table',61:'toilet',62:'tv',63:'laptop',68:'microwave',69:'oven',70:'toaster',71:'sink',72:'refrigerator',74:'clock',75:'vase'};
-export type LiveAnalysisInput = {sessionId:string;observationId:string;timestampSeconds:number;objects:LiveAnalysisObject[];includeSurfaces:boolean};
+export type LiveAnalysisInput = {sessionId:string;observationId:string;timestampSeconds:number;objects:LiveAnalysisObject[];includeSurfaces:boolean;fullFrame?:boolean};
 /** Caller owns session authentication, persisted throttle and observation idempotency. */
 export async function analyzeLiveFrame(image: Buffer, input: LiveAnalysisInput): Promise<LiveAnalysisResult> {
   if(!/^[a-zA-Z0-9_-]{1,100}$/.test(input.sessionId)||!/^[a-zA-Z0-9_-]{1,100}$/.test(input.observationId)||!Number.isFinite(input.timestampSeconds)||input.timestampSeconds<0)throw new Error('Invalid live frame identity');
@@ -25,6 +25,17 @@ export async function analyzeLiveFrame(image: Buffer, input: LiveAnalysisInput):
   const size=await sharp(normalized).metadata();
   const ref=await writeMedia(normalized,`live/${input.sessionId}/${input.observationId}.png`,'image/png');
   try{
+    if (input.fullFrame) {
+      const results = await Promise.allSettled([inspectVisibleDamage(normalized), inspectCracks(normalized)]);
+      const analysisWarnings: string[] = [];
+      const findings: LiveDamageFinding[] = [];
+      const damage = results[0], cracks = results[1];
+      if (damage.status === 'fulfilled') damage.value.forEach(item => findings.push({ id: randomUUID(), parentObjectId: null, label: item.type, description: item.description, boundingBox: item.boundingBox, timestampSeconds: input.timestampSeconds, damageType: item.type, source: 'ai', detectionSource: 'gemini' }));
+      else analysisWarnings.push('Whole-frame damage analysis could not finish. This view remains unassessed.');
+      if (cracks.status === 'fulfilled') cracks.value.forEach(item => findings.push({ id: randomUUID(), parentObjectId: null, label: 'Potential crack', description: 'Specialist crack candidate; review the source image.', boundingBox: item.boundingBox, timestampSeconds: input.timestampSeconds, damageType: 'crack', source: 'ai', detectionSource: 'crack-model' }));
+      else analysisWarnings.push('Specialist crack analysis could not finish.');
+      return { analysisWarnings, evidenceFrameRef: ref, sourceWidth: size.width!, sourceHeight: size.height!, findings, analyzedObjectIds: damage.status === 'fulfilled' ? input.objects.map(o => o.objectId) : [], surfacesAnalyzed: damage.status === 'fulfilled' };
+    }
     const findings:LiveDamageFinding[]=[];const analysisWarnings:string[]=[];
     const checks=await Promise.allSettled([
       ...input.objects.map(async object=>{
