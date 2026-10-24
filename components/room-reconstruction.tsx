@@ -11,7 +11,7 @@ export default function RoomReconstruction({roomId,name,inspections,hint=false,l
  const [scene,setScene]=useState<{manifest:SpatialManifest;markers:SpatialMarker[];inspectionId:string}|null>(null),[status,setStatus]=useState('');
  useEffect(()=>{const controller=new AbortController();setScene(null);setStatus(roomId?'loading':'Choose a room to view it in 3D.');if(!roomId||loading)return;
   void(async()=>{try{
-   const candidates=inspections.filter(i=>i.roomId===roomId&&(i.status==='completed'||i.status==='partial'));
+   const candidates=inspections.filter(i=>i.roomId===roomId&&(i.status==='completed'||i.status==='partial'||i.status==='processing'));
    // Probe in small parallel batches, preserving inspection order while avoiding an N-request waterfall.
    for(let offset=0;offset<candidates.length;offset+=3){
     const batch=await Promise.all(candidates.slice(offset,offset+3).map(async inspection=>{
