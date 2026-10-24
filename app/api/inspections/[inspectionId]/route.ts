@@ -1,4 +1,5 @@
 import { requireUser, requireOwnedInspection } from "@/lib/server/access";
+import { requireReadableInspection } from "@/lib/server/space-access";
 import { deleteInspection } from "@/lib/server/delete";
 import { errorResponse } from "@/lib/server/api-error";
 import { NextResponse } from "next/server";
@@ -14,8 +15,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ insp
   try {
     const user = await requireUser(request);
     const db = await getDb();
-    const inspection = await db.collection("inspections").findOne({ _id: id, ownerId:user.id });
-    if (!inspection) return NextResponse.json({ error: "Inspection not found" }, { status: 404 });
+    const inspection = await requireReadableInspection(id,user.id);
     const findings = await db.collection("findings").find({ inspectionId: id }).sort({ createdAt: 1 }).toArray();
     const serializedFindings = findings.map((f) => ({
       id: String(f._id), kind: f.kind, label: f.label, description: f.description,
