@@ -1,4 +1,5 @@
 import {readJsonBody} from "@/lib/server/request-body";
+import { canReadRoom } from "@/lib/server/space-access";
 import { requireUser } from "@/lib/server/access";
 import { errorResponse } from "@/lib/server/api-error";
 import { ObjectId } from "mongodb";
@@ -30,7 +31,10 @@ export async function GET(request: Request) {
     if (roomParam && !roomId) return NextResponse.json({ error: "Invalid roomId" }, { status: 400 });
     const db = await getDb();
     await ensureIndexes(db);
-    const docs = await db.collection("inspections").find({ownerId:user.id,...(roomId ? {roomId} : {})}).sort({ createdAt: -1 }).limit(100).toArray();
+    const memberships=await db.collection("spaceMembers").find({userId:user.id},{projection:{spaceId:1}}).toArray();
+    const sharedRooms=memberships.length?await db.collection("rooms").find({spaceId:{$in:memberships.map(m=>m.spaceId)}},{projection:{_id:1}}).toArray():[];
+    const accessible=[...sharedRooms.map(r=>r._id),...(await db.collection("rooms").find({ownerId:user.id},{projection:{_id:1}}).toArray()).map(r=>r._id)];
+    const docs = await db.collection("inspections").find({roomId:{$in:accessible},...(roomId ? {roomId} : {})}).sort({ createdAt: -1 }).limit(100).toArray();
     return NextResponse.json({ inspections: docs.map(serializeInspection) });
   } catch (error) { return errorResponse(error, "app/api/inspections/route.ts"); }
 }
@@ -60,8 +64,8 @@ export async function POST(request: Request) {
     catch { return NextResponse.json({ error: "Invalid browser detection frames" }, { status: 400 }); }
     const db = await getDb();
     await ensureIndexes(db);
-    const room = await db.collection("rooms").findOne({ _id: roomId, ownerId:user.id }, { projection: { _id: 1 } });
-    if (!room) return NextResponse.json({ error: "Room not found" }, { status: 404 });
+    const room = await db.collection("rooms").findOne({ _id: roomId });
+    if (!room || !await canReadRoom(room as never,user.id)) return NextResponse.json({ error: "Room not found" }, { status: 404 });
     const inspections = db.collection("inspections");
     const inspectionId = new ObjectId();
     const createdAt = new Date();
