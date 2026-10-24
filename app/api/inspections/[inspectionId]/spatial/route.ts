@@ -16,7 +16,10 @@ export async function GET(request: Request, { params }: Context) {
     const user = await requireUser(request), { inspectionId } = await params;
     const id=parseObjectId(inspectionId); if(!id)return NextResponse.json({error:"Inspection not found"},{status:404});
     const inspection = await requireReadableInspection(id, user.id), db = await getDb();
-    const capture = await db.collection("spatialCaptures").findOne({ inspectionId: inspection._id });
+    const [capture, markers] = await Promise.all([
+      db.collection("spatialCaptures").findOne({ inspectionId: inspection._id }, { projection: { manifest: 1, createdAt: 1 } }),
+      db.collection("spatialMarkers").find({ inspectionId: inspection._id, deletedAt: { $exists: false } }, { projection: { position: 1, label: 1, elementId: 1, findingId: 1, reviewStatus: 1, version: 1 } }).toArray(),
+    ]);
     const requestedRoom=new URL(request.url).searchParams.get("roomId");
     const targetId=requestedRoom?parseObjectId(requestedRoom):inspection.roomId;
     if(!targetId)return NextResponse.json({error:"Invalid room"},{status:400});
@@ -27,7 +30,6 @@ export async function GET(request: Request, { params }: Context) {
     }
     const manifest=capture?.manifest;
     const scoped=manifest&&segment?{...manifest,frames:manifest.frames.filter((f:{timestamp:number})=>f.timestamp>=segment.startTime&&f.timestamp<segment.endTime)}:manifest;
-    const markers = await db.collection("spatialMarkers").find({ inspectionId: inspection._id, deletedAt: { $exists: false } }).toArray();
     return NextResponse.json({ capture: capture ? { manifest: scoped, createdAt: capture.createdAt } : null, markers: markers.map(m => ({ id: String(m._id), position: m.position, label: m.label, elementId: m.elementId, findingId: m.findingId || null, reviewStatus: m.reviewStatus, version: m.version })) });
   } catch (e) { return errorResponse(e, "spatial.read"); }
 }
