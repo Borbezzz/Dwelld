@@ -13,7 +13,7 @@ function load(relative) {
   mod._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS, esModuleInterop: true } }).outputText, filename);
   return mod.exports;
 }
-const { cropObject, cropBoxToFrame, parseDamageResponse } = load('lib/server/damage.ts');
+const { cropObject, cropBoxToFrame, parseDamageResponse, scopeForName } = load('lib/server/damage.ts');
 const { validateClientFrames } = load('lib/server/inspection.ts');
 test('original pixel crops and rounded bounds translate to source coordinates', async () => {
   const image = await sharp({ create: { width: 101, height: 79, channels: 3, background: 'white' } }).png().toBuffer();
@@ -28,6 +28,20 @@ test('damage parser allows empty/uncertain results and rejects invalid model dat
   assert.deepEqual(parseDamageResponse('{"damage":[]}'), []);
   assert.equal(parseDamageResponse(JSON.stringify({ damage: [{ type: 'crack', description: 'Visible line, uncertain crack', boundingBox: null }] }))[0].boundingBox, null);
   for (const item of [{ type: 'legal liability', description: 'bad', boundingBox: null }, { type: 'crack', description: '', boundingBox: null }, { type: 'scratch', description: 'scratch', boundingBox: { x: .9, y: 0, width: .2, height: .3 } }]) assert.throws(() => parseDamageResponse(JSON.stringify({ damage: [item] })));
+});
+test('room labels and RoomPlan names share one damage scope', () => {
+  assert.equal(scopeForName('dining table'), 'table');
+  assert.equal(scopeForName('desk'), 'table');
+  assert.equal(scopeForName('chest of drawers'), 'cabinet');
+  assert.equal(scopeForName('storage'), 'cabinet');
+  assert.equal(scopeForName('Door(isOpen: false)'), 'door');
+  assert.equal(scopeForName('chair'), 'chair');
+  assert.equal(scopeForName('couch'), 'sofa');
+  assert.equal(scopeForName('sofa'), 'sofa');
+  assert.equal(scopeForName('bed'), 'bed');
+  assert.equal(scopeForName('tv'), null);
+  assert.equal(scopeForName('wall'), null);
+  assert.equal(scopeForName('window'), null);
 });
 test('client frames reject invalid timestamps, duplicate IDs, unsupported labels and bounds', () => {
   const d = { objectId: 'obj_1', label: 'chair', boundingBox: { x: .1, y: .2, width: .3, height: .4 }, confidence: .8 };

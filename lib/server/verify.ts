@@ -7,7 +7,17 @@ import type { Box } from "./damage";
 
 /** Findings at or above this verifier confidence are approved without a person. */
 export function autoApproveThreshold() { const v = Number(process.env.AUTO_APPROVE_THRESHOLD); return Number.isFinite(v) && v > 0 && v <= 1 ? v : 0.85; }
+/** A not-damage verdict at or above this confidence is dismissed rather than left for review. */
+export const NOT_DAMAGE_CONFIDENCE = 0.6;
 export type Verdict = { verdict: "damage" | "not_damage" | "unsure"; confidence: number; reason: string };
+
+/** Same rule for a live frame (drop it) and a saved finding (mark it rejected). Both can be undone. */
+export function reviewDecision(verdict: Verdict["verdict"], confidence: number, threshold = autoApproveThreshold()): "confirmed" | "rejected" | "pending" {
+  if (!Number.isFinite(confidence)) return "pending";
+  if (verdict === "damage" && confidence >= threshold) return "confirmed";
+  if (verdict === "not_damage" && confidence >= NOT_DAMAGE_CONFIDENCE) return "rejected";
+  return "pending";
+}
 
 /** Tight crop around the proposed box with enough surround for context, at full resolution. */
 async function zoom(image: Buffer, box: Box) {
@@ -42,24 +52,25 @@ export async function verifyFinding(image: Buffer, finding: { label: string; des
 
 /**
  * Verify every pending AI damage finding of an inspection. Confirmed at or above the threshold:
- * approved automatically (recorded as the model's decision, reversible). Everything else stays
- * for the tenant, now with the verifier's verdict and confidence attached.
+ * approved automatically. A confident not-damage verdict is dismissed. Both are the model's
+ * decision and can be undone. Anything unsure stays for the tenant, with the verdict attached.
  */
 export async function autoReviewInspection(inspectionId: ObjectId, options: { limit?: number; concurrency?: number; timeoutMs?: number; deadlineMs?: number } = {}) {
   const db = await getDb(), threshold = autoApproveThreshold();
   const findings = await db.collection("findings").find({ inspectionId, kind: "damage", source: "ai", reviewStatus: "pending", verification: { $exists: false }, evidenceFrameUrl: { $type: "string" }, boundingBox: { $ne: null } }).limit(options.limit ?? 40).toArray();
   const images = new Map<string, Promise<Buffer>>();
-  let approved = 0, checked = 0;
+  let approved = 0, rejected = 0, checked = 0;
   const one = async (f: Document) => {
     try {
       const ref = String(f.evidenceFrameUrl); if (!images.has(ref)) images.set(ref, readMedia(ref, 16 * 1024 * 1024));
       const v = await verifyFinding(await images.get(ref)!, { label: f.label, description: f.description, boundingBox: f.boundingBox }, {timeoutMs:options.timeoutMs});
-      const auto = v.verdict === "damage" && v.confidence >= threshold;
-      checked++; if (auto) approved++;
-      await db.collection("findings").updateOne({ _id: f._id, reviewStatus: "pending" }, { $set: { verification: { ...v, threshold, model: process.env.GEMINI_VERIFY_MODEL || process.env.GEMINI_MODEL || "gemini-4-argon", at: new Date() }, confidence: v.verdict === "damage" ? v.confidence : 1 - v.confidence, ...(auto ? { reviewStatus: "confirmed", autoApproved: true, reviewedAt: new Date() } : {}) }, ...(auto ? { $push: { reviewHistory: { from: "pending", to: "confirmed", at: new Date(), by: "auto-verifier", confidence: v.confidence } } } : {}) } as Document);
+      const decision = reviewDecision(v.verdict, v.confidence, threshold);
+      const auto = decision === "confirmed", dismissed = decision === "rejected";
+      checked++; if (auto) approved++; if (dismissed) rejected++;
+      await db.collection("findings").updateOne({ _id: f._id, reviewStatus: "pending" }, { $set: { verification: { ...v, threshold, model: process.env.GEMINI_VERIFY_MODEL || process.env.GEMINI_MODEL || "gemini-4-argon", at: new Date() }, confidence: v.verdict === "damage" ? v.confidence : 1 - v.confidence, ...(auto ? { reviewStatus: "confirmed", autoApproved: true, reviewedAt: new Date() } : {}), ...(dismissed ? { reviewStatus: "rejected", autoRejected: true, reviewedAt: new Date() } : {}) }, ...((auto || dismissed) ? { $push: { reviewHistory: { from: "pending", to: decision, at: new Date(), by: "auto-verifier", confidence: v.confidence, verdict: v.verdict } } } : {}) } as Document);
     } catch { /* Unverified findings simply stay pending for a person. */ }
   };
   const queue = [...findings], workers = Array.from({ length: Math.min(options.concurrency ?? 4, queue.length) }, async () => { while (queue.length && Date.now() < (options.deadlineMs ?? Infinity)) await one(queue.shift()!); });
   await Promise.all(workers);
-  return { checked, approved, threshold };
+  return { checked, approved, rejected, threshold };
 }

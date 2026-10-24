@@ -14,7 +14,8 @@ function load(relative, stubs = {}) {
   return mod.exports;
 }
 const { videoSampleTimes } = load('lib/video-sampling.ts');
-const { parseVideoDamageResponse } = load('lib/server/damage.ts');
+const { parseVideoDamageResponse, scopeForName } = load('lib/server/damage.ts');
+const { reviewDecision } = load('lib/server/verify.ts');
 const observation = { type: 'scratch', description: 'Visible scratch', boundingBox: { x: .4, y: .4, width: .2, height: .2 } };
 const pose = { width: 100, height: 100, intrinsics: [100,0,0,0,100,0,50,50,1], transform: [1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1] };
 const image = () => sharp({ create: { width: 100, height: 100, channels: 3, background: 'white' } }).png().toBuffer();
@@ -41,9 +42,9 @@ test('batch parser rejects missing, duplicated, hallucinated timestamps and inva
 test('native detection works without RoomPlan categories and publishes before verification completes', async () => {
   let published = false, verified = false;
   const { analyzeEvidenceFrame } = load('lib/server/frame-analysis.ts', {
-    './damage': {inspectVisibleDamage:async()=>[observation]},
+    './damage': {inspectVisibleDamage:async()=>[observation], scopeForName},
     './crack-detector': {inspectCracks:async()=>[]},
-    './verify': {autoApproveThreshold:()=>.85,verifyFinding:async()=>{assert(published);verified=true;return {verdict:'damage',confidence:.9,reason:'Visible mark'};}},
+    './verify': {autoApproveThreshold:()=>.85, reviewDecision, verifyFinding:async()=>{assert(published);verified=true;return {verdict:'damage',confidence:.9,reason:'Visible mark'};}},
   });
   const result = await analyzeEvidenceFrame(await image(), pose, [], {walls:true,onCandidates:async candidates=>{
     assert(!verified); assert.equal(candidates.length,1); assert.equal(candidates[0].reviewStatus,'pending');
@@ -54,9 +55,9 @@ test('native detection works without RoomPlan categories and publishes before ve
 test('native marks are projected onto the nearest real surface and false positives are removed after publishing', async () => {
   let candidate;
   const { analyzeEvidenceFrame } = load('lib/server/frame-analysis.ts', {
-    './damage': {inspectVisibleDamage:async()=>[observation]},
+    './damage': {inspectVisibleDamage:async()=>[observation], scopeForName},
     './crack-detector': {inspectCracks:async()=>[]},
-    './verify': {autoApproveThreshold:()=>.85,verifyFinding:async()=>({verdict:'not_damage',confidence:.9,reason:'Seam'})},
+    './verify': {autoApproveThreshold:()=>.85, reviewDecision, verifyFinding:async()=>({verdict:'not_damage',confidence:.9,reason:'Seam'})},
   });
   const wall = {id:'wall1',category:'wall',dimensions:[4,4,.05],transform:[1,0,0,0,0,1,0,0,0,0,1,0,0,0,-2,1]};
   const result = await analyzeEvidenceFrame(await image(), pose, [wall], {walls:true,onCandidates:async findings=>{candidate=findings[0];}});

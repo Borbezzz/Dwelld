@@ -123,6 +123,8 @@ How to read it:
 - A capture manifest saved without the live session is the path that runs YOLO on the server. It samples the first, middle, and last frame, then Gemini and the crack model.
 - Gemini also compares two inspections, embeds findings, and answers questions about saved records. Atlas Search queries those records. The dotted line is a manual export to a separate computer, not a service the app calls. QR pairing opens the iPhone app; retained browser WebRTC is not how a scan is uploaded.
 
+Chairs, sofas and beds use the same damage rules as tables, cabinets and doors. Cushion creases, fabric weave and bedding are left out. A direct import checks up to four detected objects, one kind first. A not-damage verdict at 60 percent verifier confidence or more is dismissed and can be undone. Clear damage still auto-approves at 85 percent.
+
 ### Layers and responsibilities
 
 | Layer | Technology | Responsibility |
@@ -358,7 +360,7 @@ QR links use `/connect/[sessionId]` with the pairing token in the URL fragment. 
 
 The retained browser implementation uses direct WebRTC video/data, HTTP-polled MongoDB signalling, role-scoped bearer capabilities, idempotent event IDs, and negotiation generations. Phone sends offers; desktop sends answers. STUN is configured by default; restrictive networks may require compatible TURN credentials. Native previews do not depend on this relay path.
 
-Live image analysis accepts at most three objects and a 3 MiB image, allows one AI request per session at a time, and applies a 15-second cooldown. Manual evidence has an independent lease and does not call Gemini. Browser-recording finalization waits for analysis/manual leases, requires saved original footage, and uses stable IDs for repeated finish requests. Native capture finalizes through its spatial-manifest endpoint instead.
+Live image analysis accepts at most four objects and a 3 MiB image, allows one AI request per session at a time, and applies a 15-second cooldown. Manual evidence has an independent lease and does not call Gemini. Browser-recording finalization waits for analysis/manual leases, requires saved original footage, and uses stable IDs for repeated finish requests. Native capture finalizes through its spatial-manifest endpoint instead.
 
 ## Persistence and media
 

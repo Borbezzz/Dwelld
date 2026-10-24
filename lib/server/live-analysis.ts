@@ -10,7 +10,7 @@ export type LiveAnalysisInput = {sessionId:string;observationId:string;timestamp
 /** Caller owns session authentication, persisted throttle and observation idempotency. */
 export async function analyzeLiveFrame(image: Buffer, input: LiveAnalysisInput): Promise<LiveAnalysisResult> {
   if(!/^[a-zA-Z0-9_-]{1,100}$/.test(input.sessionId)||!/^[a-zA-Z0-9_-]{1,100}$/.test(input.observationId)||!Number.isFinite(input.timestampSeconds)||input.timestampSeconds<0)throw new Error('Invalid live frame identity');
-  if(!Array.isArray(input.objects)||input.objects.length>3||typeof input.includeSurfaces!=='boolean')throw new Error('Select at most three objects per damage analysis');
+  if(!Array.isArray(input.objects)||input.objects.length>4||typeof input.includeSurfaces!=='boolean')throw new Error('Select at most four objects per damage analysis');
   const ids=new Set<string>();
   for(const object of input.objects){
     if(!object||typeof object.objectId!=='string'||!/^[a-zA-Z0-9_-]{1,100}$/.test(object.objectId)||ids.has(object.objectId)||LABELS[object.classId]!==object.label||!validBox(object.boundingBox))throw new Error('Invalid live object observation');
