@@ -5,7 +5,7 @@ import BrandLogo from "./brand-logo";
 import ShareSpace from "./share-space";
 import {authClient} from "@/lib/auth-client";
 import { useEffect, useState } from "react";
-import { ArrowUpRight, Trash2 } from "lucide-react";
+import { ArrowUpRight, Building2, Share2, Trash2, X } from "lucide-react";
 import RoomReconstruction from "./room-reconstruction";
 import FindingsSearch from "./findings-search";
 import { api } from "@/lib/api";
@@ -64,8 +64,15 @@ export default function Dashboard() {
 
     {session&&<><section id="spaces" className="landing-section" aria-labelledby="spaces-title">
       <div className="landing-section-heading"><h2 id="spaces-title">Your spaces</h2><Link className="landing-text-action" href="/live?new=1">Add a room <span aria-hidden="true">+</span></Link></div>
-      <form onSubmit={e=>void createSpace(e)} className="space-create"><label htmlFor="new-space">Group rooms into a property</label><input id="new-space" aria-label="New space name" placeholder="e.g. Flat 12" maxLength={80} value={newSpace} onChange={e=>setNewSpace(e.target.value)}/><button className="landing-primary" disabled={spaceBusy||!newSpace.trim()}>Create space</button></form>
-      {spaces.length>0&&<div className="space-groups">{spaces.map(s=><div className="space-group" key={s.id}><h3><Link href={`/spaces/${s.id}`}>{s.name} ↗</Link></h3><span>{rooms.filter(r=>r.spaceId===s.id).length} rooms</span>{s.role==="owner"&&<button type="button" onClick={()=>setSharing(sharing===s.id?"":s.id)}>Share</button>}{sharing===s.id&&s.role==="owner"&&<ShareSpace spaceId={s.id}/>}</div>)}</div>}
+      <form onSubmit={e=>void createSpace(e)} className="space-create"><div className="space-create-copy"><label htmlFor="new-space">Group rooms into a property</label><p>Keep the rooms in your flat or house together.</p></div><input id="new-space" aria-label="New space name" placeholder="e.g. Flat 12" maxLength={80} value={newSpace} onChange={e=>setNewSpace(e.target.value)}/><button className="landing-primary" disabled={spaceBusy||!newSpace.trim()}>Create space</button></form>
+      {spaces.length>0&&<div className="space-groups">{spaces.map(s=>{
+        const count=rooms.filter(r=>r.spaceId===s.id).length,expanded=sharing===s.id&&s.role==="owner";
+        return <article className={`space-group${expanded?" is-sharing":""}`} key={s.id}>
+          <div className="space-group-header"><span className="space-group-icon" aria-hidden="true"><Building2 size={21}/></span><div className="space-group-title"><h3><Link href={`/spaces/${s.id}`}>{s.name}<ArrowUpRight size={17} aria-hidden="true"/></Link></h3><p>{count} {count===1?"room":"rooms"}{s.role!=="owner"?` · ${s.role}`:""}</p></div>
+          {s.role==="owner"&&<button className="space-action" type="button" aria-expanded={expanded} aria-controls={`share-${s.id}`} aria-label={`${expanded?"Close sharing for":"Share"} ${s.name}`} onClick={()=>setSharing(expanded?"":s.id)}>{expanded?<X size={15} aria-hidden="true"/>:<Share2 size={15} aria-hidden="true"/>}{expanded?"Close":"Share"}</button>}</div>
+          {expanded&&<div id={`share-${s.id}`}><ShareSpace spaceId={s.id}/></div>}
+        </article>;
+      })}</div>}
       <div className="spaces-split"><div>
       {loading ? <div className="landing-room-list" role="status" aria-label="Loading your spaces">{[0,1,2].map(i=><div className="landing-room landing-room-skeleton" key={i} aria-hidden="true"><span className="skeleton" style={{width:18,height:12}}/><span className="skeleton" style={{width:`${[62,48,55][i]}%`,height:26}}/><span className="skeleton" style={{width:74,height:12}}/><span className="skeleton" style={{width:18,height:18}}/></div>)}</div> : rooms.length === 0 ? <p className="landing-empty">{error ? "Your spaces could not be loaded." : "Begin with a room. Your walkthroughs and observations will stay together here."}</p> : <div className="landing-room-list">{rooms.map((room, index) => {
         const count = inspections.filter((inspection) => inspection.roomId === room.id).length;

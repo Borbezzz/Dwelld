@@ -2,14 +2,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronRight, Pause, Play } from "lucide-react";
 import type { Finding } from "@/lib/types";
+import { portraitEvidenceBox, portraitEvidencePoint } from "@/lib/client/evidence-orientation";
 import { findingsForSourceFrame } from "@/lib/inspection-timeline";
 
 const clock = (time: number) => `${Math.floor(time / 60)}:${String(Math.floor(time % 60)).padStart(2, "0")}`;
 
 /** Sampled inspection photos, played like chapters. Selecting a finding jumps to its timestamp. */
-export default function EvidenceTimeline({ frames, findings, selectedId, assetUrl, onSelect }: { frames: { timestamp: number; image: string; width: number; height: number }[]; findings: Finding[]; selectedId?: string; assetUrl: (name: string) => string; onSelect: (id: string) => void }) {
+export default function EvidenceTimeline({ frames, findings, selectedId, assetUrl, onSelect, portraitSensorFrames = false }: { portraitSensorFrames?: boolean; frames: { timestamp: number; image: string; width: number; height: number }[]; findings: Finding[]; selectedId?: string; assetUrl: (name: string) => string; onSelect: (id: string) => void }) {
   const ordered = useMemo(() => [...frames].filter(frame => frame.image).sort((a, b) => a.timestamp - b.timestamp), [frames]);
-  const [index, setIndex] = useState(0), [playing, setPlaying] = useState(false), [loadedSource, setLoadedSource] = useState("");
+  const [index, setIndex] = useState(0), [playing, setPlaying] = useState(false), [loadedImage, setLoadedImage] = useState<{source:string;width:number;height:number}|null>(null);
   const selected = findings.find(finding => finding.id === selectedId);
   useEffect(() => {
     if (selected?.timestampSeconds == null || !ordered.length) return;
@@ -26,12 +27,17 @@ export default function EvidenceTimeline({ frames, findings, selectedId, assetUr
   const frame = ordered[shownIndex];
   if (!frame) return null;
   const source = assetUrl(frame.image);
-  const visible = loadedSource === source ? findingsForSourceFrame(findings, frame.timestamp) : [];
+  const loaded = loadedImage?.source === source;
+  // Saved ARKit photos retain landscape sensor pixels for calibrated depth/projection.
+  // Correct only their presentation; images already oriented by EXIF must not rotate twice.
+  const rotate = portraitSensorFrames && frame.width > frame.height && !(loaded && loadedImage.width < loadedImage.height);
+  const ratio = rotate ? frame.height / frame.width : loaded ? loadedImage.width / loadedImage.height : frame.width / frame.height;
+  const visible = loaded ? findingsForSourceFrame(findings, frame.timestamp) : [];
   return <section className="walkthrough-player" aria-label="Inspection frames">
-    <div className="walkthrough-stage" style={{ aspectRatio: frame.width / frame.height }}>
-      <img src={source} onLoad={event => setLoadedSource(event.currentTarget.getAttribute("src") || "")} alt={`Room at ${clock(frame.timestamp)}`} />
+    <div className="walkthrough-stage" style={{ aspectRatio: ratio }}>
+      <img src={source} style={rotate ? {position:"absolute",left:"50%",top:"50%",width:`${frame.width / frame.height * 100}%`,height:`${frame.height / frame.width * 100}%`,maxWidth:"none",transform:"translate(-50%, -50%) rotate(90deg)"} : undefined} onLoad={event => {const image=event.currentTarget;setLoadedImage({source:image.getAttribute("src")||"",width:image.naturalWidth,height:image.naturalHeight})}} alt={`Room at ${clock(frame.timestamp)}`} />
       <div className="walkthrough-marks" aria-label="Findings at this moment">{visible.map(finding => {
-        const box = finding.boundingBox, point = finding.point; if (!box && !point) return null;
+        const box = finding.boundingBox ? rotate ? portraitEvidenceBox(finding.boundingBox) : finding.boundingBox : null, point = finding.point ? rotate ? portraitEvidencePoint(finding.point) : finding.point : null; if (!box && !point) return null;
         return <button key={finding.id} type="button" className={`walkthrough-mark ${finding.kind === "damage" ? "is-damage" : "is-object"} ${finding.id === selectedId ? "is-selected" : ""} ${point ? "is-pin" : ""}`} style={box ? { left: `${box.x * 100}%`, top: `${box.y * 100}%`, width: `${box.width * 100}%`, height: `${box.height * 100}%` } : { left: `${point!.x * 100}%`, top: `${point!.y * 100}%` }} onClick={() => onSelect(finding.id)}><span>{finding.label}</span></button>;
       })}</div>
       <span className="walkthrough-stamp">{clock(frame.timestamp)} · {visible.length} marked observations</span>

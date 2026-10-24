@@ -95,24 +95,48 @@ body:has(.landing) { background: #f7f5ef; }
   .landing *, .landing *::before, .landing *::after { animation: none !important; transition: none !important; }
 }
 
-/* Property grouping, without introducing a separate dashboard visual language. */
-.space-create{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:0 0 26px;padding:20px 0;border-block:1px solid var(--landing-line)}
-.space-create label{font-size:13px;color:var(--landing-muted)}
-.space-create input,.room-space-select{font:inherit;background:transparent;border:1px solid var(--landing-line);border-radius:2px;color:inherit;padding:10px;min-width:0}
-.space-create input{flex:1;min-width:160px;max-width:310px}
-.space-create .landing-primary{min-height:40px}
-.space-groups{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:22px}
-.space-group{padding:12px 16px;border:1px solid var(--landing-line);display:flex;gap:12px;align-items:baseline}
-.space-group h3{font:400 19px Georgia,serif;margin:0}.space-group span{font-size:11px;color:var(--landing-muted)}
-.room-space-select{font-size:11px;max-width:125px;padding:6px}
-@media(max-width:600px){.space-create{align-items:stretch;flex-direction:column}.space-create input{max-width:100%;width:100%}.room-space-select{max-width:95px}}
+/* Properties and sharing use the same centered content column as the room list. */
+.space-create{display:grid;grid-template-columns:minmax(200px,1fr) minmax(180px,310px) auto;align-items:center;gap:24px;margin:0 0 24px;padding:24px;border:1px solid var(--landing-line);border-radius:8px;background:#faf9f5}
+.space-create-copy{min-width:0}.space-create label{display:block;font-size:14px;font-weight:500;line-height:1.5}
+.space-create-copy p{margin:5px 0 0;font-size:12px;line-height:1.6;color:var(--landing-muted)}
+.space-create input,.room-space-select{font:inherit;background:#fffdf8;border:1px solid var(--landing-line);border-radius:5px;color:inherit;padding:12px 14px;min-width:0}
+.space-create input{width:100%;min-height:46px;font-size:13px}
+.space-create .landing-primary{min-height:46px;border-radius:5px;white-space:nowrap}
+.space-groups{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));align-items:start;gap:16px;margin-bottom:32px}
+.space-group{min-width:0;padding:24px;border:1px solid var(--landing-line);border-radius:8px;background:#faf9f5}
+.space-group.is-sharing{grid-column:1/-1}
+.space-group-header{display:flex;align-items:center;gap:16px;min-width:0}
+.space-group-icon,.space-sharing-symbol{display:grid;place-items:center;flex-shrink:0;width:44px;height:44px;border-radius:50%;background:#eceee5;color:#48513e}
+.space-group-title{min-width:0;flex:1}.space-group h3{font:400 23px/1.25 Georgia,serif;letter-spacing:-.02em;margin:0}
+.space-group h3 a{display:inline-flex;align-items:center;gap:8px;overflow-wrap:anywhere}.space-group h3 svg{flex-shrink:0}
+.space-group-title p{margin:6px 0 0;font-size:12px;color:var(--landing-muted);text-transform:capitalize}
+.space-action{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:40px;padding:10px 14px;border:1px solid var(--landing-line);border-radius:5px;background:#fffdf8;color:var(--landing-ink);font:inherit;font-size:12px;cursor:pointer;flex-shrink:0}
+.space-action:hover,.space-action[aria-expanded=true]{background:#eceee5;border-color:#a9af9e}
+.room-space-select{font-size:11px;max-width:125px;padding:8px}
+.space-sharing{width:100%;min-width:0;margin-top:24px;padding:24px;border:1px solid var(--landing-line);border-radius:8px;background:#fffdf8;font-size:13px}
+.space-sharing-heading{display:flex;align-items:center;gap:14px;margin-bottom:24px}.space-sharing-heading>div{min-width:0}
+.space-sharing h4{font:400 24px/1.2 Georgia,serif;letter-spacing:-.02em;margin:0 0 7px}
+.space-sharing-heading p{margin:0;color:var(--landing-muted);font-size:13px;line-height:1.6}
+.space-invite-form{display:grid;grid-template-columns:minmax(0,1fr) minmax(130px,170px) auto;align-items:end;gap:14px}
+.space-invite-form label{display:grid;gap:8px;min-width:0;font-size:12px;font-weight:500}
+.space-sharing input,.space-sharing select{width:100%;min-width:0;min-height:46px;border:1px solid var(--landing-line);border-radius:5px;background:#faf9f5;color:inherit;padding:12px 14px;font:inherit;font-size:13px}
+.space-invite-form .landing-primary{min-height:46px;gap:10px;border-radius:5px;white-space:nowrap}
+.space-sharing-note{margin:12px 0 0;font-size:12px;color:var(--landing-muted);line-height:1.6}
+.space-sharing-error{padding:12px 14px;margin:16px 0 0;border-radius:5px;background:#f8eee8;color:#843f31;line-height:1.6}
+.space-invite-link{padding:18px;margin-top:20px;border:1px solid #cbd2c2;border-radius:6px;background:#f0f3eb}
+.space-invite-link label{display:flex;align-items:center;gap:8px;font-size:12px;line-height:1.6;margin-bottom:10px}.space-invite-link>div{display:flex;gap:10px}.space-invite-link input{flex:1;background:#fffdf8}.space-invite-link .space-action{min-height:46px}
+.space-access{border-top:1px solid var(--landing-line);padding-top:20px;margin-top:24px}
+.space-access h5{display:flex;align-items:center;gap:9px;font:500 12px/1.5 'DM Sans',sans-serif;margin:0 0 12px}.space-access h5:not(:first-child){margin-top:24px}
+.space-access h5 span{display:inline-grid;place-items:center;min-width:22px;min-height:22px;padding:2px 6px;border-radius:12px;background:#eceee5;color:#48513e;font-size:11px}
+.space-access>p{color:var(--landing-muted);font-size:12px;line-height:1.6;margin:0}
+.space-access ul{padding:0;margin:0;list-style:none}.space-access li{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:14px 0;border-bottom:1px solid var(--landing-line)}.space-access li:last-child{padding-bottom:0;border-bottom:0}
+.space-access li>div{display:grid;gap:6px;min-width:0}.space-access li b{font-size:13px;font-weight:500;overflow-wrap:anywhere}.space-access li span{font-size:12px;color:var(--landing-muted);text-transform:capitalize}
+.space-access-action{border:0;padding:10px 0;background:transparent;font:inherit;font-size:12px;color:var(--landing-muted);text-decoration:underline;text-underline-offset:4px;cursor:pointer;flex-shrink:0}
+.landing .space-action:focus-visible,.landing .space-access-action:focus-visible,.landing .space-create button:focus-visible,.landing .space-sharing button:focus-visible,.landing .space-group a:focus-visible{outline:2px solid #667453;outline-offset:4px}
+.space-create input:focus-visible,.space-sharing input:focus-visible,.space-sharing select:focus-visible{outline:2px solid #667453;outline-offset:2px}
+@media(max-width:900px){.space-create{grid-template-columns:1fr auto;gap:16px}.space-create-copy{grid-column:1/-1}.space-invite-form{grid-template-columns:minmax(0,1fr) minmax(120px,150px)}.space-invite-form .landing-primary{grid-column:1/-1;justify-self:start}}
+@media(max-width:600px){.space-create{grid-template-columns:minmax(0,1fr);padding:20px;gap:16px}.space-create-copy{grid-column:auto}.space-group{padding:20px}.space-group-header{gap:12px}.space-group-icon{width:36px;height:36px}.space-group h3{font-size:21px}.space-group-header .space-action{padding:10px 12px}.space-sharing{padding:18px;margin-top:20px}.space-sharing-heading{align-items:flex-start;gap:12px}.space-sharing-symbol{width:36px;height:36px}.space-sharing h4{font-size:22px}.space-invite-form{grid-template-columns:minmax(0,1fr)}.space-invite-form .landing-primary{justify-self:stretch}.space-invite-link{padding:14px}.space-invite-link>div{flex-direction:column}.space-access li{align-items:flex-start;gap:12px}.room-space-select{max-width:95px}}
 
-.space-sharing{flex-basis:100%;width:100%;padding:18px 0;border-top:1px solid var(--landing-line);font-size:13px}
-.space-sharing h4{font:400 19px Georgia,serif;margin:0 0 12px}
-.space-sharing form{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
-.space-sharing input,.space-sharing select,.space-sharing button{min-width:0;border:1px solid var(--landing-line);background:transparent;color:inherit;padding:10px;font:inherit}
-.space-sharing input[type=email]{flex:1}.space-sharing p{overflow-wrap:anywhere}.space-sharing small{color:var(--landing-muted)}
-.space-sharing li{padding:8px 0;list-style:none}.space-group:has(.space-sharing){flex-wrap:wrap}
 .boundary-row{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:10px 0;border-top:1px solid var(--landing-line)}
 .boundary-row input{margin-left:10px;padding:8px;border:1px solid var(--landing-line);background:transparent;color:inherit}
 .space-room-card{padding:25px 0;border-top:1px solid var(--landing-line)}
