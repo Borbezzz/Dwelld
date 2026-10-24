@@ -6,7 +6,7 @@ import type { Inspection, Room } from "@/lib/types";
 import type { ComparisonRecord, ComparisonEvidence, ChangeType } from "@/lib/comparison";
 import "@/app/comparison.css";
 import ComparisonSpatial from "./comparison-spatial";
-import {ProcessProgress} from "./live/scan-workflow";
+import ComparisonProgress from "./comparison-progress";
 import InspectionProgress from "./inspection-progress";
 import {inspectionLabel,isInspectionProcessing} from "@/lib/processing-workflow";
 import BrandLogo from "./brand-logo";
@@ -20,7 +20,7 @@ const CATEGORY: Record<ChangeType, { label: string; tone: string }> = {
 const ORDER: ChangeType[] = ["potentially_new", "missing_or_changed", "uncertain", "pre_existing", "no_longer_visible", "unchanged"];
 const ready = (i?: Inspection) => !!i && (i.status === "completed" || i.status === "partial");
 const label=inspectionLabel;
-type ComparisonJob={id:string;status:string;baselineInspectionId:string;currentInspectionId:string;startedAt?:string;progress?:{phase:string;processed?:number;total?:number};error?:string};
+type ComparisonJob={id:string;status:string;baselineInspectionId:string;currentInspectionId:string;startedAt?:string;progress?:import("@/lib/comparison-progress").ComparisonProgress;error?:string};
 
 function Evidence({ finding, side }: { finding?: ComparisonEvidence; side: string }) {
   return <figure className="compare-evidence"><figcaption>{side}</figcaption>{finding ? <>{finding.evidenceFrameUrl ? <div className="compare-image"><img src={`/api/media?url=${encodeURIComponent(finding.evidenceFrameUrl)}`} alt={`${side}: ${finding.label}`} loading="lazy" />{finding.boundingBox && <span className="compare-box" style={{ left: `${finding.boundingBox.x * 100}%`, top: `${finding.boundingBox.y * 100}%`, width: `${finding.boundingBox.width * 100}%`, height: `${finding.boundingBox.height * 100}%` }} />}{finding.point && <span className="compare-point" style={{ left: `${finding.point.x * 100}%`, top: `${finding.point.y * 100}%` }} />}</div> : <div className="compare-image compare-image-empty">No saved image</div>}<p><b>{finding.label}</b>{finding.description ? ` · ${finding.description}` : ""}</p></> : <div className="compare-image compare-image-empty">Not seen in this scan</div>}</figure>;
@@ -33,6 +33,7 @@ export default function ComparisonWorkspace({ roomId, baselineId = "", currentId
   const [busy, setBusy] = useState(""), [error, setError] = useState(""), [spatial, setSpatial] = useState<{ baseline: string | null; current: string | null } | null>(null);
   const initialized=useRef(false),requestVersion=useRef(0),selectedPair=useRef({baseline,current});selectedPair.current={baseline,current};
   const pollingNeeded=useRef(true);
+  const [lastJob,setLastJob]=useState<ComparisonJob|null>(null);
   const [job,setJob]=useState<ComparisonJob|null>(null),[loading,setLoading]=useState(true);
   const applyRecord=useCallback((comparison:ComparisonRecord)=>{setRecord(comparison);setBaseline(String(comparison.baselineInspectionId));setCurrent(String(comparison.currentInspectionId));setSpatial(null);},[]);
 
@@ -40,7 +41,7 @@ export default function ComparisonWorkspace({ roomId, baselineId = "", currentId
 
   const load = useCallback(async () => {
     const [r, a, b] = await Promise.all([request<{ room: Room }>(`/api/rooms/${roomId}`), request<{ inspections: Inspection[] }>(`/api/inspections?roomId=${roomId}`), request<{ comparisons: ComparisonRecord[];activeComparison:ComparisonJob|null;lastJob?:ComparisonJob }>(`/api/comparisons?roomId=${roomId}`)]);
-    setRoom(r.room); setInspections(a.inspections); setRecords(b.comparisons);setJob(b.activeComparison);
+    setRoom(r.room); setInspections(a.inspections); setRecords(b.comparisons);setJob(b.activeComparison);setLastJob(b.lastJob||null);
     if(b.lastJob?.status==='failed'&&b.lastJob.baselineInspectionId===selectedPair.current.baseline&&b.lastJob.currentInspectionId===selectedPair.current.current)setError(b.lastJob.error||'Comparison stopped. Retry the saved scans.');
     return { inspections: a.inspections, comparisons: b.comparisons };
   }, [roomId]);
@@ -50,7 +51,7 @@ export default function ComparisonWorkspace({ roomId, baselineId = "", currentId
   const compare = useCallback(async (b: string, c: string) => {
     const version=++requestVersion.current;
     setBusy("Comparing selected scans");setError("");
-    setJob({id:'starting',status:'processing',baselineInspectionId:b,currentInspectionId:c,progress:{phase:'Preparing saved evidence'}});
+    setJob({id:'starting',status:'processing',baselineInspectionId:b,currentInspectionId:c,startedAt:new Date().toISOString(),progress:{stage:'prepare',phase:'Gathering both scans and their evidence'}});
     try {
       const {comparison}=await request<{comparison:ComparisonRecord}>("/api/comparisons",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({baselineInspectionId:b,currentInspectionId:c,roomId})});
       setRecords(r=>[comparison,...r.filter(x=>x.id!==comparison.id)]);
@@ -84,6 +85,8 @@ export default function ComparisonWorkspace({ roomId, baselineId = "", currentId
   const validPair=!!earlier&&!!later&&earlier.id!==later.id&&+new Date(earlier.createdAt)<+new Date(later.createdAt);
   const pairReady=validPair&&ready(earlier)&&ready(later)&&!isInspectionProcessing(earlier)&&!isInspectionProcessing(later);
   const scanName=(id:string)=>{const scan=inspections?.find(i=>i.id===id);return scan?label(scan):`Scan ${id.slice(-6)}`;};
+  const failedJob=lastJob?.status==='failed'&&lastJob.baselineInspectionId===baseline&&lastJob.currentInspectionId===current&&(!record||!lastJob.startedAt||Date.parse(lastJob.startedAt)>Date.parse(record.createdAt))?lastJob:null;
+  const displayedJob=job||failedJob;
   const counts = record ? ORDER.map(k => [k, record.changes.filter(c => c.category === k).length] as const).filter(([, n]) => n) : [];
   const changes = record ? [...record.changes].sort((x, y) => ORDER.indexOf(x.category) - ORDER.indexOf(y.category)) : [];
 
@@ -99,7 +102,7 @@ export default function ComparisonWorkspace({ roomId, baselineId = "", currentId
     {earlier&&<p className="compare-pair-label">{label(earlier)} → {later?label(later):'Choose a later scan'}</p>}
     {[earlier,later].filter((i):i is Inspection=>!!i&&isInspectionProcessing(i)).map(i=><InspectionProgress key={i.id} inspection={i}/>)}
     {inspections && done.length < 2 && !busy && <div className="compare-empty"><p>Compare needs two finished scans of this room.</p><Link className="button button-dark" href={done[0] ? `/live?room=${roomId}&type=move-out&baseline=${done[0].id}` : `/live?room=${roomId}&type=move-in`}>{done[0] ? "Choose a new scan" : "Start the move-in scan"}</Link></div>}
-    {(job||busy)&&<ProcessProgress title="Comparison progress" context={job?`${scanName(job.baselineInspectionId)} → ${scanName(job.currentInspectionId)}`:'Selected scans'} rows={[{key:'compare',label:job?.progress?.phase||busy,amount:job?.progress?.total?`${job.progress.processed||0}/${job.progress.total} images`:'Argon',status:'running',details:[{label:'Earlier scan',meta:job?scanName(job.baselineInspectionId):baseline},{label:'Later scan',meta:job?scanName(job.currentInspectionId):current},{label:'Result',meta:'Saved changes will appear when the comparison finishes'}]}]}/> }
+    {(displayedJob||busy||record)&&<ComparisonProgress progress={displayedJob?.progress||(!busy?record?.progress:undefined)} status={displayedJob?.status|| (busy?'processing':record?.partial?'partial':'ready')} startedAt={displayedJob?.startedAt} context={displayedJob?`${scanName(displayedJob.baselineInspectionId)} → ${scanName(displayedJob.currentInspectionId)}`:`${scanName(record?.baselineInspectionId||baseline)} → ${scanName(record?.currentInspectionId||current)}`}/>}
     {error && <div role="alert" className="notice error-notice">{error}<button onClick={() => setError("")} aria-label="Dismiss message"><X size={16} /></button></div>}
     {records.length > 0 && <details className="compare-history"><summary>Saved comparisons · {records.length}</summary><nav className="room-scans" aria-label="Saved comparisons">{records.slice(0, 8).map(r => <button key={r.id} aria-pressed={record?.id === r.id} onClick={() => void openComparison(r.id,true)}><b>{scanName(String(r.baselineInspectionId))} → {scanName(String(r.currentInspectionId))}</b><span>{new Date(r.createdAt).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</span></button>)}</nav></details>}
     {record && <>

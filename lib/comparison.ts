@@ -2,7 +2,7 @@ export const CHANGE_TYPES = ["pre_existing", "potentially_new", "missing_or_chan
 export type ChangeType = typeof CHANGE_TYPES[number];
 export interface ComparisonEvidence { sourceObservationIds?:string[];evidenceObservations?:import("./damage-identity").DamageEvidence[];spatialElementId?:string;worldPosition?:number[]; id:string; kind:string; label:string; description?:string; timestampSeconds?:number; evidenceFrameUrl?:string; boundingBox?:{x:number;y:number;width:number;height:number}; point?:{x:number;y:number}; }
 export interface ComparisonChange { id:string; baselineFindingId:string|null; currentFindingId:string|null; category:ChangeType; explanation:string; comparableView:boolean; reviewStatus:"pending"|"confirmed"|"rejected"; }
-export interface ComparisonRecord { id:string; roomId:string; baselineInspectionId:string; currentInspectionId:string; createdAt:string; changes:ComparisonChange[]; baseline:ComparisonEvidence[]; current:ComparisonEvidence[]; warnings:string[]; reviews:{changeId:string;status:string;note:string;at:string}[]; }
+export interface ComparisonRecord { partial?:boolean;progress?:import("./comparison-progress").ComparisonProgress; id:string; roomId:string; baselineInspectionId:string; currentInspectionId:string; createdAt:string; changes:ComparisonChange[]; baseline:ComparisonEvidence[]; current:ComparisonEvidence[]; warnings:string[]; reviews:{changeId:string;status:string;note:string;at:string}[]; }
 /**
  * Model references are constrained to the supplied evidence, and absence never establishes loss.
  * One malformed or invented item no longer sinks the whole comparison: it is dropped and counted.
