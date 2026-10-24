@@ -11,7 +11,6 @@ import EvidenceViewer, { type EvidenceItem } from "./evidence-viewer";
 import type { VideoMark } from "./walkthrough-player";
 import WalkthroughPlayer from "./walkthrough-player";
 import { useObjectReconstruction } from "./use-object-reconstruction";
-import {elementVisibility} from "@/lib/spatial/visibility";
 import ScanChat from "./scan-chat";
 import NativePlayback from "./native-playback";
 import EvidenceTimeline from "./evidence-timeline";
@@ -94,18 +93,10 @@ export default function RoomDetail({ roomId }: { roomId: string }) {
   const looseFurniture = useMemo(() => manifest ? [] : findings.filter(f => f.kind === "object" && isFurnitureLabel(f.label)), [findings, manifest]);
   const focusedFindingId = capture?.markers.find(m=>`marker-${m.id}`===focusFinding)?.findingId || focusFinding;
   const cueId = focusedFindingId || (selected ? findings.find(f => f.spatialElementId === selected && f.kind === "damage" && f.reviewStatus !== "rejected" && f.timestampSeconds != null)?.id || findings.find(f => f.spatialElementId === selected && f.timestampSeconds != null)?.id : undefined);
-  const highlightedRanges=useMemo(()=>{
-    const target=findings.find(f=>f.id===cueId),elementId=selected||target?.spatialElementId||(target?.objectId?findings.find(f=>f.id===target.objectId)?.spatialElementId:null);
-    if(!elementId||!manifest)return [];
-    const object=findings.find(f=>f.kind==="object"&&f.spatialElementId===elementId),element=manifest.elements.find(e=>e.id===elementId);
-    const end=Math.max(manifest.frames.at(-1)?.timestamp||0,...manifest.assets.filter(a=>a.kind==="video").map(a=>(a.startTimeSeconds||0)+(a.durationSeconds||0)));
-    // Recomputed from the scan's camera poses so older scans get full-length windows too.
-    return element?elementVisibility(element,manifest.frames,end):object?.visibilityIntervals||[];
-  },[selected,cueId,manifest,findings]);
   const { cloud, reconstructing } = useObjectReconstruction(current, selected);
   // Picking a piece or a finding opens the walkthrough at that moment, with the damage drawn on the video itself.
   const [videoRequest, setVideoRequest] = useState(0);
-  const videoNode = !manifest ? undefined : manifest.assets.some(a=>a.kind==="video") ? <NativePlayback highlightIntervals={highlightedRanges} assets={manifest.assets} findings={findings} selectedId={cueId} assetUrl={name => `/api/inspections/${current}/spatial/assets/${encodeURIComponent(name)}`} onSelect={id=>setFocusFinding(id)} onMark={scan?.isOwner !== false ? markFromVideo : undefined}/> : scan?.videoUrl ? <WalkthroughPlayer src={scan.videoUrl} findings={findings} selectedId={cueId} onSelect={id => setFocusFinding(id)} highlightIntervals={highlightedRanges} /> : manifest.frames.length ? <EvidenceTimeline portraitSensorFrames frames={manifest.frames} findings={findings} selectedId={cueId} assetUrl={name => `/api/inspections/${current}/spatial/assets/${encodeURIComponent(name)}`} onSelect={id => setFocusFinding(id)} /> : undefined;
+  const videoNode = !manifest ? undefined : manifest.assets.some(a=>a.kind==="video") ? <NativePlayback assets={manifest.assets} findings={findings} selectedId={cueId} assetUrl={name => `/api/inspections/${current}/spatial/assets/${encodeURIComponent(name)}`} onSelect={id=>setFocusFinding(id)} onMark={scan?.isOwner !== false ? markFromVideo : undefined}/> : scan?.videoUrl ? <WalkthroughPlayer src={scan.videoUrl} findings={findings} selectedId={cueId} onSelect={id => setFocusFinding(id)} /> : manifest.frames.length ? <EvidenceTimeline portraitSensorFrames frames={manifest.frames} findings={findings} selectedId={cueId} assetUrl={name => `/api/inspections/${current}/spatial/assets/${encodeURIComponent(name)}`} onSelect={id => setFocusFinding(id)} /> : undefined;
   useEffect(() => { if (videoNode && (selected || focusFinding)) setVideoRequest(n => n + 1); // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected, focusFinding]);
   const open = [...byElement.values()].flat().concat(elsewhere).filter(d => d.status === "pending").length;
