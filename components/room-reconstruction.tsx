@@ -5,12 +5,12 @@ import dynamic from 'next/dynamic';
 import type {Inspection} from '@/lib/types';
 import type {SpatialManifest,SpatialMarker} from '@/lib/spatial/types';
 const RoomScene=dynamic(()=>import('./spatial-viewer'),{ssr:false,loading:()=><div className="room-scene room-scene-compact"><div className="room-scene-loading"><span className="skeleton"/></div></div>});
-/** Dashboard preview of the selected room: the latest scan's splat with its furniture outlines. */
+/** Dashboard preview: render measured geometry without fetching the large splat. */
 export default function RoomReconstruction({roomId,name,inspections,hint=false}:{roomId:string;name:string;inspections:Inspection[];hint?:boolean}){
  const [scene,setScene]=useState<{manifest:SpatialManifest;markers:SpatialMarker[];inspectionId:string}|null>(null),[status,setStatus]=useState('');
  useEffect(()=>{const controller=new AbortController();setScene(null);setStatus(roomId?'loading':'Choose a room to view it in 3D.');if(!roomId)return;
   void(async()=>{try{
-   const candidates=inspections.filter(i=>i.roomId===roomId&&(i.status==='completed'||i.status==='partial'));
+   const candidates=inspections.filter(i=>i.roomId===roomId&&(i.status==='completed'||i.status==='partial'||i.status==='processing'));
    // Probe in small parallel batches, preserving inspection order while avoiding an N-request waterfall.
    for(let offset=0;offset<candidates.length;offset+=3){
     const batch=await Promise.all(candidates.slice(offset,offset+3).map(async inspection=>{
