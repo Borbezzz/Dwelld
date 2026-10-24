@@ -3,17 +3,17 @@ import {ObjectId,type Document} from "mongodb";
 import {getDb} from "./db";
 export const EMBEDDING_MODEL="gemini-embedding-001";
 export const EMBEDDING_DIMENSIONS=768;
-export async function embed(text:string,query=false){
+export async function embed(text:string,query=false,timeoutMs=20000){
  if(!process.env.GEMINI_API_KEY)throw new Error("Gemini is not configured");
- const result=await new GoogleGenAI({apiKey:process.env.GEMINI_API_KEY}).models.embedContent({model:EMBEDDING_MODEL,contents:text.slice(0,12000),config:{outputDimensionality:EMBEDDING_DIMENSIONS,taskType:query?"RETRIEVAL_QUERY":"RETRIEVAL_DOCUMENT",httpOptions:{timeout:20000}}});
+ const result=await new GoogleGenAI({apiKey:process.env.GEMINI_API_KEY}).models.embedContent({model:EMBEDDING_MODEL,contents:text.slice(0,12000),config:{outputDimensionality:EMBEDDING_DIMENSIONS,taskType:query?"RETRIEVAL_QUERY":"RETRIEVAL_DOCUMENT",httpOptions:{timeout:timeoutMs}}});
  const v=result.embeddings?.[0]?.values;
  if(!v||v.length!==EMBEDDING_DIMENSIONS||!v.every(Number.isFinite))throw new Error("Embedding response invalid");
  const norm=Math.hypot(...v);if(!norm)throw new Error("Embedding response empty");return v.map(n=>n/norm);
 }
 /** Incremental indexing is explicit and bounded; never embeds another user's records. */
-export async function indexFindings(ownerId:string,inspectionId?:ObjectId){
- const db=await getDb();const docs=await db.collection("findings").find({ownerId,...(inspectionId?{inspectionId}:{}),$or:[{embeddingModel:{$ne:EMBEDDING_MODEL}},{embedding:{$exists:false}}]}).limit(50).toArray();let indexed=0;
- for(const doc of docs){const text=[doc.kind,doc.label,doc.description,doc.damageType].filter(Boolean).join(". ");const embedding=await embed(text);await db.collection("findings").updateOne({_id:doc._id,ownerId},{$set:{embedding,embeddingModel:EMBEDDING_MODEL,embeddedAt:new Date()}});indexed++;}
+export async function indexFindings(ownerId:string,inspectionId?:ObjectId,options:{limit?:number;deadlineMs?:number;timeoutMs?:number}={}){
+ const db=await getDb();const docs=await db.collection("findings").find({ownerId,...(inspectionId?{inspectionId}:{}),$or:[{embeddingModel:{$ne:EMBEDDING_MODEL}},{embedding:{$exists:false}}]}).limit(options.limit??50).toArray();let indexed=0;
+ for(const doc of docs){if(Date.now()>=(options.deadlineMs??Infinity))break;const text=[doc.kind,doc.label,doc.description,doc.damageType].filter(Boolean).join(". ");const embedding=await embed(text,false,options.timeoutMs??20000);await db.collection("findings").updateOne({_id:doc._id,ownerId},{$set:{embedding,embeddingModel:EMBEDDING_MODEL,embeddedAt:new Date()}});indexed++;}
  return {indexed,remaining:await db.collection("findings").countDocuments({ownerId,...(inspectionId?{inspectionId}:{}),embedding:{$exists:false}})};
 }
 export function reciprocalRankFusion(lists:Document[][],limit:number){const byId=new Map<string,Document>();for(const docs of lists)docs.forEach((doc,rank)=>{const key=String(doc._id),old=byId.get(key);byId.set(key,{...doc,score:(old?.score||0)+1/(60+rank+1)});});return [...byId.values()].sort((a,b)=>b.score-a.score).slice(0,limit);}

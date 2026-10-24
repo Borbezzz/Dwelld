@@ -14,7 +14,7 @@ export async function GET(request: Request) {
     const user = await requireUser(request);
     if (!parseMediaId(raw)) return new NextResponse("Not found", { status: 404 });
     const db = await getDb();
-    const registered = await db.collection("inspections").findOne({ sourceUrl: raw, ownerId:user.id }, { projection: { _id: 1 } })
+    const registered = await db.collection("inspections").findOne({ ownerId:user.id, $or:[{sourceUrl:raw},{"evidenceFrames.url":raw}] }, { projection: { _id: 1 } })
       || await db.collection("findings").findOne({ evidenceFrameUrl: raw, ownerId:user.id }, { projection: { _id: 1 } });
     const comparisonEvidence = !registered && await db.collection("comparisons").findOne({ownerId:user.id,evidenceRefs:raw},{projection:{_id:1}});
     if (!registered && !comparisonEvidence) return new NextResponse("Not found", { status: 404 });

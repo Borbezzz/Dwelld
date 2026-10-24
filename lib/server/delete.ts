@@ -40,7 +40,11 @@ export async function deleteInspection(inspection: Document) {
   ]);
   await db.collection("inspections").deleteOne({ _id: id, ownerId: inspection.ownerId });
   // Files last: if this stops part-way the records are already gone, never the other way round.
-  await Promise.allSettled([...refs].map(ref => deleteMedia(ref)));
+  await Promise.allSettled([...refs].map(async ref => {
+    // A saved-video retry owns new evidence but shares the original source video.
+    if (await db.collection("inspections").findOne({ sourceUrl:ref }, {projection:{_id:1}})) return;
+    await deleteMedia(ref);
+  }));
   return { deletedFiles: refs.size };
 }
 

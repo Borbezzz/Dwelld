@@ -88,3 +88,5 @@ body:has(.ask-records){padding-bottom:120px}.ask-records{position:fixed;bottom:2
 .spatial-view-modes label{margin-left:0}
 .spatial-scene [aria-label="Measured room geometry viewer"]{height:380px}
 }
+
+.analysis-notice{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;line-height:1.65}.analysis-notice>div{min-width:0}.analysis-notice p{margin:8px 0;font-size:12px}.analysis-notice summary{cursor:pointer;font-size:12px}.analysis-notice ul{font-size:11px;margin-top:12px;padding-left:18px}.analysis-notice .button{flex-shrink:0}.saved-evidence>img{width:100%;max-height:420px;object-fit:contain;background:#222820}.saved-evidence nav{display:flex;flex-wrap:wrap;gap:6px;margin:12px 0}.saved-evidence nav button[aria-current=true]{background:#373d30;color:#fffdf7}@media(max-width:650px){.analysis-notice{flex-direction:column;gap:16px}.analysis-notice .button{width:100%}}
