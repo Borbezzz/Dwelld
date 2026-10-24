@@ -11,7 +11,7 @@ import { parseComparison, ComparisonEvidence } from "../comparison";
 export function comparisonEvidence(f:Document):ComparisonEvidence {return {id:String(f._id),kind:String(f.kind),label:String(f.label),description:f.description,timestampSeconds:f.timestampSeconds,evidenceFrameUrl:f.evidenceFrameUrl,boundingBox:f.boundingBox,point:f.point};}
 export async function compareInspections(baseline:Document,current:Document){
  const db=await getDb();
- const findings=await Promise.all([baseline,current].map(i=>db.collection("findings").find({inspectionId:i._id,reviewStatus:{$ne:"rejected"}}).sort({createdAt:1}).limit(101).toArray()));
+ const findings=await Promise.all([baseline,current].map(i=>db.collection("findings").find({inspectionId:i._id,reviewStatus:{$ne:"rejected"},...(typeof i.segmentStartTime==="number"&&typeof i.segmentEndTime==="number"?{timestampSeconds:{$gte:i.segmentStartTime,$lt:i.segmentEndTime}}:{})}).sort({createdAt:1}).limit(101).toArray()));
  const warnings:string[]=[];
  if(findings.some(f=>f.length>100))warnings.push("Only the first 100 observations per inspection were considered.");
  const evidence=findings.map(fs=>fs.slice(0,100).map(comparisonEvidence));
@@ -22,9 +22,10 @@ export async function compareInspections(baseline:Document,current:Document){
   if(!evidence[side].some(f=>f.evidenceFrameUrl)&&!inspection.sourceUrl){
    const capture=await db.collection("spatialCaptures").findOne({inspectionId:inspection._id,ownerId:inspection.ownerId});
    const manifest=capture?.manifest as SpatialManifest|undefined;
-   if(manifest?.frames.length){
-    const count=Math.min(6,manifest.frames.length);
-    const selected=Array.from({length:count},(_,i)=>manifest.frames[Math.round(i*(manifest.frames.length-1)/Math.max(1,count-1))]);
+   const frames=manifest?.frames.filter(f=>typeof inspection.segmentStartTime!=="number"||(f.timestamp>=inspection.segmentStartTime&&f.timestamp<inspection.segmentEndTime))||[];
+   if(frames.length){
+    const count=Math.min(6,frames.length);
+    const selected=Array.from({length:count},(_,i)=>frames[Math.round(i*(frames.length-1)/Math.max(1,count-1))]);
     for(const [index,frame] of selected.entries()){const asset=manifest.assets.find(a=>a.name===frame.image&&a.kind==="image");if(asset)evidence[side].push({id:`native-view-${inspection._id}-${index}`,kind:"frame",label:"Native recorded view (not a detection)",timestampSeconds:frame.timestamp,evidenceFrameUrl:asset.mediaRef});}
     warnings.push(`Used original native RGB frames for the ${side===0?"baseline":"current"} capture. Spatial origins remain independent; image comparison does not register coordinate systems.`);
    }
