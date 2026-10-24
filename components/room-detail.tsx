@@ -65,7 +65,7 @@ export default function RoomDetail({ roomId }: { roomId: string }) {
     for (const f of findings) {
       if (f.kind !== "damage" || markerFor.has(f.id)) continue;
       const d: Damage = { id: f.id, label: f.label, description: f.description, status: f.reviewStatus || "pending", source: SOURCE(f), evidence: f.evidenceFrameUrl, findingId: f.id, ...fromFinding(f) };
-      const element = f.objectId ? objectElement.get(f.objectId) : undefined;
+      const element = f.spatialElementId || (f.objectId ? objectElement.get(f.objectId) : undefined);
       if (element && furniture.some(e => e.id === element)) byElement.set(element, [...byElement.get(element) || [], d]); else elsewhere.push(d);
     }
     return { byElement, elsewhere };

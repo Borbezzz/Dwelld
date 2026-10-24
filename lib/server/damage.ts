@@ -3,7 +3,7 @@ import sharp from "sharp";
 
 /** Normalized top-left x/y and width/height, relative to the displayed source image. */
 export type Box = { x: number; y: number; width: number; height: number };
-export const DAMAGE_TYPES = ["scratch", "crack", "stain", "dent", "chipped paint", "tear", "broken component", "other"] as const;
+export const DAMAGE_TYPES = ["scratch", "scuff", "crack", "chip", "dent", "hole", "stain", "chipped paint", "tear", "broken component", "other"] as const;
 export type DamageObservation = { type: typeof DAMAGE_TYPES[number]; description: string; boundingBox: Box | null };
 
 export function validBox(value: unknown): Box | null {
@@ -147,4 +147,18 @@ export async function describeMarkedDamage(image: Buffer): Promise<DamageObserva
   const located = found.filter(f => f.boundingBox).map(f => ({ ...f, boundingBox: cropBoxToFrame(f.boundingBox!, crop.bounds) }));
   const centre = (b: Box) => Math.hypot(b.x + b.width / 2 - .5, b.y + b.height / 2 - .5);
   return located.sort((a, b) => centre(a.boundingBox) - centre(b.boundingBox))[0] || found[0] || null;
+}
+
+/** What to look for on each surface we inspect. Narrow scopes are far more accurate than "find any damage". */
+export const INSPECTION_SCOPES = {
+  table: "This crop shows a table. Inspect only the table (top, edges, legs) for scratches, scuffs, chips, cracks, dents, burns, water rings or stains. Ignore objects sitting on it, reflections and wood grain.",
+  cabinet: "This crop shows a cabinet, wardrobe or chest of drawers. Inspect only its doors, drawer fronts, sides and top for scratches, scuffs, chips, cracks, dents, broken handles or hinges. Ignore wood grain, handles' normal shape and shadows between doors.",
+  door: "This crop shows a door. Inspect only the door leaf and frame for scuffs, dents, cracks, holes, chipped paint or broken handles. Ignore hinges, normal panel lines and shadows.",
+  wall: "Inspect the walls only, not the floor, ceiling, furniture, doors, windows, pictures, sockets or switches. Report cracks, holes, scuffs or marks, chipped or peeling paint, and damp or water stains. Ignore shadows, light gradients, skirting joints and wallpaper patterns.",
+} as const;
+export async function inspectScoped(image: Buffer, scope: keyof typeof INSPECTION_SCOPES, box?: Box): Promise<DamageObservation[]> {
+  if (!box) return inspect(await sharp(image).png().toBuffer(), INSPECTION_SCOPES[scope]);
+  const crop = await cropObject(image, box);
+  const observations = await inspect(crop.image, INSPECTION_SCOPES[scope]);
+  return observations.map(item => ({ ...item, boundingBox: item.boundingBox ? cropBoxToFrame(item.boundingBox, crop.bounds) : null }));
 }

@@ -35,7 +35,7 @@ export async function deleteInspection(inspection: Document) {
     db.collection("spatialMarkers").deleteMany({ inspectionId: id }),
     db.collection("comparisons").deleteMany({ _id: { $in: comparisons.map(c => c._id) } }),
     db.collection("observationCorrespondences").deleteMany({ $or: [{ baselineInspectionId: id }, { currentInspectionId: id }, { comparisonId: { $in: comparisons.map(c => c._id) } }] }),
-    ...(sessionIds.length ? ["liveEvidence", "liveFindings", "liveAnalyses", "liveObjects", "liveEvents", "liveSignals", "liveStream"].map(c => db.collection(c).deleteMany({ sessionId: { $in: sessionIds } })) : []),
+    ...(sessionIds.length ? ["liveEvidence", "liveFindings", "liveAnalyses", "liveObjects", "liveEvents", "liveSignals", "liveStream", "liveFrames"].map(c => db.collection(c).deleteMany({ sessionId: { $in: sessionIds } })) : []),
     db.collection("liveSessions").deleteMany({ _id: { $in: sessionIds } }),
   ]);
   await db.collection("inspections").deleteOne({ _id: id, ownerId: inspection.ownerId });
