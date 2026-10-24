@@ -83,8 +83,8 @@ test('binary evidence body enforces its streaming size bound even without Conten
  await assert.rejects(readBinaryBody(new Request('https://dwelld.example',{method:'POST',body:Buffer.alloc(50)}),10),/too large/);
  assert.deepEqual(await readBinaryBody(new Request('https://dwelld.example',{method:'POST',body:Buffer.from('photo')}),10),Buffer.from('photo'));
 });
-function nativeWorkerFixture(fail=false){
- const id=new ObjectId(),records=Array.from({length:8},(_,i)=>({_id:new ObjectId(),sessionId:id,name:`frame-${i}`,ref:`photo-${i}`,pose,timestampSeconds:i,status:'queued'})).reverse();
+function nativeWorkerFixture(fail=false,options={}){
+ const id=new ObjectId(),records=Array.from({length:options.count||8},(_,i)=>({_id:new ObjectId(),sessionId:id,name:`frame-${i}`,ref:`photo-${i}`,pose,timestampSeconds:i,status:'queued'})).reverse();
  const session={_id:id,status:'recording',nativeLive:{elements:[]}},calls=[],findings=[];
  const sessions={
   findOneAndUpdate:async()=>{if(session.furnitureWorker)return null;session.furnitureWorker={};return session;},findOne:async()=>session,
@@ -92,9 +92,9 @@ function nativeWorkerFixture(fail=false){
  };
  const frames={findOneAndUpdate:async(q,u)=>{const fr=records.filter(f=>f.status===q.status).sort((a,b)=>a.timestampSeconds-b.timestampSeconds)[0];if(fr)Object.assign(fr,u.$set);return fr;},updateOne:async(q,u)=>Object.assign(records.find(f=>f._id===q._id),u.$set),updateMany:async(q,u)=>records.filter(f=>q._id.$in.includes(f._id)&&f.status===q.status).forEach(f=>Object.assign(f,u.$set))};
  const {analyzeLiveEvidenceFrame}=load('lib/server/native-analysis.ts',{
-  './db':{getDb:async()=>({collection:name=>name==='liveSessions'?sessions:name==='liveFrames'?frames:{find:()=>({toArray:async()=>[]}),updateOne:async(q,u)=>{if(name==='liveFindings')findings.push(u.$setOnInsert);}}})},
+  './db':{getDb:async()=>({collection:name=>name==='liveSessions'?sessions:name==='liveFrames'?frames:{find:()=>({toArray:async()=>options.localized?findings:[]}),updateOne:async(q,u)=>{if(name==='liveFindings')findings.push(u.$setOnInsert);}}})},
   './media':{readMedia:async()=>Buffer.from('photo')},'./search':{indexFindings:async()=>{}},
-  './furniture-video':{analyzeFurnitureVideoFrames:async samples=>{calls.push(samples.map(f=>f.timestampSeconds));if(fail)throw Object.assign(new Error('Monthly spending cap exceeded'),{status:429});return samples.map(frame=>({frame,result:{findings:[{...observation,damageType:'tear',label:'Tear',reviewStatus:'pending',autoApproved:false,worldPosition:null,elementId:null}],views:[],warnings:[]}}));}},
+  './furniture-video':{analyzeFurnitureVideoFrames:async samples=>{calls.push(samples.map(f=>f.timestampSeconds));if(options.run)await options.run(samples);if(fail)throw Object.assign(new Error('Monthly spending cap exceeded'),{status:429});return samples.map(frame=>({frame,result:{findings:[{...observation,damageType:'tear',label:'Tear',reviewStatus:'pending',autoApproved:false,worldPosition:options.localized?[0,0,-2]:null,elementId:options.localized?'chair-1':null}],views:[],warnings:[]}}));}},
  });
  return {run:()=>analyzeLiveEvidenceFrame(id,''),calls,records,findings,session};
 }
@@ -102,5 +102,28 @@ test('live worker consumes every queued second chronologically in bounded batche
  const f=nativeWorkerFixture();await f.run();assert.deepEqual(f.calls,[[0,1,2,3,4,5],[6,7]]);assert.equal(f.findings.length,8);assert(f.records.every(fr=>fr.status==='done'));assert(f.findings.every(fr=>fr.reviewStatus==='pending'&&!fr.autoApproved));assert.equal(f.session.furnitureWorker,undefined);
 });
 test('provider spending block stops subsequent live batches and later triggers while preserving queued source frames',async()=>{
- const f=nativeWorkerFixture(true);await f.run();await f.run();assert.equal(f.calls.length,1);assert.equal(f.records.filter(fr=>fr.status==='failed').length,6);assert.equal(f.records.filter(fr=>fr.status==='queued').length,2);assert.equal(f.session.analysisIssue.code,'AI_BILLING_BLOCKED');assert.equal(f.session.furnitureWorker,undefined);assert(f.records.every(fr=>fr.ref));
+ const f=nativeWorkerFixture(true,{count:20});await f.run();await f.run();assert.equal(f.calls.length,2);assert.equal(f.records.filter(fr=>fr.status==='failed').length,12);assert.equal(f.records.filter(fr=>fr.status==='queued').length,8);assert.equal(f.session.analysisIssue.code,'AI_BILLING_BLOCKED');assert.equal(f.session.furnitureWorker,undefined);assert(f.records.every(fr=>fr.ref));
+});
+
+test('two native batches run concurrently but reversed completions commit in timestamp order',{timeout:3000},async()=>{
+ let active=0,max=0,releaseFirst,secondFinished;const firstGate=new Promise(r=>releaseFirst=r),secondDone=new Promise(r=>secondFinished=r);
+ const f=nativeWorkerFixture(false,{count:20,run:async frames=>{active++;max=Math.max(max,active);try{if(frames[0].timestampSeconds===0)await firstGate;if(frames[0].timestampSeconds===6)secondFinished();}finally{active--}}});
+ const run=f.run();await secondDone;assert.equal(max,2);assert.equal(f.findings.length,0);releaseFirst();await run;
+ assert.deepEqual(f.findings.map(f=>f.timestampSeconds),Array.from({length:20},(_,i)=>i));assert.equal(f.records.filter(f=>f.status==='done').length,20);assert.equal(max,2);
+});
+test('parallel native results still deduplicate before inserting repeated marks',async()=>{const f=nativeWorkerFixture(false,{count:12,localized:true,run:async frames=>{if(frames[0].timestampSeconds===0)await new Promise(r=>setTimeout(r,5));}});await f.run();assert.equal(f.calls.length,2);assert.equal(f.findings.length,1);assert.equal(f.findings[0].timestampSeconds,0);assert(f.records.every(fr=>fr.status==='done'));});
+test('a billing failure stops new waves without discarding the other in-flight batch',async()=>{const f=nativeWorkerFixture(false,{count:20,run:async frames=>{if(frames[0].timestampSeconds===0)throw Object.assign(new Error('Monthly spending cap exceeded'),{status:429});}});await f.run();assert.equal(f.calls.length,2);assert.equal(f.findings.length,6);assert.equal(f.records.filter(fr=>fr.status==='queued').length,8);assert.equal(f.session.analysisIssue.code,'AI_BILLING_BLOCKED');});
+test('ordinary rate limits pause new waves and impose a cooldown on later triggers',async()=>{const f=nativeWorkerFixture(false,{count:20,run:async()=>{throw Object.assign(new Error('RESOURCE_EXHAUSTED'),{status:429});}});await f.run();await f.run();assert.equal(f.calls.length,2);assert.equal(f.records.filter(fr=>fr.status==='queued').length,8);assert(new Date(f.session.analysisIssue.retryAfter)>new Date());});
+test('saved native scans use two workers, preserve all samples, and save deterministic chronological results',{timeout:3000},async()=>{
+ const stored=[],updates=[],calls=[];let active=0,max=0,release,secondFinished;
+ const firstGate=new Promise(r=>release=r),secondDone=new Promise(r=>secondFinished=r);
+ const {analyzeNativeInspection}=load('lib/server/native-analysis.ts',{
+  './db':{getDb:async()=>({collection:name=>({updateOne:async(q,u)=>updates.push(u.$set),insertOne:async f=>{if(name==='findings')stored.push(f)}})})},
+  './media':{readMedia:async()=>Buffer.from('photo')},'./search':{indexFindings:async()=>{}},'./object-reconstruction':{prepareObjectReconstructions:async()=>{}},
+  './furniture-video':{oneFramePerSecond:frames=>frames,analyzeFurnitureVideoFrames:async samples=>{calls.push(samples.map(s=>s.timestampSeconds));active++;max=Math.max(max,active);try{if(samples[0].timestampSeconds===0)await firstGate;else secondFinished();return samples.map(frame=>({frame,result:{findings:[{label:'Tear',description:'Visible tear',damageType:'tear',boundingBox:observation.boundingBox,elementId:null,worldPosition:null,reviewStatus:'pending',autoApproved:false,detectionSource:'gemini'}],warnings:[],views:[]}}));}finally{active--}}},
+ });
+ const frames=Array.from({length:18},(_,i)=>({...pose,timestamp:i,image:`frame-${i}.jpg`})),manifest={sessionId:'scan',elements:[],frames,assets:frames.map(f=>({name:f.image,kind:'image',mediaRef:`photo-${f.timestamp}`}))};
+ const run=analyzeNativeInspection({_id:new ObjectId(),ownerId:'owner',roomId:new ObjectId()},manifest,null);
+ await secondDone;assert.equal(max,2);assert.equal(stored.length,0);release();await run;
+ assert.deepEqual(stored.map(f=>f.timestampSeconds),Array.from({length:18},(_,i)=>i));assert.equal(calls.length,3);assert.equal(updates.at(-1).framesAnalysed,18);assert.equal(updates.at(-1).status,'completed');assert.equal(max,2);
 });
