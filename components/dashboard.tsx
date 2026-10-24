@@ -4,7 +4,7 @@ import Link from "next/link";
 import BrandLogo from "./brand-logo";
 import {authClient} from "@/lib/auth-client";
 import { useEffect, useState } from "react";
-import { ArrowUpRight } from "lucide-react";
+import { ArrowUpRight, Trash2 } from "lucide-react";
 import RoomReconstruction from "./room-reconstruction";
 import FindingsSearch from "./findings-search";
 import { api } from "@/lib/api";
@@ -14,6 +14,12 @@ import "@/app/landing.css";
 export default function Dashboard() {
   const {data:session,isPending:authPending,error:authError}=authClient.useSession();
   const [rooms, setRooms] = useState<Room[]>([]);
+  const [confirmDelete, setConfirmDelete] = useState(""), [deleting, setDeleting] = useState(false);
+  async function deleteRoom(id: string) {
+    setDeleting(true); setError("");
+    try { const r = await fetch(`/api/rooms/${id}`, { method: "DELETE" }); const b = await r.json().catch(() => ({})); if (!r.ok) throw new Error(b.error || "Could not delete the room."); setConfirmDelete(""); if (selectedRoom === id) setSelectedRoom(""); await refresh(); }
+    catch (e) { setError(e instanceof Error ? e.message : "Could not delete the room."); } finally { setDeleting(false); }
+  }
   const [inspections, setInspections] = useState<Inspection[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -56,7 +62,7 @@ export default function Dashboard() {
       {loading ? <div className="landing-room-list" role="status" aria-label="Loading your spaces">{[0,1,2].map(i=><div className="landing-room landing-room-skeleton" key={i} aria-hidden="true"><span className="skeleton" style={{width:18,height:12}}/><span className="skeleton" style={{width:`${[62,48,55][i]}%`,height:26}}/><span className="skeleton" style={{width:74,height:12}}/><span className="skeleton" style={{width:18,height:18}}/></div>)}</div> : rooms.length === 0 ? <p className="landing-empty">{error ? "Your spaces could not be loaded." : "Begin with a room. Your walkthroughs and observations will stay together here."}</p> : <div className="landing-room-list">{rooms.map((room, index) => {
         const count = inspections.filter((inspection) => inspection.roomId === room.id).length;
         const active=room.id===(selectedRoom||rooms[0]?.id);
-        return <div className={`landing-room ${active?"active":""}`} key={room.id} onClick={e=>{if(!(e.target as HTMLElement).closest("a"))setSelectedRoom(room.id);}}><span className="landing-room-number" aria-hidden="true">{String(index + 1).padStart(2, "0")}</span><h3><button className="room-select" aria-pressed={active} aria-label={`Show ${room.name} in 3D`} onClick={()=>setSelectedRoom(room.id)}>{room.name}</button></h3><span className="landing-room-count">{active&&rooms.length>1?<span className="room-shown">Previewing · </span>:null}{count} {count === 1 ? "inspection" : "inspections"}</span><Link href={`/rooms/${room.id}`} aria-label={`Open ${room.name}`}><ArrowUpRight size={20} aria-hidden="true"/></Link></div>;
+        return <div className={`landing-room ${active?"active":""}`} key={room.id} onClick={e=>{if(!(e.target as HTMLElement).closest("a,.room-delete,.room-delete-confirm"))setSelectedRoom(room.id);}}><span className="landing-room-number" aria-hidden="true">{String(index + 1).padStart(2, "0")}</span><h3><button className="room-select" aria-pressed={active} aria-label={`Show ${room.name} in 3D`} onClick={()=>setSelectedRoom(room.id)}>{room.name}</button></h3><span className="landing-room-count">{active&&rooms.length>1?<span className="room-shown">Previewing · </span>:null}{count} {count === 1 ? "inspection" : "inspections"}</span><span className="room-row-actions"><button type="button" className="room-delete" aria-label={`Delete ${room.name}`} title="Delete room" onClick={()=>setConfirmDelete(room.id)}><Trash2 size={16} aria-hidden="true"/></button><Link href={`/rooms/${room.id}`} aria-label={`Open ${room.name}`}><ArrowUpRight size={20} aria-hidden="true"/></Link></span>{confirmDelete===room.id&&<div className="room-delete-confirm" role="group" aria-label={`Delete ${room.name}?`}><p>Delete {room.name} and its {count} {count===1?"scan":"scans"}? This can't be undone.</p><button className="button-danger" disabled={deleting} onClick={()=>void deleteRoom(room.id)}>{deleting?"Deleting…":"Delete room"}</button><button className="text-button" disabled={deleting} onClick={()=>setConfirmDelete("")}>Keep it</button></div>}</div>;
       })}</div>}</div><RoomReconstruction roomId={selectedRoom||rooms[0]?.id||""} name={roomFor(selectedRoom||rooms[0]?.id)?.name||""} inspections={inspections} hint={rooms.length>1}/></div>
     </section>
 
