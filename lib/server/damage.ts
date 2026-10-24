@@ -34,21 +34,34 @@ export async function cropObject(image: Buffer, box: Box): Promise<{ image: Buff
   };
 }
 
+/** Gemini sometimes answers on a 0–1000 grid, or overshoots the edge by a rounding step. */
+export function normalizeBox(value: unknown): Box | null {
+  if (!value || typeof value !== "object") return null;
+  let { x, y, width, height } = value as Box;
+  if (![x, y, width, height].every(n => typeof n === "number" && Number.isFinite(n))) return null;
+  if (width > 1.5 && height > 1.5 && Math.max(x, y, x + width, y + height) <= 1000.5) { x /= 1000; y /= 1000; width /= 1000; height /= 1000; }
+  if (x < 0 && x > -.02) x = 0; if (y < 0 && y > -.02) y = 0;
+  if (x + width > 1 && x + width <= 1.02) width = 1 - x; if (y + height > 1 && y + height <= 1.02) height = 1 - y;
+  return validBox({ x, y, width, height });
+}
+/** Keeps every usable observation. One malformed item is dropped, not the whole photo's result. */
 export function parseDamageResponse(text: string): DamageObservation[] {
   const parsed: unknown = JSON.parse(text);
-  if (!parsed || typeof parsed !== "object" || !("damage" in parsed) || !Array.isArray(parsed.damage) || parsed.damage.length > 30) {
+  if (!parsed || typeof parsed !== "object" || !("damage" in parsed) || !Array.isArray(parsed.damage)) {
     throw new Error("Gemini returned an invalid damage response");
   }
-  return parsed.damage.map((raw: unknown) => {
-    if (!raw || typeof raw !== "object") throw new Error("Gemini returned an invalid damage observation");
-    const item = raw as Record<string, unknown>;
-    if (!DAMAGE_TYPES.includes(item.type as DamageObservation["type"]) || typeof item.description !== "string" || !item.description.trim() || item.description.length > 2000) {
-      throw new Error("Gemini returned an invalid damage observation");
-    }
-    const boundingBox = validBox(item.boundingBox);
-    if (item.boundingBox !== null && !boundingBox) throw new Error("Gemini returned invalid damage coordinates");
-    return { type: item.type as DamageObservation["type"], description: item.description.trim(), boundingBox };
-  });
+  const out: DamageObservation[] = [];
+  let dropped = 0;
+  for (const raw of parsed.damage.slice(0, 30)) {
+    const item = raw && typeof raw === "object" ? raw as Record<string, unknown> : null;
+    const type = typeof item?.type === "string" ? item.type.toLowerCase().trim() : "";
+    const description = typeof item?.description === "string" ? item.description.trim() : "";
+    const boundingBox = item?.boundingBox == null ? null : normalizeBox(item.boundingBox);
+    if (!item || !DAMAGE_TYPES.includes(type as DamageObservation["type"]) || !description || description.length > 2000 || (item.boundingBox != null && !boundingBox)) { dropped++; continue; }
+    out.push({ type: type as DamageObservation["type"], description, boundingBox });
+  }
+  if (dropped) console.warn(JSON.stringify({ event: "gemini.damage.dropped", dropped, kept: out.length }));
+  return out;
 }
 
 async function inspect(image: Buffer, scope: string): Promise<DamageObservation[]> {
@@ -250,11 +263,14 @@ export async function inspectVideoDamageBatch(frames: { image: Buffer; timestamp
 }
 export function parseVideoDamageResponse(text: string, expected: number[]) {
   const parsed = JSON.parse(text);
-  if (!Array.isArray(parsed.frames) || parsed.frames.length !== expected.length) throw new Error('Video analysis did not return every evidence frame');
+  if (!Array.isArray(parsed.frames)) throw new Error('Video analysis did not return any evidence frames');
   const result = new Map<number, DamageObservation[]>();
   for (const frame of parsed.frames) {
-    if (!expected.includes(frame.timestampSeconds) || result.has(frame.timestampSeconds)) throw new Error('Invalid or duplicate evidence timestamp');
-    result.set(frame.timestampSeconds, parseDamageResponse(JSON.stringify({ damage: frame.damage })));
+    // Match each answer to the photo it describes, allowing for timestamps echoed back as text or rounded.
+    const t = Number(frame?.timestampSeconds), match = expected.find(e => Math.abs(e - t) < .05);
+    if (match === undefined || result.has(match) || !Array.isArray(frame.damage)) continue;
+    result.set(match, parseDamageResponse(JSON.stringify({ damage: frame.damage })));
   }
+  if (!result.size) throw new Error('Video analysis did not return any matching evidence frame');
   return result;
 }

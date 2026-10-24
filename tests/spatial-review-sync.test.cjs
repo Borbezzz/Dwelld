@@ -14,6 +14,7 @@ function fixture(){
   '@/lib/server/media':{readMedia:async()=>Buffer.from('photo'),writeMedia:async()=>'gridfs:'+'0'.repeat(24)},
   '@/lib/server/video-mark':{placeVideoPoint:()=>({error:'not used in these tests'})},
   '@/lib/server/ledger':{sealLater:async()=>{}},
+  '@/lib/server/analysis-failure':{logAIFailure:()=>{}},
   '@/lib/spatial/furniture':{isFurniture:()=>false},
   '@/lib/server/damage':{describeAtPoint:async()=>({label:'Scratch',type:'scratch',description:'Marked scratch',boundingBox:null})},
   '@/lib/server/projection':{projectPoint:()=>({x:.5,y:.5})},

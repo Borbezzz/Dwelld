@@ -15,3 +15,10 @@ export function analysisFailure(error: unknown) {
     return { code: 'AI_UNAVAILABLE', message: 'The AI service timed out or was temporarily unavailable.', retryable: true, blocksService: false };
   return { code: 'AI_INVALID_RESPONSE', message: 'The AI check did not return a usable result.', retryable: false, blocksService: false };
 }
+
+/** One line in the server logs (Vercel → Logs) for every failed AI call, without keys or prompts. */
+export function logAIFailure(where: string, error: unknown) {
+  const item = error && typeof error === 'object' ? error as { status?: unknown; code?: unknown; message?: unknown } : {};
+  const message = typeof item.message === 'string' ? item.message.replace(/AIza[0-9A-Za-z_-]{20,}/g, '[key]').slice(0, 240) : String(error).slice(0, 240);
+  console.error(JSON.stringify({ event: 'ai.failed', where, code: analysisFailure(error).code, status: item.status ?? item.code ?? null, model: process.env.GEMINI_MODEL || 'gemini-4-argon', message }));
+}

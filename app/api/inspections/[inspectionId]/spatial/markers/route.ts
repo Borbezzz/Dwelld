@@ -14,6 +14,7 @@ import { writeMedia } from "@/lib/server/media";
 import { placeVideoPoint, type ScanFrame } from "@/lib/server/video-mark";
 import { isFurniture } from "@/lib/spatial/furniture";
 import { sealLater } from "@/lib/server/ledger";
+import { logAIFailure } from "@/lib/server/analysis-failure";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 export const dynamic = "force-dynamic";
@@ -41,7 +42,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ ins
       const frameRef = manifest.assets.find(a => a.name === placed.frame.image && a.kind === "image")?.mediaRef;
       const image = evidence ?? (frameRef ? await readMedia(frameRef, 16 * 1024 * 1024) : null);
       const at = evidence ? { x: p.x, y: p.y } : placed.sensor;
-      const seen = image ? await describeAtPoint(image, at).catch(() => null) : null;
+      const seen = image ? await describeAtPoint(image, at).catch(e => { logAIFailure('mark.video', e); return null; }) : null;
       if (!seen && !note) return NextResponse.json({ error: "Couldn't describe that spot automatically. Add a short note and save again." }, { status: 422 });
       const ref = evidence ? await writeMedia(evidence, `video-mark-${Date.now()}.jpg`, "image/jpeg", { ownerId: user.id, inspectionId: String(inspection._id), kind: "manual-mark" }) : frameRef;
       const element = placed.element, furniture = isFurniture(element);

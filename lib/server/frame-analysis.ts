@@ -1,4 +1,4 @@
-import {analysisFailure} from "./analysis-failure";
+import {analysisFailure, logAIFailure} from "./analysis-failure";
 import sharp from "sharp";
 import { isFurniture } from "../spatial/furniture";
 import { inspectCracks } from "./crack-detector";
@@ -133,7 +133,7 @@ export async function analyzeEvidenceFrame(image: Buffer, pose: FramePose, eleme
     (async () => {
       let whole: DamageObservation[] = [];
       try { whole = options.observations ?? await inspectVisibleDamage(image); }
-      catch (error) { wholeFailure = error; warnings.push(analysisFailure(error).message); }
+      catch (error) { wholeFailure = error; logAIFailure("frame.whole", error); warnings.push(analysisFailure(error).message); }
       whole = await screenCracks(whole);
       whole.forEach(o => add('Visible damage', o, null, 'gemini'));
       await publish();
@@ -162,7 +162,7 @@ export async function analyzeEvidenceFrame(image: Buffer, pose: FramePose, eleme
         const v = await verifyFinding(image, { label: f.label, description: f.description, boundingBox: f.boundingBox! }, { timeoutMs: 20_000 });
         f.verification = { ...v, threshold }; f.confidence = v.verdict === 'damage' ? v.confidence : 1 - v.confidence;
         if (reviewDecision(v.verdict, v.confidence, threshold) === 'confirmed') { f.reviewStatus = 'confirmed'; f.autoApproved = true; }
-      } catch { /* Keep unverified candidates available for human review. */ }
+      } catch (error) { logAIFailure('verify', error); /* Keep unverified candidates available for human review. */ }
     }
   }));
   // Findings the verifier is confident are not damage are dropped rather than shown.

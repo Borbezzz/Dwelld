@@ -27,7 +27,13 @@ test('original pixel crops and rounded bounds translate to source coordinates', 
 test('damage parser allows empty/uncertain results and rejects invalid model data', () => {
   assert.deepEqual(parseDamageResponse('{"damage":[]}'), []);
   assert.equal(parseDamageResponse(JSON.stringify({ damage: [{ type: 'crack', description: 'Visible line, uncertain crack', boundingBox: null }] }))[0].boundingBox, null);
-  for (const item of [{ type: 'legal liability', description: 'bad', boundingBox: null }, { type: 'crack', description: '', boundingBox: null }, { type: 'scratch', description: 'scratch', boundingBox: { x: .9, y: 0, width: .2, height: .3 } }]) assert.throws(() => parseDamageResponse(JSON.stringify({ damage: [item] })));
+  for (const item of [{ type: 'legal liability', description: 'bad', boundingBox: null }, { type: 'crack', description: '', boundingBox: null }, { type: 'scratch', description: 'scratch', boundingBox: { x: .9, y: 0, width: .2, height: .3 } }]) assert.deepEqual(parseDamageResponse(JSON.stringify({ damage: [item] })), []);
+  // One bad item no longer discards the good ones; 0-1000 boxes and edge overshoot are normalized.
+  const mixed = parseDamageResponse(JSON.stringify({ damage: [{ type: 'Scratch', description: 'Long scratch', boundingBox: { x: 100, y: 200, width: 300, height: 100 } }, { type: 'legal liability', description: 'x', boundingBox: null }, { type: 'chip', description: 'Edge chip', boundingBox: { x: .9, y: .5, width: .11, height: .1 } }] }));
+  assert.equal(mixed.length, 2);
+  assert.deepEqual(mixed[0].boundingBox, { x: .1, y: .2, width: .3, height: .1 });
+  assert.ok(Math.abs(mixed[1].boundingBox.x + mixed[1].boundingBox.width - 1) < 1e-9);
+  assert.throws(() => parseDamageResponse('{"nothing":1}'));
 });
 test('room labels and RoomPlan names share one damage scope', () => {
   assert.equal(scopeForName('dining table'), 'table');

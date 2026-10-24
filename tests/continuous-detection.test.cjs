@@ -32,12 +32,17 @@ test('one-second video coverage includes the beginning and end without timestamp
   assert(videoSampleTimes(60).length >= 60);
   for (const d of [0, -1, Infinity, NaN, 121]) assert.throws(() => videoSampleTimes(d));
 });
-test('batch parser rejects missing, duplicated, hallucinated timestamps and invalid boxes', () => {
+test('batch parser keeps every frame it can match and never invents one', () => {
   const good = {frames:[{timestampSeconds:0,damage:[observation]},{timestampSeconds:1,damage:[]}]};
   assert.deepEqual(parseVideoDamageResponse(JSON.stringify(good), [0,1]).get(0), [observation]);
-  for (const frames of [good.frames.slice(0,1), [good.frames[0],good.frames[0]], [good.frames[0],{timestampSeconds:10,damage:[]}], [{timestampSeconds:0,damage:[{...observation,boundingBox:{x:2,y:0,width:.1,height:.1}}]},good.frames[1]]]) {
-    assert.throws(() => parseVideoDamageResponse(JSON.stringify({frames}), [0,1]));
-  }
+  // A missing frame is left unassessed, a duplicate keeps the first answer, a hallucinated timestamp is ignored.
+  assert.deepEqual([...parseVideoDamageResponse(JSON.stringify({frames:good.frames.slice(0,1)}), [0,1]).keys()], [0]);
+  assert.deepEqual(parseVideoDamageResponse(JSON.stringify({frames:[good.frames[0],{timestampSeconds:0,damage:[]}]}), [0,1]).get(0), [observation]);
+  assert.deepEqual([...parseVideoDamageResponse(JSON.stringify({frames:[good.frames[0],{timestampSeconds:10,damage:[]}]}), [0,1]).keys()], [0]);
+  assert.ok(parseVideoDamageResponse(JSON.stringify({frames:[{timestampSeconds:'1',damage:[]}]}), [0,1]).has(1));
+  // An impossible box drops that observation only.
+  assert.deepEqual(parseVideoDamageResponse(JSON.stringify({frames:[{timestampSeconds:0,damage:[{...observation,boundingBox:{x:2,y:0,width:.1,height:.1}}]}]}), [0,1]).get(0), []);
+  assert.throws(() => parseVideoDamageResponse(JSON.stringify({frames:[{timestampSeconds:10,damage:[]}]}), [0,1]));
 });
 test('native detection works without RoomPlan categories and publishes before verification completes', async () => {
   let published = false, verified = false;

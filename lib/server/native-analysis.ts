@@ -1,4 +1,4 @@
-import {analysisFailure} from "./analysis-failure";
+import {analysisFailure, logAIFailure} from "./analysis-failure";
 import { analyzeFurnitureVideoFrames, oneFramePerSecond } from "./furniture-video";
 import { ObjectId, type Document } from "mongodb";
 import { randomUUID } from "node:crypto";
@@ -46,6 +46,7 @@ export async function analyzeLiveEvidenceFrame(sessionId: ObjectId, _name: strin
           await frames.updateOne({ _id: frame._id }, { $set: { status: 'done', views: result.views, findings: result.findings.length, warnings: result.warnings, finishedAt: new Date() } });
         }
       } catch (error) {
+        logAIFailure('live.frames', error);
         const failure = analysisFailure(error);
         await frames.updateMany({ _id: { $in: batch.map(f => f._id) }, status: 'analyzing' }, { $set: { status: 'failed', error: failure.message, errorCode: failure.code, finishedAt: new Date() } });
         await sessions.updateOne({ _id: sessionId }, { $set: { analysisIssue: { ...failure, at: new Date().toISOString() } } });
@@ -127,6 +128,7 @@ export async function analyzeNativeInspection(inspection: Document, manifest: Sp
             if (sessionId) await db.collection('liveFrames').updateOne({sessionId,name:fr.image},{$set:{status:'done',ref:imageRef(fr.image),timestampSeconds:fr.timestamp,finishedAt:new Date(),warnings:result.warnings}},{upsert:true});
           }
         } catch (error) {
+          logAIFailure('saved.batch', error);
           const failure = analysisFailure(error);
           if (failure.blocksService) blocked = failure;
           warnings.push(failure.message);
