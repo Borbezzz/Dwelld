@@ -1,5 +1,6 @@
 import Foundation
 import CoreVideo
+import CoreImage
 import WebRTC
 
 /// Video transport is independent of evidence uploads, LiDAR and AI latency.
@@ -8,6 +9,8 @@ import WebRTC
     private let factory: RTCPeerConnectionFactory
     private let source: RTCVideoSource
     private let capturer: RTCVideoCapturer
+    private let imageContext = CIContext()
+    private var portraitBuffers: CVPixelBufferPool?
     private let base: URL, sessionID: String, token: String
     private let servers: [[String: Any]]
     private var peer: RTCPeerConnection?
@@ -26,7 +29,14 @@ import WebRTC
         factory = RTCPeerConnectionFactory(encoderFactory: RTCDefaultVideoEncoderFactory(), decoderFactory: RTCDefaultVideoDecoderFactory())
         source = factory.videoSource(); capturer = RTCVideoCapturer(delegate: source)
         super.init()
-        source.adaptOutputFormat(toWidth: 960, height: 540, fps: 24)
+        source.adaptOutputFormat(toWidth: 540, height: 960, fps: 30)
+        let attributes: [String: Any] = [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferWidthKey as String: 540,
+            kCVPixelBufferHeightKey as String: 960,
+            kCVPixelBufferIOSurfacePropertiesKey as String: [:]
+        ]
+        CVPixelBufferPoolCreate(nil, nil, attributes as CFDictionary, &portraitBuffers)
     }
     func start() {
         poll = Task { [weak self] in
@@ -59,11 +69,21 @@ import WebRTC
         }
     }
     func send(_ pixel: CVPixelBuffer, timestamp: Double, markers: [[String: Any]]?) {
-        // The capture timer owns cadence. ARKit timestamps are quantized to camera ticks;
-        // a second 1/24 gate would incorrectly discard alternating 60 Hz camera samples.
+        // Poll at camera cadence and let WebRTC adapt to 30 FPS. ARKit timestamps are
+        // quantized to camera ticks; another time gate here would discard valid frames.
         guard active, peer != nil, timestamp > lastFrame else { return }
         lastFrame = timestamp
-        let frame = RTCVideoFrame(buffer: RTCCVPixelBuffer(pixelBuffer: pixel), rotation: ._90, timeStampNs: Int64(timestamp * 1_000_000_000))
+        // ARKit supplies landscape sensor pixels. Bake the clockwise portrait rotation
+        // into the encoded image instead of relying on RTP rotation metadata at playback.
+        // This matches the portrait projection used by the furniture and damage markers.
+        guard let portraitBuffers else { return }
+        var output: CVPixelBuffer?
+        guard CVPixelBufferPoolCreatePixelBuffer(nil, portraitBuffers, &output) == kCVReturnSuccess,
+              let output else { return }
+        let portrait = CIImage(cvPixelBuffer: pixel).oriented(.right)
+        let image = portrait.transformed(by: CGAffineTransform(scaleX: 540 / portrait.extent.width, y: 960 / portrait.extent.height))
+        imageContext.render(image, to: output)
+        let frame = RTCVideoFrame(buffer: RTCCVPixelBuffer(pixelBuffer: output), rotation: ._0, timeStampNs: Int64(timestamp * 1_000_000_000))
         source.capturer(capturer, didCapture: frame)
         if let markers, let metadata, metadata.readyState == .open, metadata.bufferedAmount < 64_000, let data = try? JSONSerialization.data(withJSONObject:["type":"native-marks","markers":markers,"timestamp":timestamp]) {
             metadata.sendData(RTCDataBuffer(data:data,isBinary:false))
@@ -145,7 +165,7 @@ import WebRTC
         Task { @MainActor [weak self] in
             guard let self, self.active, self.peer === pc else { return }
             switch stateChanged {
-            case .connected, .completed: self.onStatus?("Live video connected · target 24 FPS")
+            case .connected, .completed: self.onStatus?("Live video connected · target 30 FPS")
             case .failed, .disconnected:
                 self.onStatus?("Live video reconnecting; capture continues")
                 guard self.retry == nil else { return }

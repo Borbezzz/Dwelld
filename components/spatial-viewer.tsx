@@ -164,13 +164,19 @@ export default function SpatialViewer({ manifest, markers, assetUrl, onPick, sel
     const dispose = () => { group.traverse(o => { if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments || o instanceof THREE.Points) { o.geometry.dispose(); (o.material as THREE.Material).dispose(); } }); };
 
     if (useSplat) {
-      let viewer: import("@mkkellogg/gaussian-splats-3d").Viewer | undefined, visibility: IntersectionObserver | undefined;
+      let viewer: import("@mkkellogg/gaussian-splats-3d").Viewer | undefined, visibility: IntersectionObserver | undefined, splatOrbit: OrbitControls | undefined;
       // Furniture outlines are drawn after the splat so they stay visible inside it.
       const overlay = new THREE.Scene(), top = new THREE.Scene(); top.add(group);
       setLoading(true);
       import("@mkkellogg/gaussian-splats-3d").then(async ({ Viewer, SceneFormat, RenderMode }) => {
         if (dead) return;
-        viewer = new Viewer({ rootElement: element, threeScene: overlay, cameraUp: [0, 1, 0], initialCameraPosition: start.toArray(), initialCameraLookAt: center.toArray(), sharedMemoryForWorkers: false, gpuAcceleratedSort: false, renderMode: compact ? RenderMode.Always : RenderMode.OnChange, ignoreDevicePixelRatio: window.devicePixelRatio > 1.5 });
+        viewer = new Viewer({ rootElement: element, threeScene: overlay, useBuiltInControls: false, cameraUp: [0, 1, 0], initialCameraPosition: start.toArray(), initialCameraLookAt: center.toArray(), sharedMemoryForWorkers: false, gpuAcceleratedSort: false, renderMode: compact ? RenderMode.Always : RenderMode.OnChange, ignoreDevicePixelRatio: window.devicePixelRatio > 1.5 });
+        // The library's built-in controls listen on window and consume chat keystrokes.
+        // Keep pointer orbit/pan/zoom without registering any keyboard shortcuts.
+        splatOrbit = new OrbitControls(viewer.camera, viewer.renderer.domElement);
+        splatOrbit.enableDamping = true; splatOrbit.dampingFactor = .05;
+        splatOrbit.rotateSpeed = .5; splatOrbit.minPolarAngle = .1; splatOrbit.maxPolarAngle = Math.PI * .75;
+        splatOrbit.target.copy(center); splatOrbit.update(); viewer.controls = splatOrbit;
         const position = new THREE.Vector3(), orientation = new THREE.Quaternion(), scale = new THREE.Vector3(1, 1, 1);
         if (splat?.registration) new THREE.Matrix4().fromArray(splat.registration.transform).decompose(position, orientation, scale);
         const self = viewer as unknown as { render: () => void; splatRenderReady: boolean; renderer: THREE.WebGLRenderer; camera: THREE.Camera };
@@ -186,7 +192,7 @@ export default function SpatialViewer({ manifest, markers, assetUrl, onPick, sel
         if (compact) { const v = viewer; visibility = new IntersectionObserver(([entry]) => { if (dead) return; const loop = v as unknown as { stop: () => void; selfDrivenModeRunning: boolean }; if (!entry.isIntersecting) loop.stop(); else if (!loop.selfDrivenModeRunning) v.start(); }); visibility.observe(element); }
         if (state.current.selected) focus(state.current.selected);
       }).catch(() => { if (!dead) { setLoading(false); setError("The 3D room could not be loaded. Switch to geometry to keep reviewing."); } });
-      return () => { dead = true; visibility?.disconnect(); cancelAnimationFrame(focusFrame); cancelAnimationFrame(moveFrame); detach(); scene.current = null; void viewer?.dispose(); dispose(); element.replaceChildren(); };
+      return () => { dead = true; visibility?.disconnect(); cancelAnimationFrame(focusFrame); cancelAnimationFrame(moveFrame); detach(); splatOrbit?.dispose(); scene.current = null; void viewer?.dispose(); dispose(); element.replaceChildren(); };
     }
 
     const three = new THREE.Scene(); three.background = new THREE.Color("#f1f0ea"); three.add(group);

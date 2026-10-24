@@ -296,12 +296,14 @@ struct PhoneFinding: Decodable, Identifiable {
         let generation = connectionGeneration
         transport.onStatus = { [weak self] value in guard let self, self.connectionGeneration == generation else { return }; self.videoStatus = value }
         liveVideo = transport; transport.start()
-        // Only copy the current AR buffer here. Evidence encoding and inference have their own cadence.
-        videoTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 24, repeats: true) { [weak self] _ in
+        // Read at 60 Hz so timer jitter does not skip a 30 Hz camera frame. The transport
+        // ignores duplicate timestamps and WebRTC adapts the output to 30 FPS.
+        // Evidence encoding and inference have their own independent cadence.
+        videoTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self, self.scanning, let frame = self.view.captureSession.arSession.currentFrame else { return }
                 self.videoTick += 1
-                self.liveVideo?.send(frame.capturedImage, timestamp: frame.timestamp, markers: self.videoTick % 4 == 0 ? self.videoMarkers(frame) : nil)
+                self.liveVideo?.send(frame.capturedImage, timestamp: frame.timestamp, markers: self.videoTick % 10 == 0 ? self.videoMarkers(frame) : nil)
             }
         }
         if let videoTimer { RunLoop.main.add(videoTimer, forMode: .common) }

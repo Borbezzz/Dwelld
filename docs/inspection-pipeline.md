@@ -90,11 +90,16 @@ save; continuing analysis is viewed from the saved room record.
 
 ## Live video is separate from inference
 
-Native ARKit camera buffers now feed a WebRTC video source targeting 24 FPS at 960 × 540
-(before portrait rotation). RoomPlan keeps its own ARSession; no second camera is opened.
+Native ARKit camera buffers now feed a WebRTC video source targeting 30 FPS at 540 × 960.
+The sender rotates sensor pixels clockwise into portrait using Core Image and pooled buffers,
+then sends zero rotation metadata so playback does not depend on RTP orientation support.
+RoomPlan keeps its own ARSession; no second camera is opened.
 Only offer/answer/ICE metadata passes through the authenticated signalling API. Video goes
 over the negotiated peer connection, using configured TURN credentials when needed. The native
 sender polls a lightweight signalling endpoint instead of downloading its own JPEG preview.
+Camera buffers are read at 60 Hz, duplicate ARKit timestamps are ignored, and WebRTC adapts
+to 30 FPS independently of evidence sampling. Network and device conditions can reduce
+the delivered rate; the laptop displays measured incoming FPS.
 
 Furniture boxes and damage pins travel over a bounded, unordered metadata channel at about
 6 Hz. They use the current AR camera and measured world geometry; the browser rejects invalid,
