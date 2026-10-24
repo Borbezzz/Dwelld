@@ -14,9 +14,9 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 
-function serializeInspection(doc: Record<string, any>) {
+function serializeInspection(doc: Record<string, any>, viewerId: string) {
   return {
-    id: String(doc._id), roomId: String(doc.roomId), status: doc.status, type: doc.type || "move-in",
+    id: String(doc._id), roomId: String(doc.roomId), status: doc.status, type: doc.type || "move-in", isOwner: doc.ownerId===viewerId,
     createdAt: new Date(doc.createdAt).toISOString(),
     videoUrl: "/api/inspections/" + String(doc._id) + "/video",
   };
@@ -35,7 +35,7 @@ export async function GET(request: Request) {
     const sharedRooms=memberships.length?await db.collection("rooms").find({spaceId:{$in:memberships.map(m=>m.spaceId)}},{projection:{_id:1}}).toArray():[];
     const accessible=[...sharedRooms.map(r=>r._id),...(await db.collection("rooms").find({ownerId:user.id},{projection:{_id:1}}).toArray()).map(r=>r._id)];
     const docs = await db.collection("inspections").find({roomId:{$in:accessible},...(roomId ? {roomId} : {})}).sort({ createdAt: -1 }).limit(100).toArray();
-    return NextResponse.json({ inspections: docs.map(serializeInspection) });
+    return NextResponse.json({ inspections: docs.map(d=>serializeInspection(d,user.id)) });
   } catch (error) { return errorResponse(error, "app/api/inspections/route.ts"); }
 }
 
