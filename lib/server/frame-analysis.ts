@@ -1,5 +1,6 @@
 import {analysisFailure} from "./analysis-failure";
 import sharp from "sharp";
+import { isFurniture } from "../spatial/furniture";
 import { inspectCracks } from "./crack-detector";
 import { checkCrack, type DepthPatch } from "./crack-check";
 import { inspectVisibleDamage, scopeForName, type DamageObservation, type Box } from "./damage";
@@ -83,11 +84,22 @@ function hitElement(px: number, py: number, pose: FramePose, e: RoomElement): { 
 const centre = (b: Box): [number, number] => [b.x + b.width / 2, b.y + b.height / 2];
 const iou = (a: Box, b: Box) => { const w = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x)), h = Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y)), i = w * h; return i / (a.width * a.height + b.width * b.height - i || 1); };
 
+/** Resolve a source-image box against measured room geometry, without calling any model. */
+export function localizeDamageBox(box: Box | null, pose: FramePose, elements: RoomElement[], furnitureOnly = false): { owner: RoomElement | null; worldPosition: V3 | null } {
+  if (!box) return { owner: null, worldPosition: null };
+  const [px, py] = centre(box);
+  const hits = elements.map(owner => ({ owner, hit: hitElement(px, py, pose, owner) })).filter(x => x.hit).sort((a, b) => a.hit!.t - b.hit!.t);
+  const nearest = hits[0];
+  // Do not shoot through an occluding wall to attach a mark to furniture behind it.
+  if (!nearest || (furnitureOnly && !isFurniture(nearest.owner))) return { owner: null, worldPosition: null };
+  return { owner: nearest.owner, worldPosition: nearest.hit!.point };
+}
+
 /**
  * Inspect all visible damage, associate boxes with measured geometry when possible, and publish
  * candidates before bounded verification. Findings without geometry keep their source-photo box.
  */
-export async function analyzeEvidenceFrame(image: Buffer, pose: FramePose, elements: RoomElement[], options: { walls: boolean; onCandidates?: (findings: FrameFinding[]) => Promise<void>; observations?: DamageObservation[]; verify?: boolean; depth?: DepthPatch | null }) {
+export async function analyzeEvidenceFrame(image: Buffer, pose: FramePose, elements: RoomElement[], options: { walls: boolean; onCandidates?: (findings: FrameFinding[]) => Promise<void>; observations?: DamageObservation[]; verify?: boolean; depth?: DepthPatch | null; specialist?: boolean; furnitureOnly?: boolean }) {
   const meta = await sharp(image).metadata();
   // The pose was recorded for the encoded size; rescale if the stored image differs.
   const scaled: FramePose = meta.width && meta.height && (meta.width !== pose.width || meta.height !== pose.height)
@@ -100,8 +112,10 @@ export async function analyzeEvidenceFrame(image: Buffer, pose: FramePose, eleme
     if (o.boundingBox) {
       const [px, py] = centre(o.boundingBox);
       if (element) worldPosition = hitElement(px, py, scaled, element)?.point ?? null;
-      else { const hits = elements.map(w => ({ w, h: hitElement(px, py, scaled, w) })).filter(x => x.h).sort((a, b) => a.h!.t - b.h!.t); if (hits[0]) { owner = hits[0].w; worldPosition = hits[0].h!.point; } }
+      else { const located = localizeDamageBox(o.boundingBox, scaled, elements, options.furnitureOnly); owner = located.owner; worldPosition = located.worldPosition; }
     }
+    // Never force a furniture defect onto a wall/fixture just because its ray crosses it.
+    if (options.furnitureOnly && owner && !isFurniture(owner)) { owner = null; worldPosition = null; }
     const ownerScope = owner && scopeFor(owner.category);
     if (!element && owner) label = ownerScope ? NAMES[ownerScope] : owner.category;
     // Overlapping Gemini and specialist hypotheses are reported once.
@@ -141,6 +155,7 @@ export async function analyzeEvidenceFrame(image: Buffer, pose: FramePose, eleme
       await publish();
     })(),
     (async () => {
+      if (options.specialist === false) return;
       let cracks: Awaited<ReturnType<typeof inspectCracks>> = [];
       try { cracks = await inspectCracks(image); }
       catch { warnings.push('Specialist crack check was unavailable.'); }

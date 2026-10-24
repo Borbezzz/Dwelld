@@ -15,3 +15,20 @@ export async function readJsonBody(request:Request,maxBytes=64*1024){
  if(!value||typeof value!=="object"||Array.isArray(value))throw new RequestBodyError("Request body must be a JSON object",400);
  return value;
 }
+
+/** Binary evidence uploads use the same streaming byte bound as JSON requests. */
+export async function readBinaryBody(request: Request, maxBytes: number): Promise<Buffer> {
+ const declared = Number(request.headers.get('content-length'));
+ if (Number.isFinite(declared) && declared > maxBytes) throw new RequestBodyError('Request body is too large');
+ if (!request.body) return Buffer.alloc(0);
+ const reader = request.body.getReader(), chunks: Uint8Array[] = []; let bytes = 0;
+ try {
+  while (true) {
+   const chunk = await reader.read(); if (chunk.done) break;
+   bytes += chunk.value.byteLength;
+   if (bytes > maxBytes) { await reader.cancel(); throw new RequestBodyError('Request body is too large'); }
+   chunks.push(chunk.value);
+  }
+  return Buffer.concat(chunks);
+ } finally { reader.releaseLock(); }
+}

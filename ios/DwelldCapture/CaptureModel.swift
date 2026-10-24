@@ -30,7 +30,7 @@ struct PhoneFinding: Decodable, Identifiable {
     @Published var damageCheckStatus = "Damage checks begin with the scan"
     private var evidenceRef = ""
     private var evidenceLoading = false
-    private var pendingEvidence: FrameRecord?
+    private var pendingEvidence: [FrameRecord] = []
     @Published var status = "Start an inspection on your laptop, then scan its QR code to connect this phone."
     @Published var pairedSession = ""
     @Published var pairing = false
@@ -185,7 +185,7 @@ struct PhoneFinding: Decodable, Identifiable {
         liveVideo?.close(); liveVideo = nil; videoTimer?.invalidate(); videoTimer = nil
         videoStatus = "Video connects when scanning starts"
         timer?.invalidate(); timer = nil
-        preUploadTask?.cancel(); preUploadTask = nil; pendingEvidence = nil
+        preUploadTask?.cancel(); preUploadTask = nil; pendingEvidence = []
         replaceCaptureView()
         relocalizing = false
         scanning = false; processing = false; ready = false; uploading = false
@@ -280,7 +280,7 @@ struct PhoneFinding: Decodable, Identifiable {
             uploadComplete = false; uploadProgress = 0
             if var saved = self.connection { saved.captureFolder = dir.lastPathComponent; try CaptureConnectionStore.save(saved); self.connection = saved }
             splatBuilder.reset(); liveSplats = []; splatCount = 0; splatRevision += 1
-            marks = []; markCount = 0; liveFindings = []; damageEvidence = nil; damageEvidenceFindings = []; evidenceRef = ""; pendingEvidence = nil
+            marks = []; markCount = 0; liveFindings = []; damageEvidence = nil; damageEvidenceFindings = []; evidenceRef = ""; pendingEvidence = []
             streamCursor = 0; preUploaded = [:]; preUploadTask = nil; liveEvidence = [:]; motions = []; sentDuringScan = 0
             view.captureSession.run(configuration: RoomCaptureSession.Configuration())
             // Read the current frame without replacing RoomPlan's ARSession delegate.
@@ -420,24 +420,23 @@ struct PhoneFinding: Decodable, Identifiable {
     /// Uploads run one after another in the background while the scan continues.
     private func queueUpload(_ files: [(String, String)], analyse evidence: FrameRecord? = nil) {
         guard !pairedSession.isEmpty, let evidence else { return }
-        // Keep only the newest pending view when the network is slower than capture.
-        // All other one-second evidence photos are still retained in the final manifest.
-        pendingEvidence = evidence
+        // Keep each sampled second in capture order. Unsent samples survive in the saved manifest.
+        pendingEvidence.append(evidence)
         guard preUploadTask == nil else { return }
         let generation = connectionGeneration
         preUploadTask = Task { [weak self] in
             guard let self else { return }
             defer { if generation == self.connectionGeneration { self.preUploadTask = nil } }
-            while !Task.isCancelled, generation == self.connectionGeneration, !self.uploadComplete, let current = self.pendingEvidence {
-                self.pendingEvidence = nil
+            while !Task.isCancelled, generation == self.connectionGeneration, !self.uploadComplete, !self.pendingEvidence.isEmpty {
+                let current = self.pendingEvidence.removeFirst()
                 do {
                     if self.preUploaded[current.image] == nil {
-                        let ref = try await self.uploadNow(current.image, contentType: "image/jpeg")
+                        let ref = try await self.uploadEvidence(current)
                         guard !Task.isCancelled, generation == self.connectionGeneration else { return }
                         self.preUploaded[current.image] = ref
                         self.sentDuringScan += 1
                     }
-                    if let ref = self.preUploaded[current.image] { await self.requestAnalysis(current, ref: ref) }
+                    // uploadEvidence stores and queues analysis in one request.
                 } catch { /* Retried when the complete capture is saved. */ }
             }
         }
@@ -471,12 +470,21 @@ struct PhoneFinding: Decodable, Identifiable {
         guard point.x >= 0, point.y >= 0, point.x <= viewport.width, point.y <= viewport.height else { return nil }
         return point
     }
-    private func requestAnalysis(_ f: FrameRecord, ref: String) async {
-        var request = URLRequest(url: pairedBase.appendingPathComponent("api/live/\(pairedSession)/frame")); request.httpMethod = "POST"; request.timeoutInterval = 15
-        request.setValue("Bearer \(phoneToken)", forHTTPHeaderField: "Authorization"); request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let body: [String: Any] = ["name": f.image, "ref": ref, "timestampSeconds": f.timestamp, "pose": ["transform": f.transform, "intrinsics": f.intrinsics, "width": f.width, "height": f.height]]
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        do { _ = try await URLSession.shared.data(for: request) } catch { /* Analysis also runs after saving. */ }
+    /// One bounded request per evidence photo, rather than initiate/chunk/finalize/analyse round trips.
+    private func uploadEvidence(_ f: FrameRecord) async throws -> String {
+        guard let dir = directory else { throw CocoaError(.fileNoSuchFile) }
+        var request = URLRequest(url: pairedBase.appendingPathComponent("api/live/\(pairedSession)/frame"))
+        request.httpMethod = "POST"; request.timeoutInterval = 30
+        request.setValue("Bearer \(phoneToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
+        let metadata: [String: Any] = ["name": f.image, "timestampSeconds": f.timestamp, "pose": ["transform": f.transform, "intrinsics": f.intrinsics, "width": f.width, "height": f.height]]
+        request.setValue(String(data: try JSONSerialization.data(withJSONObject: metadata), encoding: .utf8), forHTTPHeaderField: "X-Dwelld-Frame")
+        request.httpBody = try Data(contentsOf: dir.appendingPathComponent(f.image))
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw httpFailure(response, data: data) }
+        let body = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        guard let ref = body?["ref"] as? String else { throw CocoaError(.fileWriteUnknown) }
+        return ref
     }
     /// Camera movement between two consecutive frames: metres moved plus half the radians turned.
     private func motion(from previous: [Float]?, to current: simd_float4x4) -> Float {
@@ -516,6 +524,7 @@ struct PhoneFinding: Decodable, Identifiable {
         guard scanning else { return }
         videoTimer?.invalidate(); videoTimer = nil
         timer?.invalidate(); timer = nil; scanning = false; processing = true
+        pendingEvidence = []
         status = "Saving where everything is, so you can continue this scan later…"
         guard let capture = view.captureSession else { processing = false; status = "The capture session is unavailable. Your local files are retained."; return }
         Task { @MainActor in
@@ -588,6 +597,7 @@ struct PhoneFinding: Decodable, Identifiable {
         guard scanning || processing else { return false }
         videoTimer?.invalidate(); videoTimer = nil
         timer?.invalidate(); timer = nil; scanning = false; processing = true
+        pendingEvidence = []
         if let error { processing = false; status = "Room scan stopped: \(error.localizedDescription). Start a new scan in good light."; return false }
         status = "Processing measured room geometry…"; return true
     }
@@ -610,7 +620,7 @@ struct PhoneFinding: Decodable, Identifiable {
             let count = min(16, frames.count)
             let sentKeys = liveEvidence.keys.sorted()
             let fallback = count > 1 ? (0..<count).map { $0 * (frames.count - 1) / (count - 1) } : Array(0..<count)
-            let indices = Array(Set(sentKeys + fallback)).sorted()
+            let indices = sentKeys.isEmpty ? Array(stride(from: 0, to: frames.count, by: 2)) : sentKeys
             var evidence: [FrameRecord] = []
             var cloudAssets = assets.filter { $0.kind == "splat" }
             if FileManager.default.fileExists(atPath: dir.appendingPathComponent("room.arworldmap").path) {
@@ -620,7 +630,7 @@ struct PhoneFinding: Decodable, Identifiable {
                 let f = frames[i]
                 let sampled = try liveEvidence[i] ?? makeEvidence(f, dir: dir)
                 // Dense RGB evidence; keep depth uploads sparse to avoid blocking damage feedback.
-                let keepDepth = fallback.contains(i)
+                let keepDepth = fallback.contains(i) || i % 16 == 0
                 let record = FrameRecord(timestamp: sampled.timestamp, image: sampled.image, depth: keepDepth ? sampled.depth : nil, confidence: keepDepth ? sampled.confidence : nil, width: sampled.width, height: sampled.height, depthWidth: keepDepth ? sampled.depthWidth : nil, depthHeight: keepDepth ? sampled.depthHeight : nil, intrinsics: sampled.intrinsics, transform: sampled.transform)
                 evidence.append(record)
                 cloudAssets.append(Asset(name: record.image, mediaRef: preUploaded[record.image] ?? "", kind: "image"))
@@ -668,7 +678,7 @@ struct PhoneFinding: Decodable, Identifiable {
         guard !uploadComplete else { status = "This inspection is already saved."; return }
         uploading = true
         status = "Preparing your saved scan…"
-        pendingEvidence = nil
+        pendingEvidence = []
         preUploadTask?.cancel()
         UIApplication.shared.isIdleTimerDisabled = true
         defer { uploading = false; UIApplication.shared.isIdleTimerDisabled = false }
@@ -691,7 +701,7 @@ struct PhoneFinding: Decodable, Identifiable {
             uploadComplete = true; uploadProgress = 1
             if var saved = connection { saved.completed = true; connection = saved }
             try? CaptureConnectionStore.clear()
-            timer?.invalidate(); timer = nil; pendingEvidence = nil; preUploadTask?.cancel()
+            timer?.invalidate(); timer = nil; pendingEvidence = []; preUploadTask?.cancel()
             view.captureSession.arSession.pause(); liveVideo?.close(); liveVideo = nil; videoTimer?.invalidate(); videoTimer = nil
             status = "Saved to your laptop inspection. You can close Dwelld."
         }
