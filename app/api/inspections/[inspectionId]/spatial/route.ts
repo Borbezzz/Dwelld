@@ -1,7 +1,8 @@
 import {readJsonBody,readTextBody} from "@/lib/server/request-body";
 import { NextResponse, after } from "next/server";
 import { analyzeSpatialInspection } from "@/lib/server/spatial-analysis";
-import { getDb } from "@/lib/server/db";
+import {requireReadableInspection} from "@/lib/server/space-access";
+import { getDb,parseObjectId } from "@/lib/server/db";
 import { requireUser, requireOwnedInspection } from "@/lib/server/access";
 import { errorResponse } from "@/lib/server/api-error";
 import { getMediaFile } from "@/lib/server/media";
@@ -13,7 +14,8 @@ type Context = { params: Promise<{ inspectionId: string }> };
 export async function GET(request: Request, { params }: Context) {
   try {
     const user = await requireUser(request), { inspectionId } = await params;
-    const inspection = await requireOwnedInspection(inspectionId, user.id), db = await getDb();
+    const id=parseObjectId(inspectionId); if(!id)return NextResponse.json({error:"Inspection not found"},{status:404});
+    const inspection = await requireReadableInspection(id, user.id), db = await getDb();
     const capture = await db.collection("spatialCaptures").findOne({ inspectionId: inspection._id });
     const markers = await db.collection("spatialMarkers").find({ inspectionId: inspection._id, deletedAt: { $exists: false } }).toArray();
     return NextResponse.json({ capture: capture ? { manifest: capture.manifest, createdAt: capture.createdAt } : null, markers: markers.map(m => ({ id: String(m._id), position: m.position, label: m.label, elementId: m.elementId, findingId: m.findingId || null, reviewStatus: m.reviewStatus, version: m.version })) });
