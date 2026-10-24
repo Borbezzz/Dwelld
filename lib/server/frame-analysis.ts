@@ -24,6 +24,7 @@ const axes = (t: number[]): V3[] => [[t[0], t[1], t[2]], [t[4], t[5], t[6]], [t[
 const origin = (t: number[]): V3 => [t[12], t[13], t[14]];
 
 /** World point to normalized image coordinates; null when behind the camera. */
+export function projectPoint(p: V3, pose: FramePose) { return project(p, pose); }
 function project(p: V3, pose: FramePose): { x: number; y: number } | null {
   const t = pose.transform, k = pose.intrinsics, d = sub(p, origin(t)), [ax, ay, az] = axes(t);
   const cam: V3 = [dot(d, ax), dot(d, ay), dot(d, az)];

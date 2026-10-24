@@ -6,7 +6,10 @@ import { errorResponse } from "@/lib/server/api-error";
 import { ObjectId } from "mongodb";
 import { NextResponse } from "next/server";
 import { getDb, parseObjectId } from "@/lib/server/db";
+import { readMedia } from "@/lib/server/media";
+import { describeAtPoint } from "@/lib/server/damage";
 
+export const maxDuration = 60;
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -19,9 +22,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ ins
     const description = typeof body?.description === "string" ? body.description.trim() : "";
     const evidenceId = typeof body?.evidenceFindingId === "string" ? parseObjectId(body.evidenceFindingId) : null;
     const point = body?.point;
-    if (!description || description.length > 1000 || !evidenceId || !point ||
+    if (description.length > 1000 || !evidenceId || !point ||
         ![point.x, point.y].every((v: unknown) => typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 1)) {
-      return NextResponse.json({ error: "Provide a description, evidence finding, and point within the frame" }, { status: 400 });
+      return NextResponse.json({ error: "Choose a point within the frame" }, { status: 400 });
     }
     const db = await getDb();
     const inspection = await db.collection("inspections").findOne({ _id: inspectionId, ownerId:user.id, status: { $in: ["completed", "partial"] } });
@@ -31,9 +34,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ ins
     if (body.objectId != null && (!objectId || !await db.collection("findings").findOne({ _id: objectId, inspectionId, kind: "object" }))) {
       return NextResponse.json({ error: "Parent object must belong to this inspection" }, { status: 400 });
     }
+    // Gemini looks at the marked spot and writes the description in context; the person's note is kept alongside.
+    const seen = await readMedia(evidence.evidenceFrameUrl, 16 * 1024 * 1024).then(image => describeAtPoint(image, point)).catch(() => null);
+    if (!seen && !description) return NextResponse.json({ error: "Couldn't describe that spot automatically. Add a short note and save again." }, { status: 422 });
     const doc = {
-      _id: new ObjectId(), ownerId:user.id, inspectionId, roomId: inspection.roomId, kind: "damage", label: "Manual damage",
-      damageType: "other", description, point: { x: point.x, y: point.y }, boundingBox: null,
+      _id: new ObjectId(), ownerId:user.id, inspectionId, roomId: inspection.roomId, kind: "damage", label: seen?.label || "Manual damage",
+      damageType: seen?.type || "other", description: [seen?.description, description && (seen ? `Your note: ${description}` : description)].filter(Boolean).join(" "), point: { x: point.x, y: point.y }, boundingBox: seen?.boundingBox ?? null, aiDescribed: !!seen,
       timestampSeconds: evidence.timestampSeconds, evidenceFrameUrl: evidence.evidenceFrameUrl,
       objectId, source: "manual", reviewStatus: "pending", reviewHistory: [], createdAt: new Date(),
     };

@@ -2,7 +2,7 @@ import sharp from "sharp";
 import type { LiveFinding } from "@/lib/live/types";
 import { authenticateLive, liveCollections, liveFailure, LiveError, recordLiveAnalysis, validEventId } from "@/lib/server/live-sessions";
 import { writeMedia } from "@/lib/server/media";
-import { describeMarkedDamage } from "@/lib/server/damage";
+import { describeAtPoint } from "@/lib/server/damage";
 export const runtime = "nodejs"; export const maxDuration = 60;
 
 /**
@@ -22,10 +22,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ ses
     if (existing) return Response.json({ finding: existing });
     const image = await sharp(Buffer.from(await file.arrayBuffer()), { limitInputPixels: 24_000_000 }).rotate().jpeg({ quality: 88 }).toBuffer();
     const ref = await writeMedia(image, `live/${sessionId}/mark-${data.observationId}.jpg`, "image/jpeg", { ownerId: session.ownerId, liveSessionId: String(session._id) });
-    const seen = await describeMarkedDamage(image).catch(() => null);
+    const seen = await describeAtPoint(image, { x: .5, y: .5 }).catch(() => null);
     const finding: LiveFinding = {
       id: data.observationId, kind: "damage", source: "manual",
-      label: seen ? `Marked: ${seen.type}` : "Marked on phone",
+      label: seen ? seen.label : "Marked on phone",
       description: seen?.description || "Marked during the scan. Add a note if it needs one.",
       point: { x: .5, y: .5 }, ...(seen?.boundingBox ? { boundingBox: seen.boundingBox } : {}),
       timestampSeconds: data.timestampSeconds, worldPosition: position as [number, number, number],
