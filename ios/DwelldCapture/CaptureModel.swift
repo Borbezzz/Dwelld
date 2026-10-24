@@ -15,7 +15,7 @@ struct Registration: Codable { let sessionId: String; var source = "arkit-calibr
 struct Asset: Codable { let name: String; var mediaRef: String; let kind: String; var registration: Registration? = nil; var reconstructionMethod: String? = nil }
 struct Manifest: Codable { var version = 1; let sessionId: String; var coordinateSystem = "arkit-right-handed-y-up-metres"; var elements: [Element]; var frames: [FrameRecord]; var assets: [Asset] }
 
-@MainActor final class CaptureModel: NSObject, ObservableObject, @preconcurrency RoomCaptureViewDelegate {
+@MainActor final class CaptureModel: NSObject, ObservableObject, @preconcurrency RoomCaptureViewDelegate, @preconcurrency RoomCaptureSessionDelegate {
     @Published var status = "Start an inspection on your laptop, then scan its QR code to connect this phone."
     @Published var pairedSession = ""
     @Published var pairing = false
@@ -24,6 +24,8 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
     private var connection: CaptureConnection?
     private var phoneToken = ""
     private var progressInFlight = false
+    /// Latest RoomPlan furniture and walls, streamed to the laptop while scanning.
+    private var liveElements: [Element] = []
     private let pairedBase = URL(string: "https://dwelld.vercel.app")!
     func pair(url: URL) async {
         guard !scanning, !uploading, !processing else { status = "Finish the current capture before pairing."; return }
@@ -77,8 +79,17 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
                 let original = CIImage(cvPixelBuffer: frame.capturedImage).oriented(.right)
                 let scale = min(1, 480 / original.extent.width)
                 let image = original.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-                if let jpeg = context.jpegRepresentation(of: image, colorSpace: CGColorSpaceCreateDeviceRGB(), options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.5]), jpeg.count < 130000 { progress["preview"] = "data:image/jpeg;base64," + jpeg.base64EncodedString() }
+                if let jpeg = context.jpegRepresentation(of: image, colorSpace: CGColorSpaceCreateDeviceRGB(), options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.5]), jpeg.count < 130000 {
+                    progress["preview"] = "data:image/jpeg;base64," + jpeg.base64EncodedString()
+                    // Camera pose for this exact preview, so the laptop can place findings in the 3D room.
+                    progress["pose"] = ["transform": matrix(frame.camera.transform), "intrinsics": matrix(frame.camera.intrinsics), "width": CVPixelBufferGetWidth(frame.capturedImage), "height": CVPixelBufferGetHeight(frame.capturedImage)] as [String: Any]
+                }
             }
+            if scanning || processing {
+                if splatBuilder.count > 0 { progress["splat"] = splatBuilder.packed(limit: 6000).base64EncodedString() }
+                progress["elements"] = liveElements.map { ["id": $0.id, "category": $0.category, "dimensions": $0.dimensions, "transform": $0.transform] as [String: Any] }
+            }
+            if uploading { progress["upload"] = uploadProgress }
             request.httpBody = try JSONSerialization.data(withJSONObject: progress)
             let (data, response) = try await URLSession.shared.data(for: request)
             if let http = response as? HTTPURLResponse, http.statusCode == 200, let body = try JSONSerialization.jsonObject(with: data) as? [String: Any], body["stopRequested"] as? Bool == true, scanning { stop() }
@@ -109,8 +120,14 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
     private let splatBuilder = DepthSplatBuilder()
     private var manifest: Manifest?
     private(set) var directory: URL?
-    override init() { super.init(); view.delegate = self; view.isModelEnabled = false; restoreConnection() }
-    required init?(coder: NSCoder) { super.init(); view.delegate = self; view.isModelEnabled = false; restoreConnection() }
+    override init() { super.init(); view.delegate = self; view.captureSession.delegate = self; view.isModelEnabled = false; restoreConnection() }
+    required init?(coder: NSCoder) { super.init(); view.delegate = self; view.captureSession.delegate = self; view.isModelEnabled = false; restoreConnection() }
+    nonisolated func captureSession(_ session: RoomCaptureSession, didUpdate room: CapturedRoom) {
+        let objects = room.objects.map { Element(id: $0.identifier.uuidString, category: String(describing: $0.category), dimensions: dimensions($0.dimensions), transform: matrix($0.transform)) }
+        let surfaces = (room.walls + room.floors).map { Element(id: $0.identifier.uuidString, category: String(describing: $0.category), dimensions: dimensions($0.dimensions), transform: matrix($0.transform)) }
+        let elements = Array((objects + surfaces).prefix(80))
+        Task { @MainActor [weak self] in self?.liveElements = elements }
+    }
     func encode(with coder: NSCoder) {}
     func prepareNewInspection() {
         guard uploadComplete, !scanning, !processing, !uploading, !pairing else { return }
@@ -196,8 +213,8 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
             // Retain the full calibrated capture on the phone for later training/export.
             let original = Manifest(sessionId: processedResult.identifier.uuidString, elements: elements, frames: frames, assets: assets + [Asset(name: "room.usdz", mediaRef: "", kind: "usdz")])
             try JSONEncoder().encode(original).write(to: dir.appendingPathComponent("original-manifest.json"))
-            // Twenty-four evenly spaced evidence samples bound upload cost without changing their timestamps.
-            let count = min(24, frames.count)
+            // Sixteen evenly spaced evidence samples bound upload time without changing their timestamps.
+            let count = min(16, frames.count)
             let indices = count > 1 ? (0..<count).map { $0 * (frames.count - 1) / (count - 1) } : Array(0..<count)
             var evidence: [FrameRecord] = []
             var cloudAssets = assets.filter { $0.kind == "splat" }
@@ -287,7 +304,7 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
             var completedCount = m.assets.count - pending.count
             uploadProgress = Double(completedCount) / Double(max(1, m.assets.count))
             status = "Saving to your laptop inspection… Keep Dwelld open."
-            // Four independent assets at a time. Chunks within each asset remain ordered.
+            // Eight independent assets at a time. Chunks within each asset remain ordered.
             var uploadError: Error?
             await withTaskGroup(of: Result<(Int, String), Error>.self) { group in
                 var next = 0
@@ -309,7 +326,7 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
                         } catch { return .failure(error) }
                     }
                 }
-                while next < min(4, pending.count) { enqueue(pending[next]); next += 1 }
+                while next < min(8, pending.count) { enqueue(pending[next]); next += 1 }
                 for await result in group {
                     guard case .success(let (i, ref)) = result else {
                         if case .failure(let error) = result { uploadError = error }; continue
@@ -317,7 +334,8 @@ struct Manifest: Codable { var version = 1; let sessionId: String; var coordinat
                     m.assets[i].mediaRef = ref; manifest = m; completedCount += 1
                     do { try JSONEncoder().encode(m).write(to: dir.appendingPathComponent("manifest.json"), options: .atomic) } catch { uploadError = error }
                     uploadProgress = Double(completedCount) / Double(max(1, m.assets.count))
-                    status = "Uploading \(completedCount)/\(m.assets.count) files · \(totalBytes / 1024 / 1024) MB total"
+                    status = "Sending to your laptop · \(completedCount) of \(m.assets.count)"
+                    Task { await self.publishProgress(stage: "uploading") }
                     if uploadError == nil, next < pending.count { enqueue(pending[next]); next += 1 }
                 }
             }
@@ -385,12 +403,27 @@ private final class DepthSplatBuilder {
             return LiveGaussian(centerRadius: SIMD4<Float>(sample.point.x, sample.point.y, sample.point.z, sample.radius), color: SIMD4<Float>(sample.color.x, sample.color.y, sample.color.z, 0.9))
         }
     }
+    /// Compact stream for the laptop: per point Int16 x,y,z in millimetres then UInt8 r,g,b.
+    func packed(limit: Int) -> Data {
+        let step = max(1, Int(ceil(Double(samples.count) / Double(max(1, limit)))))
+        var data = Data(); data.reserveCapacity(min(samples.count, limit) * 9 + 9)
+        for (index, sample) in samples.values.enumerated() where index % step == 0 {
+            for value in [sample.point.x, sample.point.y, sample.point.z] {
+                var q = Int16(clamping: Int((value * 1000).rounded())).littleEndian
+                withUnsafeBytes(of: &q) { data.append(contentsOf: $0) }
+            }
+            for channel in [sample.color.x, sample.color.y, sample.color.z] { data.append(UInt8(max(0, min(255, (channel * 255).rounded())))) }
+        }
+        return data
+    }
     func write(to url: URL) throws -> Bool {
         guard !samples.isEmpty else { return false }
+        let step = max(1, Int(ceil(Double(samples.count) / 90000)))
+        let chosen = samples.values.enumerated().compactMap { $0.offset % step == 0 ? $0.element : nil }
         let fields = ["x", "y", "z", "f_dc_0", "f_dc_1", "f_dc_2", "opacity", "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3"]
-        var data = Data(("ply\nformat binary_little_endian 1.0\ncomment Dwelld LiDAR-initialized preview; not photometrically optimized\nelement vertex \(samples.count)\n" + fields.map { "property float \($0)\n" }.joined() + "end_header\n").utf8)
-        data.reserveCapacity(data.count + samples.count * 56)
-        for sample in samples.values {
+        var data = Data(("ply\nformat binary_little_endian 1.0\ncomment Dwelld LiDAR-initialized preview; not photometrically optimized\nelement vertex \(chosen.count)\n" + fields.map { "property float \($0)\n" }.joined() + "end_header\n").utf8)
+        data.reserveCapacity(data.count + chosen.count * 56)
+        for sample in chosen {
             let dc = (sample.color - SIMD3<Float>(repeating: 0.5)) / 0.2820947918
             let scale = log(sample.radius)
             let values: [Float] = [sample.point.x, sample.point.y, sample.point.z, dc.x, dc.y, dc.z, 2.2, scale, scale, scale, 1, 0, 0, 0]

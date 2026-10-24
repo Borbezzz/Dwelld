@@ -18,7 +18,7 @@ async function createAuth() {
     appName: "Dwelld", secret: process.env.BETTER_AUTH_SECRET,
     baseURL: process.env.BETTER_AUTH_URL,
     database: mongodbAdapter(db, { client }),
-    emailAndPassword: { enabled: true, minPasswordLength: 12, maxPasswordLength: 128 },
+    emailAndPassword: { enabled: true, minPasswordLength: 1, maxPasswordLength: 128 },
     rateLimit: { enabled: true, storage: "database", window: 60, max: 50 },
     session: { expiresIn: 60*60*24*7, updateAge: 60*60*24 },
     plugins: [nextCookies()],

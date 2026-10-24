@@ -4,7 +4,7 @@ export interface Finding {
   timestampSeconds?: number; evidenceFrameUrl?: string;
   point?: { x: number; y: number }; source?: "manual" | "ai"; detectionSource?: "yolo" | "gemini" | "crack-model";
   boundingBox?: { x: number; y: number; width: number; height: number };
-  reviewStatus?: ReviewStatus; uncertain?: boolean; objectId?: string | null;
+  reviewStatus?: ReviewStatus; uncertain?: boolean; objectId?: string | null; spatialElementId?: string | null; damageType?: string | null;
 }
 export interface Inspection { id: string; type?: "move-in" | "move-out"; roomId: string; status: "queued" | "processing" | "completed" | "partial" | "failed"; analysisWarnings?: string[]; createdAt: string; videoUrl?: string; videoMimeType?: string; }
 export interface Room { id: string; name: string; createdAt: string; }

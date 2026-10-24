@@ -3,8 +3,10 @@ export type LiveRole = "desktop" | "phone";
 export type LiveStatus = "pairing" | "connected" | "recording" | "stopping" | "saved";
 export type LiveBox = { x: number; y: number; width: number; height: number };
 export interface LiveObject { objectId: string; label: string; classId: number; confidence: number; boundingBox: LiveBox; firstSeenSeconds: number; lastSeenSeconds: number; observations: number; }
-export interface LiveFinding extends Omit<Finding, "id"> { id: string; parentObjectId?: string | null; evidenceFrameRef?: string; }
-export interface InspectionSession { nativeCapture?:boolean; nativePreview?:string; nativeProgress?:{stage:string;frames:number;depthFrames:number}; id: string; roomId: string; status: LiveStatus; createdAt: string; expiresAt: string; pairingExpiresAt: string; paired: boolean; phoneLastSeenAt?: string; desktopLastSeenAt?: string; inspectionId?: string; stopRequested: boolean; }
+export interface NativePose { transform: number[]; intrinsics: number[]; width: number; height: number }
+export interface NativeLive { splat?: string; elements?: { id: string; category: string; dimensions: [number, number, number]; transform: number[] }[]; pose?: NativePose; updatedAt?: string }
+export interface LiveFinding extends Omit<Finding, "id"> { id: string; parentObjectId?: string | null; evidenceFrameRef?: string; pose?: NativePose; }
+export interface InspectionSession { nativeCapture?:boolean; nativePreview?:string; nativeProgress?:{stage:string;frames:number;depthFrames:number;upload?:number}; nativeLive?:NativeLive; id: string; roomId: string; status: LiveStatus; createdAt: string; expiresAt: string; pairingExpiresAt: string; paired: boolean; phoneLastSeenAt?: string; desktopLastSeenAt?: string; inspectionId?: string; stopRequested: boolean; }
 export interface LiveSignal { id: string; eventId: string; type: "offer" | "answer" | "ice" | "restart"; data: unknown; from: LiveRole; }
 export interface LiveState { session: InspectionSession; objects: LiveObject[]; findings: LiveFinding[]; signals: LiveSignal[]; }
 export interface LiveSessionCreated { sessionId: string; desktopToken: string; pairingToken: string; pairingExpiresAt: string; expiresAt: string; iceServers: RTCIceServer[]; }

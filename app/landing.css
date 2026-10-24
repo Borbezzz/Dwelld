@@ -6,7 +6,7 @@ body:has(.landing) { background: #f7f5ef; }
 .landing-header nav { display: flex; gap: 36px; font-size: 13px; }
 .landing-header nav a { padding: 12px 0; }
 .landing a { text-decoration: none; }
-.landing a:focus-visible, .landing button:focus-visible, .landing summary:focus-visible { outline: 2px solid #5a6850; outline-offset: 5px; }
+.landing a:focus-visible, .landing button:focus-visible, .landing summary:focus-visible { outline: none; }
 .landing-intro { display: grid; grid-template-columns: 1.2fr 1fr; align-items: end; gap: 48px; padding: 64px 0 64px; }
 .landing-intro h1 { margin: 0; font-family: Georgia, 'Times New Roman', serif; font-size: clamp(70px, 7.6vw, 112px); font-weight: 400; letter-spacing: -.065em; line-height: .99; }
 .landing-intro h1 em { font-weight: 400; }

@@ -9,57 +9,130 @@ struct RoomView: UIViewRepresentable {
     func makeUIView(context: Context) -> RoomCaptureView { model.view }
     func updateUIView(_ view: RoomCaptureView, context: Context) {}
 }
+/// Matches the website: warm paper, ink, serif headings, square dark buttons and a thin line loader.
+enum Dwelld {
+    static let paper = Color(red: 0.973, green: 0.969, blue: 0.949)
+    static let ink = Color(red: 0.169, green: 0.192, blue: 0.169)
+    static let muted = Color(red: 0.455, green: 0.475, blue: 0.424)
+    static let rule = Color(red: 0.863, green: 0.871, blue: 0.827)
+    static let well = Color(red: 0.914, green: 0.914, blue: 0.875)
+    static let accent = Color(red: 0.239, green: 0.275, blue: 0.212)
+    static func serif(_ size: CGFloat) -> Font { .system(size: size, weight: .regular, design: .serif) }
+}
+struct DwelldButtonStyle: ButtonStyle {
+    var filled = true
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.font(.system(size: 14, weight: .medium)).frame(maxWidth: .infinity).frame(height: 48)
+            .foregroundStyle(filled ? Dwelld.paper : Dwelld.ink)
+            .background(RoundedRectangle(cornerRadius: 3).fill(filled ? Dwelld.ink : Color.clear))
+            .overlay(RoundedRectangle(cornerRadius: 3).stroke(filled ? Color.clear : Dwelld.ink.opacity(0.35), lineWidth: 1))
+            .opacity(configuration.isPressed ? 0.75 : 1)
+    }
+}
+/// Thin progress line. Pass nil for an indeterminate sweep.
+struct LineLoader: View {
+    let label: String
+    var progress: Double? = nil
+    @State private var sweep = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(label).font(Dwelld.serif(15)).foregroundStyle(Dwelld.ink)
+                Spacer()
+                if let progress { Text("\(Int((progress * 100).rounded()))%").font(.system(size: 11).monospacedDigit()).foregroundStyle(Dwelld.muted) }
+            }
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Rectangle().fill(Dwelld.rule)
+                    if let progress {
+                        Rectangle().fill(Dwelld.accent).frame(width: geo.size.width * max(0, min(1, progress))).animation(.easeOut(duration: 0.35), value: progress)
+                    } else {
+                        Rectangle().fill(Dwelld.accent).frame(width: geo.size.width * 0.32).offset(x: sweep ? geo.size.width : -geo.size.width * 0.32)
+                            .animation(.easeInOut(duration: 1.4).repeatForever(autoreverses: false), value: sweep)
+                    }
+                }.clipped()
+            }.frame(height: 2)
+        }.onAppear { sweep = true }
+    }
+}
 struct CaptureScreen: View {
     @StateObject private var model = CaptureModel()
+    private var title: String {
+        if model.pairedSession.isEmpty { return "Connect from your laptop." }
+        if model.uploadComplete { return "Saved to your laptop." }
+        if model.uploading { return "Sending your room." }
+        if model.processing { return "Measuring your room." }
+        if model.scanning { return "Let your room tell its story." }
+        if model.ready { return "Ready to send." }
+        return "Ready when you are."
+    }
     var body: some View {
-        VStack(spacing: 8) {
-            Text("Dwelld LiDAR capture").font(.headline)
-            if model.pairedSession.isEmpty {
-                Text("Connect from your laptop").font(.title2)
-                Text("Start an inspection on the website, scan its QR code with your iPhone camera, then tap Open Dwelld Capture. Your room and account connect automatically.").font(.subheadline)
-            } else {
-                Label(model.uploadComplete ? "Saved to laptop" : "Connected to laptop inspection", systemImage: model.uploadComplete ? "checkmark.circle.fill" : "link").font(.subheadline)
-            }
-            if model.pairing { ProgressView("Connecting securely…") }
-            HStack {
-                if model.uploadComplete {
-                    Button("New inspection") { model.prepareNewInspection() }.disabled(model.pairing || model.processing || model.uploading)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack {
+                    Text("dwelld.").font(Dwelld.serif(22)).foregroundStyle(Dwelld.ink)
+                    Spacer()
+                    HStack(spacing: 7) {
+                        Circle().fill(model.pairedSession.isEmpty ? Dwelld.muted.opacity(0.6) : (model.scanning ? Color(red: 0.73, green: 0.33, blue: 0.25) : Color(red: 0.38, green: 0.51, blue: 0.34))).frame(width: 6, height: 6)
+                        Text(model.pairedSession.isEmpty ? "Not connected" : (model.uploadComplete ? "Saved" : "Connected to laptop")).font(.system(size: 11)).foregroundStyle(Dwelld.muted)
+                    }
                 }
-                if !model.ready && !model.uploadComplete {
-                    Button(model.scanning ? "Finish & save" : "Start scan") { if model.scanning { model.stop() } else { model.start() } }
-                        .disabled(model.pairedSession.isEmpty || model.pairing || model.uploading || model.processing)
+                Rectangle().fill(Dwelld.rule).frame(height: 1)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(title).font(Dwelld.serif(30)).foregroundStyle(Dwelld.ink).fixedSize(horizontal: false, vertical: true)
+                    Text(model.pairedSession.isEmpty ? "Start an inspection on the website, scan its QR code with your iPhone camera, then tap Open Dwelld Capture." : "Move slowly. Keep the details in view. Your laptop shows the room building as you go.")
+                        .font(.system(size: 13)).foregroundStyle(Dwelld.muted).fixedSize(horizontal: false, vertical: true)
                 }
-                if model.ready && !model.uploadComplete && !model.uploading {
-                    Button("Retry save") { Task { await model.savePairedCapture() } }.disabled(model.processing || model.pairing)
+                if model.pairing { LineLoader(label: "Connecting securely") }
+                ZStack(alignment: .topLeading) {
+                    RoomView(model: model).frame(height: 300)
+                    if !model.scanning && (model.ready || model.processing || model.uploadComplete) {
+                        Dwelld.well.overlay(Text(model.processing ? "Finishing capture…" : (model.uploadComplete ? "Inspection saved" : "Capture ready")).font(Dwelld.serif(20)).foregroundStyle(Dwelld.ink))
+                    }
+                    if model.scanning {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(model.tracking).font(.system(size: 11, weight: .medium))
+                            Text("\(model.frameCount) frames · \(model.depthCount) with depth").font(.system(size: 11).monospacedDigit())
+                        }.foregroundStyle(Dwelld.ink).padding(10).background(Dwelld.paper.opacity(0.92)).clipShape(RoundedRectangle(cornerRadius: 3)).padding(12)
+                    }
+                }.background(Dwelld.well).clipShape(RoundedRectangle(cornerRadius: 2))
+                if model.processing { LineLoader(label: "Building your measured room") }
+                if model.uploading { LineLoader(label: "Sending to your laptop", progress: model.uploadProgress) }
+                VStack(spacing: 10) {
+                    if !model.ready && !model.uploadComplete {
+                        Button(model.scanning ? "Finish & save" : "Start scan") { if model.scanning { model.stop() } else { model.start() } }
+                            .buttonStyle(DwelldButtonStyle())
+                            .disabled(model.pairedSession.isEmpty || model.pairing || model.uploading || model.processing)
+                    }
+                    if model.ready && !model.uploadComplete && !model.uploading {
+                        Button("Retry sending") { Task { await model.savePairedCapture() } }.buttonStyle(DwelldButtonStyle()).disabled(model.processing || model.pairing)
+                    }
+                    if model.uploadComplete {
+                        Button("New inspection") { model.prepareNewInspection() }.buttonStyle(DwelldButtonStyle(filled: false)).disabled(model.pairing || model.processing || model.uploading)
+                    }
                 }
-            }.buttonStyle(.borderedProminent)
-            if model.uploading {
-                ProgressView(value: model.uploadProgress).accessibilityLabel("Saving inspection")
-                Text("Saving automatically. Keep Dwelld open until Saved appears.").font(.caption)
-            }
-            ZStack(alignment: .topLeading) {
-                RoomView(model: model).frame(minHeight: 180, maxHeight: .infinity)
-                if !model.scanning && (model.ready || model.processing) { Color(red: 0.09, green: 0.12, blue: 0.10).overlay(Text(model.processing ? "Finishing capture…" : (model.uploadComplete ? "Inspection saved" : "Capture ready to upload")).foregroundStyle(.white)) }
-                if model.scanning { VStack(alignment: .leading, spacing: 5) {
-                    Label(model.tracking, systemImage: "viewfinder")
-                    Text("\(model.frameCount) frames · \(model.depthCount) depth frames")
-                    Text("\(model.featureCount) tracked feature points")
-                }.font(.caption).padding(12).background(.ultraThinMaterial).clipShape(RoundedRectangle(cornerRadius: 10)).padding(12) }
-                if model.processing { ProgressView("Building your measured room…").padding().background(.ultraThinMaterial) }
-            }.clipShape(RoundedRectangle(cornerRadius: 12))
-            VStack(alignment: .leading, spacing: 4) {
-                HStack { Text("Live LiDAR splat").font(.subheadline.bold()); Spacer(); Text("\(model.splatCount) samples").font(.caption.monospacedDigit()) }
-                ZStack {
-                    LiveSplatView(samples: model.liveSplats, revision: model.splatRevision, error: $model.splatRenderError).frame(height: 190)
-                    if !model.splatRenderError.isEmpty { Text(model.splatRenderError).font(.caption).foregroundStyle(.white).padding() }
-                    else if model.liveSplats.isEmpty { Text(model.scanning ? "Waiting for stable LiDAR depth. Move slowly around the room." : "Start scanning to build your room here.").font(.caption).foregroundStyle(.white).padding() }
-                }.clipShape(RoundedRectangle(cornerRadius: 12))
-                Text("Builds from captured depth and colour · drag to orbit · untrained preview").font(.caption2)
-            }
-            Text(model.status).font(.caption).accessibilityIdentifier("captureStatus")
-            if let directory = model.directory, model.ready { ShareLink("Export local capture folder", item: directory) }
-            Text("Finish & save uploads sampled evidence to your paired inspection. Full-resolution originals remain on this device. A LiDAR device is required; simulator geometry is never generated.").font(.caption2)
-        }.padding().onOpenURL { url in Task { await model.pair(url: url) } }
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("Your room, in 3D").font(Dwelld.serif(18)).foregroundStyle(Dwelld.ink)
+                        Spacer()
+                        Text("\(model.splatCount) points").font(.system(size: 11).monospacedDigit()).foregroundStyle(Dwelld.muted)
+                    }
+                    ZStack {
+                        LiveSplatView(samples: model.liveSplats, revision: model.splatRevision, error: $model.splatRenderError).frame(height: 200)
+                        if !model.splatRenderError.isEmpty { Text(model.splatRenderError).font(.system(size: 11)).foregroundStyle(.white).padding() }
+                        else if model.liveSplats.isEmpty { Text(model.scanning ? "Waiting for steady depth. Move slowly." : "Builds as you scan").font(Dwelld.serif(15)).foregroundStyle(.white.opacity(0.8)).padding() }
+                    }.clipShape(RoundedRectangle(cornerRadius: 2))
+                    Text("Drag to orbit").font(.system(size: 10)).foregroundStyle(Dwelld.muted)
+                }
+                Rectangle().fill(Dwelld.rule).frame(height: 1)
+                Text(model.status).font(.system(size: 12)).foregroundStyle(Dwelld.muted).accessibilityIdentifier("captureStatus").fixedSize(horizontal: false, vertical: true)
+                if let directory = model.directory, model.ready { ShareLink("Export local capture folder", item: directory).font(.system(size: 12)).tint(Dwelld.ink) }
+                Text("Sampled evidence is sent to your paired inspection. Full-resolution originals stay on this phone. Requires a LiDAR iPhone or iPad.").font(.system(size: 10)).foregroundStyle(Dwelld.muted).fixedSize(horizontal: false, vertical: true)
+            }.padding(20)
+        }
+        .background(Dwelld.paper.ignoresSafeArea())
+        .tint(Dwelld.ink)
+        .onOpenURL { url in Task { await model.pair(url: url) } }
     }
 }
 
