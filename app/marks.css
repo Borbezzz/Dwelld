@@ -78,3 +78,4 @@ input,textarea{caret-color:var(--mark-ink)}
 .evidence-missing{color:#c8cdbd;font-size:12px;padding:40px}
 .evidence-viewer>footer{padding:12px 14px;display:grid;gap:8px}.evidence-viewer>footer p{margin:0;font-size:12px;line-height:1.65;color:#4f5848;max-width:75ch}.evidence-viewer>footer .text-button{justify-self:start;display:inline-flex;gap:6px;align-items:center;font-size:12px}
 @media(prefers-reduced-motion:reduce){.evidence-viewer{animation:none}}
+.room-scene-loading.is-live{align-content:end;padding-bottom:22px}.room-scene-loading.is-live>p{font-size:15px}
