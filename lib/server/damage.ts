@@ -77,6 +77,9 @@ async function inspect(image: Buffer, scope: string): Promise<DamageObservation[
 }
 
 export async function inspectObjectDamage(image: Buffer, label: string, box: Box): Promise<DamageObservation[]> {
+  // Known furniture uses the same narrow prompt as a RoomPlan crop. Appliances stay on the generic object prompt.
+  const scope = scopeForName(label);
+  if (scope) return inspectScoped(image, scope, box);
   const crop = await cropObject(image, box);
   const observations = await inspect(crop.image, `This is a crop of a detected ${JSON.stringify(label)}. Inspect that object only.`);
   return observations.map((item) => ({ ...item, boundingBox: item.boundingBox ? cropBoxToFrame(item.boundingBox, crop.bounds) : null }));
@@ -156,8 +159,26 @@ export const INSPECTION_SCOPES = {
   table: `This crop shows a table. Inspect only the table (top, edges, legs) for scratches, scuffs, chips, cracks, dents, burns, water rings, stains or sticker/adhesive residue. Ignore objects sitting on it. ${NOT_DAMAGE}`,
   cabinet: `This crop shows a cabinet, wardrobe or chest of drawers. Inspect only its doors, drawer fronts, sides and top for scratches, scuffs, chips, cracks, dents, broken handles or hinges, and sticker/adhesive residue. Ignore anything stored on or in it. ${NOT_DAMAGE}`,
   door: `This crop shows a door. Inspect the door leaf for holes or punctures (including a fist-sized hole or cracked panel), dents, scuffs, chipped paint, cracks in the panel itself, and sticker/adhesive residue. A hole shows as a dark opening, broken edges or exposed honeycomb/cardboard core: report it as "hole". ${NOT_DAMAGE}`,
+  chair: `This crop shows a chair. Inspect only the chair: seat, back, arms, legs and upholstery. Report tears, holes, burns, stains that look permanent, broken or loose legs, and chips or cracks in wood or plastic. ${NOT_DAMAGE} Cushion creases, fabric weave and ordinary shine on the seat edge are not damage.`,
+  sofa: `This crop shows a sofa or couch. Inspect only that piece: cushions, arms, back and base. Report tears, holes, burns, permanent stains, a broken frame, and peeling leather or vinyl. ${NOT_DAMAGE} Cushion creases, fabric weave and the seam between cushions are not damage.`,
+  bed: `This crop shows a bed. Inspect the frame, headboard, footboard and visible base only. Do not report bedding, pillows, sheets or clothes. Report scratches, chips, cracks, dents, broken slats and sticker residue on the frame itself. ${NOT_DAMAGE} Wrinkled sheets, duvet folds and mattress piping are not damage.`,
   wall: `Inspect the walls and any doors in this photo, not the floor, ceiling, furniture, windows, pictures, sockets or switches. Report holes (screw, nail or impact holes), cracks running across the plaster, scuffs and marks, chipped or peeling paint, damp or water stains, and sticker, tape or adhesive residue. ${NOT_DAMAGE}`,
 } as const;
+
+/**
+ * RoomPlan categories and detector labels that share one damage prompt.
+ * "Door(isOpen: false)" and "dining table" both normalise here. Walls stay on the full-frame pass.
+ */
+export function scopeForName(name: string): keyof typeof INSPECTION_SCOPES | null {
+  const c = name.toLowerCase().replace(/[^a-z]/g, "");
+  if (c === "table" || c === "desk" || c === "diningtable") return "table";
+  if (c === "storage" || c === "cabinet" || c === "wardrobe" || c === "bookshelf" || c === "sideboard" || c === "nightstand" || c === "dresser" || c === "chestofdrawers") return "cabinet";
+  if (c.startsWith("door")) return "door";
+  if (c === "chair") return "chair";
+  if (c === "sofa" || c === "couch") return "sofa";
+  if (c === "bed") return "bed";
+  return null;
+}
 export async function inspectScoped(image: Buffer, scope: keyof typeof INSPECTION_SCOPES, box?: Box): Promise<DamageObservation[]> {
   if (!box) return inspect(await sharp(image).png().toBuffer(), INSPECTION_SCOPES[scope]);
   const crop = await cropObject(image, box);

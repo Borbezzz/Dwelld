@@ -40,7 +40,7 @@ function ownerFor(f: { elementId?: string | null; worldPosition?: number[] | nul
  * furniture gets its best photo as an "object" finding so the room page can show where it was seen.
  */
 export async function analyzeNativeInspection(inspection: Document, manifest: SpatialManifest, sessionId: ObjectId | null) {
-  const db = await getDb(), warnings: string[] = ["Photos and LiDAR geometry do not cover every surface. Only tables, cabinets, doors and walls are inspected for damage."];
+  const db = await getDb(), warnings: string[] = ["Photos and LiDAR geometry do not cover every surface. Damage checks cover tables, cabinets, chairs, sofas, beds, doors and walls that appear in the photos. Anything out of frame was not assessed."];
   const deadline = Date.now() + 240_000;
   try {
     await db.collection("inspections").updateOne({ _id: inspection._id }, { $set: { status: "processing" } });

@@ -1,21 +1,19 @@
 import sharp from "sharp";
-import { inspectScoped, type Box } from "./damage";
-import { verifyFinding, autoApproveThreshold, type Verdict } from "./verify";
+import { inspectScoped, scopeForName, type Box } from "./damage";
+import { verifyFinding, autoApproveThreshold, reviewDecision, type Verdict } from "./verify";
 
 /** Camera pose of one evidence photo, in the scan's world space (ARKit, metres, Y up, column-major). */
 export type FramePose = { transform: number[]; intrinsics: number[]; width: number; height: number };
 export type RoomElement = { id: string; category: string; dimensions: number[]; transform: number[] };
-type Scope = "table" | "cabinet" | "door";
+type Scope = NonNullable<ReturnType<typeof scopeForName>>;
 export type FrameFinding = { label: string; description: string; damageType: string; boundingBox: Box | null; elementId: string | null; elementCategory: string; worldPosition: [number, number, number] | null; detectionSource: "gemini" | "crack-model"; verification?: Verdict & { threshold: number }; reviewStatus: "pending" | "confirmed"; autoApproved: boolean; confidence?: number };
 export type ElementView = { elementId: string; category: string; box: Box; area: number };
 
-/** Only these are inspected: surfaces where scuffs, scratches and cracks can be judged reliably from a photo. */
+/** Furniture and doors RoomPlan measured. Walls use the separate full-frame pass. */
 export function scopeFor(category: string): Scope | null {
-  const c = category.toLowerCase().replace(/[^a-z]/g, "");
-  // RoomPlan names doors "door(isOpen: false)", so match on the prefix.
-  return c === "table" ? "table" : c === "storage" ? "cabinet" : c.startsWith("door") ? "door" : null;
+  return scopeForName(category);
 }
-const NAMES: Record<string, string> = { table: "Table", cabinet: "Cabinet", door: "Door", wall: "Wall" };
+const NAMES: Record<string, string> = { table: "Table", cabinet: "Cabinet", door: "Door", wall: "Wall", chair: "Chair", sofa: "Sofa", bed: "Bed" };
 
 type V3 = [number, number, number];
 const sub = (a: V3, b: V3): V3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
@@ -40,7 +38,8 @@ export function elementInView(e: RoomElement, pose: FramePose): ElementView | nu
     const p: V3 = [0, 1, 2].map(i => o[i] + ax[i] * sx * h[0] + ay[i] * sy * h[1] + az[i] * sz * h[2]) as V3;
     const q = project(p, pose); if (q) pts.push(q);
   }
-  if (pts.length < 8) return null; // partly behind the camera: not a usable view
+  // One edge may cross the camera plane (a close look at a door or tabletop). Two missing edges is not a usable view.
+  if (pts.length < 6) return null;
   const x0 = Math.min(...pts.map(p => p.x)), x1 = Math.max(...pts.map(p => p.x)), y0 = Math.min(...pts.map(p => p.y)), y1 = Math.max(...pts.map(p => p.y));
   const cx0 = Math.max(0, x0), cx1 = Math.min(1, x1), cy0 = Math.max(0, y0), cy1 = Math.min(1, y1);
   if (cx1 <= cx0 || cy1 <= cy0) return null;
@@ -50,6 +49,29 @@ export function elementInView(e: RoomElement, pose: FramePose): ElementView | nu
   const box = { x: Math.max(0, cx0 - pad), y: Math.max(0, cy0 - pad), width: 0, height: 0 };
   box.width = Math.min(1, cx1 + pad) - box.x; box.height = Math.min(1, cy1 + pad) - box.y;
   return { elementId: e.id, category: e.category, box, area: visible };
+}
+
+/**
+ * Which measured pieces to inspect in one photo. Take the largest of each damage scope first,
+ * so a sofa filling the frame does not crowd out a door, then fill any remaining slots by size.
+ */
+export function selectInspectionTargets(views: ElementView[], limit = 4): ElementView[] {
+  const eligible = views.filter(v => scopeFor(v.category)).sort((a, b) => b.area - a.area);
+  const picked: ElementView[] = [];
+  const seen = new Set<string>();
+  for (const view of eligible) {
+    const scope = scopeFor(view.category)!;
+    if (seen.has(scope)) continue;
+    seen.add(scope);
+    picked.push(view);
+    if (picked.length === limit) return picked;
+  }
+  for (const view of eligible) {
+    if (picked.some(p => p.elementId === view.elementId)) continue;
+    picked.push(view);
+    if (picked.length === limit) break;
+  }
+  return picked;
 }
 /** Cast the image point into the room and return where it meets the element's box (slab test). */
 function hitElement(px: number, py: number, pose: FramePose, e: RoomElement): { point: V3; t: number } | null {
@@ -71,9 +93,10 @@ const centre = (b: Box): [number, number] => [b.x + b.width / 2, b.y + b.height 
 const iou = (a: Box, b: Box) => { const w = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x)), h = Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y)), i = w * h; return i / (a.width * a.height + b.width * b.height - i || 1); };
 
 /**
- * One evidence photo: inspect the tables, cabinets and doors RoomPlan says are in view (cropped from
- * their projected 3D boxes, so every finding belongs to a real measured piece), optionally the walls,
- * then let a second Gemini pass try to disprove each finding. Confident ones are auto-approved.
+ * One evidence photo: inspect the tables, cabinets, chairs, sofas, beds and doors RoomPlan says are
+ * in view (cropped from their projected 3D boxes, so every finding belongs to a real measured piece),
+ * optionally the walls, then let a second Gemini pass try to disprove each finding. Confident damage
+ * is auto-approved; findings the verifier is confident are not damage are dropped.
  */
 export async function analyzeEvidenceFrame(image: Buffer, pose: FramePose, elements: RoomElement[], options: { walls: boolean }) {
   const meta = await sharp(image).metadata();
@@ -81,7 +104,7 @@ export async function analyzeEvidenceFrame(image: Buffer, pose: FramePose, eleme
   const scaled: FramePose = meta.width && meta.height && (meta.width !== pose.width || meta.height !== pose.height)
     ? { ...pose, intrinsics: pose.intrinsics.map((v, i) => i === 0 || i === 6 ? v * meta.width! / pose.width : i === 4 || i === 7 ? v * meta.height! / pose.height : v), width: meta.width, height: meta.height } : pose;
   const views = elements.map(e => elementInView(e, scaled)).filter((v): v is ElementView => !!v);
-  const targets = views.filter(v => scopeFor(v.category)).sort((a, b) => b.area - a.area).slice(0, 3);
+  const targets = selectInspectionTargets(views);
   const walls = elements.filter(e => /wall|door/i.test(e.category));
   const out: FrameFinding[] = [];
   const add = (label: string, o: { type: string; description: string; boundingBox: Box | null }, element: RoomElement | null, source: FrameFinding["detectionSource"]) => {
@@ -109,9 +132,9 @@ export async function analyzeEvidenceFrame(image: Buffer, pose: FramePose, eleme
   await Promise.allSettled(out.filter(f => f.boundingBox).map(async f => {
     const v = await verifyFinding(image, { label: f.label, description: f.description, boundingBox: f.boundingBox! });
     f.verification = { ...v, threshold }; f.confidence = v.verdict === "damage" ? v.confidence : 1 - v.confidence;
-    if (v.verdict === "damage" && v.confidence >= threshold) { f.reviewStatus = "confirmed"; f.autoApproved = true; }
+    if (reviewDecision(v.verdict, v.confidence, threshold) === "confirmed") { f.reviewStatus = "confirmed"; f.autoApproved = true; }
   }));
   // Findings the verifier is confident are not damage are dropped rather than shown.
-  const kept = out.filter(f => !(f.verification?.verdict === "not_damage" && f.verification.confidence >= .6));
+  const kept = out.filter(f => !(f.verification && reviewDecision(f.verification.verdict, f.verification.confidence, threshold) === "rejected"));
   return { findings: kept, views, dropped: out.length - kept.length };
 }
