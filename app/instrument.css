@@ -69,8 +69,11 @@ body:has(.argon-window){padding-bottom:0}
 .argon-window .argon-recovery{padding:0 20px 12px}.argon-window .argon-recovery-toggle{width:auto;height:auto;padding:8px 0;font:10px var(--instrument-mono);border-radius:0;color:#536748;text-align:left}
 .argon-recovery-details{border-top:1px solid #e1e2d7;padding-top:10px}.argon-recovery-details p{font-size:12px;line-height:1.65;margin:0 0 9px;color:#706b61}.argon-recovery-action{padding:10px 0}.argon-recovery-details [role=alert]{color:#9a3f2c}.argon-recovery-details [role=status]{color:#41613b}
 .argon-window .argon-launcher{display:inline-flex;align-items:center;justify-content:center;gap:12px;float:right;width:auto;height:auto;min-height:44px;padding:12px 16px;border:1px solid #c7cbbd;border-radius:0;background:#fffdf8;box-shadow:0 4px 16px #302e280a;font-size:12px}
-.argon-window:has(.argon-launcher:not([hidden])){width:auto}
+.ask-records.argon-window:not([data-state="open"]){inset:auto auto max(20px,env(safe-area-inset-bottom)) 50%;transform:translateX(-50%);width:max-content;max-width:calc(100vw - 24px)}
+.argon-window:not([data-state="open"]) .argon-launcher{float:none}
 .argon-busy-light{width:5px;height:5px;background:#b18036}
 @media(max-width:600px){.ask-records.argon-window{right:12px;bottom:max(12px,env(safe-area-inset-bottom));width:calc(100vw - 24px)}.argon-window .argon-panel{max-height:calc(100dvh - 24px)}.argon-window .ask-answer,.argon-window .ask-scope{padding:16px}.argon-window .argon-recovery{padding-inline:16px}.argon-window .argon-window-actions button{width:32px;min-height:40px}}
 .argon-window .argon-drag,.argon-window .argon-launcher,.argon-window .argon-chat-error button,.argon-window .argon-recovery-action button{line-height:1.4}
 .argon-window.scan-chat .scan-chat-question{background:transparent;border-radius:0;border-right:2px solid #b7bdad;padding:4px 14px}
+
+@media(max-width:760px){.results-footer{flex-wrap:wrap;justify-content:flex-start;gap:12px}}
