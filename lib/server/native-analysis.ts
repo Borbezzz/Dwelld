@@ -69,7 +69,7 @@ function ownerFor(f: { elementId?: string | null; worldPosition?: number[] | nul
  * done during the scan reuse their findings without further model calls, the rest are analysed now. Each piece of
  * furniture gets its best photo as an "object" finding so the room page can show where it was seen.
  */
-export async function analyzeNativeInspection(inspection: Document, manifest: SpatialManifest, sessionId: ObjectId | null, options: { objectElementIds?: string[] } = {}) {
+export async function analyzeNativeInspection(inspection: Document, manifest: SpatialManifest, sessionId: ObjectId | null, options: { objectElementIds?: string[]; timestampOffset?: number } = {}) {
   const db = await getDb(), warnings: string[] = ["Photos and LiDAR geometry do not cover every surface. Damage checks inspect obvious damage on visible basic furniture only."];
   const deadline = Date.now() + 240_000;
   try {
@@ -92,7 +92,7 @@ export async function analyzeNativeInspection(inspection: Document, manifest: Sp
       const waitUntil = Date.now() + 95_000;
       while (Date.now() < waitUntil && await db.collection('liveFrames').countDocuments({sessionId,status:'analyzing'})) await new Promise(resolve => setTimeout(resolve, 500));
     }
-    const liveFrames = sessionId ? await db.collection("liveFrames").find({ sessionId, status: "done" }).toArray() : [];
+    const liveFrames = sessionId ? (await db.collection("liveFrames").find({ sessionId, status: "done" }).toArray()).map<Document>(f=>({...f,timestampSeconds:f.timestampSeconds+(options.timestampOffset||0)})) : [];
     const liveFindings = sessionId ? await db.collection("liveFindings").find({ sessionId, source: "ai", frameName: { $in: liveFrames.map(f => f.name) } }).toArray() : [];
     const collected: (FrameFinding & { ref: string; timestampSeconds: number; liveId?: string })[] = [];
     // Reuse what the scan already found.
@@ -100,7 +100,7 @@ export async function analyzeNativeInspection(inspection: Document, manifest: Sp
       // RoomPlan may not have recognized this furniture when the live photo was first checked.
       // Reproject using THAT photo's calibrated pose against the final room, without another AI call.
       const located = f.pose ? localizeDamageBox(f.boundingBox, f.pose, elements as RoomElement[], true) : null;
-      collected.push({ ...(f as unknown as FrameFinding), ...(located ? { elementId: located.owner?.id ?? null, elementCategory: located.owner?.category ?? 'unassigned', worldPosition: located.worldPosition } : {}), ref: f.evidenceFrameRef, timestampSeconds: f.timestampSeconds, liveId: f.id, reviewStatus: f.reviewStatus });
+      collected.push({ ...(f as unknown as FrameFinding), ...(located ? { elementId: located.owner?.id ?? null, elementCategory: located.owner?.category ?? 'unassigned', worldPosition: located.worldPosition } : {}), ref: f.evidenceFrameRef, timestampSeconds: f.timestampSeconds + (options.timestampOffset||0), liveId: f.id, reviewStatus: f.reviewStatus });
     }
     // Check all remaining evidence in timestamped batches, rather than running separate calls per crop.
     const sampled = oneFramePerSecond(manifest.frames.map(fr => ({ ...fr, timestampSeconds: fr.timestamp })));

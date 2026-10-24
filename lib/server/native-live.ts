@@ -49,14 +49,14 @@ function elementAt(position: number[], elements: { id: string; category: string;
 }
 
 /** Marks made on the phone become confirmed findings with real-world markers in the saved scan. */
-export async function importPhoneMarks(session: SessionDoc, inspectionId: ObjectId, manifest: { sessionId: string; elements: { id: string; category: string; dimensions: number[]; transform: number[] }[] }) {
+export async function importPhoneMarks(session: SessionDoc, inspectionId: ObjectId, manifest: { sessionId: string; elements: { id: string; category: string; dimensions: number[]; transform: number[] }[] }, timestampOffset = 0) {
   const { db } = await liveCollections();
-  const marks = await db.collection("liveFindings").find({ sessionId: session._id, source: "manual", worldPosition: { $exists: true } }).toArray();
+  const marks = await db.collection("liveFindings").find({ sessionId: session._id, source: "manual" }).toArray();
   for (const m of marks) {
     const existing = await db.collection("findings").findOne({ inspectionId, liveFindingId: m.id }, { projection: { _id: 1 } });
     const findingId = existing?._id ?? new ObjectId();
-    if (!existing) await db.collection("findings").insertOne({ _id: findingId, ownerId: session.ownerId, inspectionId, roomId: session.roomId, kind: "damage", label: m.label, description: m.description, evidenceFrameUrl: m.evidenceFrameRef, boundingBox: m.boundingBox ?? null, point: m.point ?? null, timestampSeconds: m.timestampSeconds, source: "manual", detectionSource: "gemini", reviewStatus: "confirmed", reviewHistory: [{ from: "pending", to: "confirmed", at: new Date(), by: "marked-on-phone" }], liveFindingId: m.id, createdAt: new Date() });
-    await db.collection("spatialMarkers").updateOne({ inspectionId, findingId: String(findingId) }, { $setOnInsert: { inspectionId, ownerId: session.ownerId, sessionId: manifest.sessionId, findingId: String(findingId), position: m.worldPosition, label: m.description || m.label, elementId: elementAt(m.worldPosition, manifest.elements), reviewStatus: "confirmed", version: 1, source: "phone-lidar-crosshair", createdAt: new Date(), reviewHistory: [{ action: "marked-on-phone", at: new Date() }] } }, { upsert: true });
+    if (!existing) await db.collection("findings").insertOne({ _id: findingId, ownerId: session.ownerId, inspectionId, roomId: session.roomId, kind: "damage", label: m.label, description: m.description, evidenceFrameUrl: m.evidenceFrameRef, boundingBox: m.boundingBox ?? null, point: m.point ?? null, timestampSeconds: m.timestampSeconds + timestampOffset, source: "manual", detectionSource: "gemini", reviewStatus: "confirmed", reviewHistory: [{ from: "pending", to: "confirmed", at: new Date(), by: "marked-on-phone" }], liveFindingId: m.id, createdAt: new Date() });
+    if (Array.isArray(m.worldPosition) && m.worldPosition.length === 3) await db.collection("spatialMarkers").updateOne({ inspectionId, findingId: String(findingId) }, { $setOnInsert: { inspectionId, ownerId: session.ownerId, sessionId: manifest.sessionId, findingId: String(findingId), position: m.worldPosition, label: m.description || m.label, elementId: elementAt(m.worldPosition, manifest.elements), reviewStatus: "confirmed", version: 1, source: "phone-lidar-crosshair", createdAt: new Date(), reviewHistory: [{ action: "marked-on-phone", at: new Date() }] } }, { upsert: true });
   }
   return marks.length;
 }

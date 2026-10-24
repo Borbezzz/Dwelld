@@ -27,7 +27,7 @@ export default function SpatialWorkspace({ inspectionId }: { inspectionId: strin
       if (source.size > 2 * 1024 * 1024) throw new Error("Manifest exceeds 2 MB");
       const m = JSON.parse(await source.text()) as SpatialManifest;
       if (m.version !== 1 || !Array.isArray(m.assets) || m.assets.length > 1805) throw new Error("Unsupported capture manifest");
-      for (let i = 0; i < m.assets.length; i++) { const asset = m.assets[i], file = filesByName.get(asset.name); if (!file) throw new Error(`Missing ${asset.name}`); setBusy(`Uploading ${i + 1}/${m.assets.length} assets…`); asset.mediaRef = await uploadSpatial(file, asset.kind === "image" ? "image/jpeg" : asset.kind === "usdz" ? "model/vnd.usdz+zip" : "application/octet-stream"); }
+      for (let i = 0; i < m.assets.length; i++) { const asset = m.assets[i], file = filesByName.get(asset.name); if (!file) throw new Error(`Missing ${asset.name}`); setBusy(`Uploading ${i + 1}/${m.assets.length} assets…`); asset.mediaRef = await uploadSpatial(file, asset.kind === "image" ? "image/jpeg" : asset.kind === "video" ? "video/mp4" : asset.kind === "usdz" ? "model/vnd.usdz+zip" : "application/octet-stream"); }
       const r = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(m) }); const b = await r.json(); if (!r.ok) throw new Error(b.error); await load();
     } catch (e) { setError(e instanceof Error ? e.message : "Import failed"); } finally { setBusy(""); }
   }

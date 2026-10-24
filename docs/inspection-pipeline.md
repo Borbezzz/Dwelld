@@ -169,3 +169,29 @@ The signed native build and embedded-framework verification pass. A real two-pho
 still returned `AI_BILLING_BLOCKED`; inference quality and sustained physical scan throughput
 cannot be verified until that service block is resolved. One sampled frame per second is the
 input target, not a promise of one completed model result per second.
+
+## Exact manual snapshots and recorded playback
+
+A phone mark saves the current AR frame as an upright JPEG, its exact fractional timestamp,
+its normalized aim point and image dimensions, plus a world position when LiDAR is available.
+The photo and mark metadata remain on the phone for retries; saving a paired inspection waits
+for unsent marks rather than dropping them. A saved finding opens its own evidence photo,
+including when the scan also has continuous video. It never substitutes a nearby sampled frame.
+
+Gemini receives that snapshot with the aim point ringed and an unmarked target crop. Boxes
+are expressed in crop coordinates, mapped back by the server, and rejected if invalid or away
+from the aim point. An undamaged or unlocalized response keeps the manual pin without a box.
+The provider output remains a visual assessment, not a guarantee that a region is correct.
+
+New native scans record upright H.264 MP4 at a 30 FPS target, with original camera aspect ratio,
+on a separate camera sampling and encoding queue. Evidence collection and model analysis retain
+their slower independent schedules. The MP4 is a session-owned spatial asset, uploaded in the
+existing bounded chunks and played as video. Continued scans retain separate recordings with
+start offsets. Static evidence boxes appear on their exact source photos, rather than being
+carried across moving native video. Legacy captures containing only sampled JPEGs remain a
+labelled photo timeline; missing video frames cannot be recovered from those samples.
+
+Validation: `npm test`, `npm run lint`, unsigned device `xcodebuild`, and
+`scripts/verify-native-recording.sh` on macOS. The recorder test encodes and decodes actual H.264,
+checks 30 FPS and portrait dimensions, and checks pixel colors after clockwise rotation.
+A fresh physical-device scan is still required to verify delivered cadence and upload end to end.

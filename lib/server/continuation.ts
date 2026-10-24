@@ -55,18 +55,20 @@ export async function saveContinuation(session: SessionDoc, part: SpatialManifes
   const inspection = await db.collection("inspections").findOne({ _id: inspectionId, ownerId: session.ownerId });
   if (!capture || !inspection) throw new Error("The earlier scan no longer exists");
   // A retried save of the same part is acknowledged, never appended twice.
-  const parts = (capture.parts as { sessionId: string }[] | undefined) || [];
-  if (parts.some(p => p.sessionId === String(session._id))) return { inspection, analysis: null };
+  const parts = (capture.parts as { sessionId: string; timestampOffset?: number }[] | undefined) || [];
+  const savedPart = parts.find(p => p.sessionId === String(session._id));
+  if (savedPart) return { inspection, analysis: null, timestampOffset:savedPart.timestampOffset||0 };
 
   const base = capture.manifest as SpatialManifest, index = parts.length + 2, prefix = `p${index}-`;
   const rename = (name: string) => (prefix + name).slice(0, 120);
   const names = new Set(base.assets.map(a => a.name));
-  const offset = (base.frames.at(-1)?.timestamp ?? 0) + 1;
+  const offset = Math.max(base.frames.at(-1)?.timestamp ?? 0, ...base.assets.filter(a=>a.kind==="video").map(a=>(a.startTimeSeconds||0)+(a.durationSeconds||0))) + 1;
   const room = Math.max(0, Math.min(MAX_FRAMES - base.frames.length, part.frames.length));
   const frames: SpatialFrame[] = part.frames.slice(0, room).map(f => ({ ...f, timestamp: f.timestamp + offset, image: rename(f.image), ...(f.depth ? { depth: rename(f.depth) } : {}), ...(f.confidence ? { confidence: rename(f.confidence) } : {}) }));
   const used = new Set(frames.flatMap(f => [f.image, f.depth, f.confidence].filter(Boolean) as string[]));
   const media = part.assets.filter(a => ["image", "depth", "confidence"].includes(a.kind)).map(a => ({ ...a, name: rename(a.name) })).filter(a => used.has(a.name) && !names.has(a.name));
 
+  const recordings = part.assets.filter(a => a.kind === "video").map(a => ({...a,name:rename(a.name),startTimeSeconds:(a.startTimeSeconds || 0) + offset}));
   const added = part.elements.filter(e => !alreadyMeasured(e, base.elements) && !base.elements.some(b => b.id === e.id));
   const cleanup: string[] = [];
 
@@ -90,15 +92,16 @@ export async function saveContinuation(session: SessionDoc, part: SpatialManifes
   const oldMap = base.assets.find(a => a.kind === "worldmap"), newMap = part.assets.find(a => a.kind === "worldmap");
   const map = newMap ? { name: rename(newMap.name), mediaRef: newMap.mediaRef, kind: "worldmap" as const } : oldMap;
   if (newMap && oldMap) cleanup.push(oldMap.mediaRef);
-  assets = [...assets, ...media.slice(0, Math.max(0, MAX_ASSETS - assets.length - 1)), ...(map ? [map] : [])];
+  if (assets.length + recordings.length + (map ? 1 : 0) > MAX_ASSETS) throw new Error("This room has reached its capture asset limit. Start a new inspection to retain the recording.");
+  assets = [...assets, ...recordings, ...media.slice(0, Math.max(0, MAX_ASSETS - assets.length - recordings.length - 1)), ...(map ? [map] : [])];
 
   const manifest: SpatialManifest = { ...base, elements: [...base.elements, ...added].slice(0, 1000), frames: [...base.frames, ...frames], assets };
   const result = await db.collection("spatialCaptures").updateOne(
     { _id: capture._id, "parts.sessionId": { $ne: String(session._id) } },
-    { $set: { manifest, updatedAt: new Date() }, $push: { parts: { sessionId: String(session._id), frames: frames.length, elements: added.length, addedAt: new Date() } } } as never,
+    { $set: { manifest, updatedAt: new Date() }, $push: { parts: { sessionId: String(session._id), timestampOffset:offset, frames: frames.length, elements: added.length, addedAt: new Date() } } } as never,
   );
   if (result.modifiedCount) for (const ref of cleanup) await deleteMedia(ref).catch(() => {});
-  else return { inspection, analysis: null };
+  else return { inspection, analysis: null, timestampOffset:offset };
   // Analyse only the new photos; furniture that was already measured keeps its findings.
-  return { inspection: inspection as Document, analysis: { manifest: { ...manifest, frames }, objectElementIds: added.map(e => e.id) } };
+  return { inspection: inspection as Document, timestampOffset:offset, analysis: { manifest: { ...manifest, frames }, objectElementIds: added.map(e => e.id) } };
 }

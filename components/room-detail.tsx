@@ -10,6 +10,7 @@ import BrandLogo from "./brand-logo";
 import EvidenceViewer, { type EvidenceItem } from "./evidence-viewer";
 import WalkthroughPlayer from "./walkthrough-player";
 import { useObjectReconstruction } from "./use-object-reconstruction";
+import NativePlayback from "./native-playback";
 import EvidenceTimeline from "./evidence-timeline";
 import type { Finding, Inspection, Room } from "@/lib/types";
 import type { SpatialManifest, SpatialMarker } from "@/lib/spatial/types";
@@ -79,7 +80,7 @@ export default function RoomDetail({ roomId }: { roomId: string }) {
   const toItem = (d: Damage): EvidenceItem => ({ id: d.id, label: d.label, detail: [d.description, d.verification ? `Verifier: ${d.verification.verdict.replace("_", " ")} (${Math.round(d.verification.confidence * 100)}%) — ${d.verification.reason}` : ""].filter(Boolean).join(" "), tone: d.status === "confirmed" ? "damage" : "check", image: d.evidence, box: d.box, point: d.point, timestampSeconds: d.timestampSeconds, badge: d.autoApproved && d.confidence != null ? `auto-approved ${Math.round(d.confidence * 100)}%` : d.status === "confirmed" ? "confirmed" : d.confidence != null ? `${Math.round(d.confidence * 100)}% likely` : undefined });
   const focus = useMemo(() => {
     const all = [...byElement.values()].flat().concat(elsewhere);
-    if (focusFinding) { const d = all.find(x => x.id === focusFinding); if (d) return { title: d.label, items: [toItem(d)] }; const o = findings.find(f => f.id === focusFinding); if (o) return { title: o.label, items: [{ id: o.id, label: o.label, tone: "object" as const, image: o.evidenceFrameUrl, box: o.boundingBox, timestampSeconds: o.timestampSeconds }] }; }
+    if (focusFinding) { const d = all.find(x => x.id === focusFinding || x.findingId === focusFinding); if (d) return { title: d.label, items: [toItem(d)] }; const o = findings.find(f => f.id === focusFinding); if (o) return { title: o.label, items: [{ id: o.id, label: o.label, tone: "object" as const, image: o.evidenceFrameUrl, box: o.boundingBox, timestampSeconds: o.timestampSeconds }] }; }
     if (!selected) return null;
     const damage = (byElement.get(selected) || []).filter(d => d.status !== "rejected").map(toItem);
     const views = findings.filter(f => f.kind === "object" && f.spatialElementId === selected && f.evidenceFrameUrl).slice(0, 4).map(o => ({ id: o.id, label: `${names.get(selected) || o.label} · seen here`, tone: "object" as const, image: o.evidenceFrameUrl, box: o.boundingBox, timestampSeconds: o.timestampSeconds }));
@@ -87,7 +88,8 @@ export default function RoomDetail({ roomId }: { roomId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected, focusFinding, byElement, elsewhere, findings, names]);
   const looseFurniture = useMemo(() => manifest ? [] : findings.filter(f => f.kind === "object" && isFurnitureLabel(f.label)), [findings, manifest]);
-  const cueId = focusFinding || (selected ? findings.find(f => f.spatialElementId === selected && f.kind === "damage" && f.reviewStatus !== "rejected" && f.timestampSeconds != null)?.id || findings.find(f => f.spatialElementId === selected && f.timestampSeconds != null)?.id : undefined);
+  const focusedFindingId = capture?.markers.find(m=>`marker-${m.id}`===focusFinding)?.findingId || focusFinding;
+  const cueId = focusedFindingId || (selected ? findings.find(f => f.spatialElementId === selected && f.kind === "damage" && f.reviewStatus !== "rejected" && f.timestampSeconds != null)?.id || findings.find(f => f.spatialElementId === selected && f.timestampSeconds != null)?.id : undefined);
   const { cloud, reconstructing } = useObjectReconstruction(current, selected);
   const open = [...byElement.values()].flat().concat(elsewhere).filter(d => d.status === "pending").length;
   const confirmed = [...byElement.values()].flat().concat(elsewhere).filter(d => d.status === "confirmed").length;
@@ -139,10 +141,10 @@ export default function RoomDetail({ roomId }: { roomId: string }) {
           : scan && !ready(scan) ? <div className="room-scene"><div className="room-scene-loading is-live"><DotField /><p>{scan.status === "failed" ? "This scan could not be analysed." : "Analysing this scan. Findings appear here when it's done."}</p></div></div>
           : <div className="room-scene"><div className="room-scene-loading"><p>This scan was a video walkthrough, so there is no 3D room. Its findings are listed alongside.</p><Link className="text-button" href={`/inspections/${current}`}>Open video review ↗</Link></div></div>}
         {manifest && <p className="room-scene-help"><span className="tone-key"><i className="tone-check" />Needs a look</span><span className="tone-key"><i className="tone-damage" />Damage confirmed</span><span>Drag to orbit · click furniture to rebuild it from the photos</span></p>}
-        {scan?.videoUrl ? <div className="room-video-dock"><WalkthroughPlayer src={scan.videoUrl} findings={findings} selectedId={cueId} onSelect={id => setFocusFinding(id)} /></div> : manifest?.frames.length ? <div className="room-video-dock"><EvidenceTimeline portraitSensorFrames frames={manifest.frames} findings={findings} selectedId={cueId} assetUrl={name => `/api/inspections/${current}/spatial/assets/${encodeURIComponent(name)}`} onSelect={id => setFocusFinding(id)} /></div> : null}
+        {manifest?.assets.some(a=>a.kind==="video") ? <div className="room-video-dock"><NativePlayback assets={manifest.assets} findings={findings} selectedId={cueId} assetUrl={name => `/api/inspections/${current}/spatial/assets/${encodeURIComponent(name)}`} onSelect={id=>setFocusFinding(id)}/></div> : scan?.videoUrl ? <div className="room-video-dock"><WalkthroughPlayer src={scan.videoUrl} findings={findings} selectedId={cueId} onSelect={id => setFocusFinding(id)} /></div> : manifest?.frames.length ? <div className="room-video-dock"><EvidenceTimeline portraitSensorFrames frames={manifest.frames} findings={findings} selectedId={cueId} assetUrl={name => `/api/inspections/${current}/spatial/assets/${encodeURIComponent(name)}`} onSelect={id => setFocusFinding(id)} /></div> : null}
         {scans && <div className="room-danger under-scene">{confirming ? <div className="room-confirm" role="group" aria-label="Confirm delete"><p>{confirming === "scan" ? `Delete the ${scan ? purpose(scan).toLowerCase() : ""} scan? Its 3D room, photos and findings are removed for good.` : `Delete ${room?.name || "this room"} and all ${scans.length} ${scans.length === 1 ? "scan" : "scans"}? This can't be undone.`}</p><span><button className="button button-danger" disabled={deleting} onClick={() => void remove(confirming)}>{deleting ? "Deleting…" : confirming === "scan" ? "Delete scan" : "Delete room"}</button><button className="text-button" disabled={deleting} onClick={() => setConfirming("")}>Keep it</button></span></div>
           : <>{current && scan?.isOwner!==false && !scan?.virtual && <button className="text-button" onClick={() => setConfirming("scan")}>Delete this scan</button>}{room?.isOwner!==false && <button className="text-button" onClick={() => setConfirming("room")}>Delete room</button>}</>}</div>}
-        {focus && !scan?.videoUrl && !manifest?.frames.length && <EvidenceViewer key={`${selected}-${focusFinding}`} title={focus.title} items={focus.items} onClose={() => { setFocusFinding(null); setSelected(null); }} />}
+        {focus && <EvidenceViewer key={`${selected}-${focusFinding}`} title={focus.title} items={focus.items} onClose={() => { setFocusFinding(null); setSelected(null); }} />}
       </section>
       <aside className="room-detail-panel" aria-label="What was found">
         <div className="room-summary">

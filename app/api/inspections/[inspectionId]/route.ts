@@ -35,7 +35,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ insp
     }));
     return NextResponse.json({
       inspection: {
-        id: String(inspection._id), roomId: String(targetId), status: inspection.status, type: inspection.type || "move-in",isOwner:inspection.ownerId===user.id,virtual:String(targetId)!==String(inspection.roomId),
+        captureSource: inspection.captureSource || "video", id: String(inspection._id), roomId: String(targetId), status: inspection.status, type: inspection.type || "move-in",isOwner:inspection.ownerId===user.id,virtual:String(targetId)!==String(inspection.roomId),
         createdAt: new Date(inspection.createdAt).toISOString(),
         videoUrl: typeof inspection.sourceUrl === "string" ? "/api/inspections/" + String(inspection._id) + "/video" : undefined,
         durationSeconds: inspection.durationSeconds ?? null,

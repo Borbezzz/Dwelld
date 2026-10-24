@@ -20,9 +20,9 @@ export async function POST(request:Request,{params}:Context){try{const {session}
  for(const asset of manifest.assets){const file=await getMediaFile(asset.mediaRef);if(file?.metadata?.ownerId!==session.ownerId||file.metadata.liveSessionId!==String(session._id))throw new LiveError('Asset does not belong to this paired scan',403);}
  if(session.continueFrom){
   // A continued scan is folded into the earlier inspection, in its coordinates.
-  const {analysis,inspection}=await saveContinuation(session,manifest);
-  if(analysis)after(()=>analyzeNativeInspection(inspection,analysis.manifest,session._id,{objectElementIds:analysis.objectElementIds}));
-  await importPhoneMarks(session,session.continueFrom,manifest).catch(e=>console.error('phone marks import failed',e instanceof Error?e.message:e));
+  const {analysis,inspection,timestampOffset}=await saveContinuation(session,manifest);
+  if(analysis)after(()=>analyzeNativeInspection(inspection,analysis.manifest,session._id,{objectElementIds:analysis.objectElementIds,timestampOffset}));
+  await importPhoneMarks(session,session.continueFrom,manifest,timestampOffset).catch(e=>console.error('phone marks import failed',e instanceof Error?e.message:e));
   await sessions.updateOne({_id:session._id},{$set:{nativeCapture:true,status:'saved',inspectionId:session.continueFrom,nativeProgress:{...session.nativeProgress,stage:'saved',upload:1,frames:session.nativeProgress?.frames??manifest.frames.length,depthFrames:session.nativeProgress?.depthFrames??manifest.frames.filter(f=>f.depth).length}}});
   return Response.json({saved:true,inspectionId:String(session.continueFrom)});
  }

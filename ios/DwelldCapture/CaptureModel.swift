@@ -12,9 +12,9 @@ struct OwnedRoom: Codable, Identifiable { let id: String; let name: String }
 struct Element: Codable { let id: String; let category: String; let dimensions: [Float]; let transform: [Float] }
 struct FrameRecord: Codable { let timestamp: Double; let image: String; let depth: String?; let confidence: String?; let width: Int; let height: Int; let depthWidth: Int?; let depthHeight: Int?; let intrinsics: [Float]; let transform: [Float] }
 struct Registration: Codable { let sessionId: String; var source = "arkit-calibrated"; var transform = matrix(matrix_identity_float4x4) }
-struct Asset: Codable { let name: String; var mediaRef: String; let kind: String; var registration: Registration? = nil; var reconstructionMethod: String? = nil }
+struct Asset: Codable { let name: String; var mediaRef: String; let kind: String; var registration: Registration? = nil; var reconstructionMethod: String? = nil; var startTimeSeconds: Double? = nil; var durationSeconds: Double? = nil; var fps: Int? = nil }
 /// A spot the person marked during the scan: the photo and the LiDAR point under the centre crosshair.
-struct PhoneMark: Codable { let id: String; let position: [Float]; let timestamp: Double; let image: String; var sent = false }
+struct PhoneMark: Codable { let id: String; let position: [Float]?; let timestamp: Double; let image: String; var sent = false; var point: [Double]? = nil; var imageWidth: Int? = nil; var imageHeight: Int? = nil }
 struct Manifest: Codable { var version = 1; let sessionId: String; var coordinateSystem = "arkit-right-handed-y-up-metres"; var elements: [Element]; var frames: [FrameRecord]; var assets: [Asset] }
 
 struct PhoneDamageBox: Decodable { let x: Double; let y: Double; let width: Double; let height: Double }
@@ -45,6 +45,10 @@ struct PhoneFinding: Decodable, Identifiable {
     @Published var videoStatus = "Video connects when scanning starts"
     private var liveVideo: NativeVideoStream?
     private var videoTimer: Timer?
+    private var videoRecorder: ARVideoRecording?
+    private var recordingFinish: Task<Void, Never>?
+    private var recordingDuration: Double?
+    private var recordingIssue = ""
     private var videoTick = 0
     private var videoServers: [[String: Any]] = []
     private var phoneToken = ""
@@ -93,7 +97,7 @@ struct PhoneFinding: Decodable, Identifiable {
         if let folder = saved.captureFolder, UUID(uuidString: folder) != nil {
             let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(folder)
             if let data = try? Data(contentsOf: dir.appendingPathComponent("manifest.json")), let m = try? JSONDecoder().decode(Manifest.self, from: data) {
-                directory = dir; manifest = m; ready = true; frameCount = m.frames.count; depthCount = m.frames.filter { $0.depth != nil }.count
+                directory = dir; manifest = m; marks = (try? JSONDecoder().decode([PhoneMark].self, from: Data(contentsOf: dir.appendingPathComponent("marks.json")))) ?? []; markCount = marks.count; ready = true; frameCount = m.frames.count; depthCount = m.frames.filter { $0.depth != nil }.count
             }
         }
         status = saved.completed ? "Inspection saved on your laptop." : saved.expiresAt < Date() ? "QR connection expired. Your capture is retained locally; reconnect from the laptop. No phone sign-in is required." : saved.paired ? (ready ? "Capture recovered. Tap Retry save to resume." : "Reconnected to your laptop. Ready to scan.") : "Scan the same laptop QR again to finish connecting."
@@ -182,6 +186,7 @@ struct PhoneFinding: Decodable, Identifiable {
     /// A pairing owns its capture state. Retained files stay on disk, never in the next room.
     private func resetCaptureState() {
         connectionGeneration = UUID()
+        videoRecorder?.cancel(); videoRecorder = nil; recordingFinish?.cancel(); recordingFinish = nil; recordingDuration = nil; recordingIssue = ""
         liveVideo?.close(); liveVideo = nil; videoTimer?.invalidate(); videoTimer = nil
         videoStatus = "Video connects when scanning starts"
         timer?.invalidate(); timer = nil
@@ -282,7 +287,11 @@ struct PhoneFinding: Decodable, Identifiable {
             splatBuilder.reset(); liveSplats = []; splatCount = 0; splatRevision += 1
             marks = []; markCount = 0; liveFindings = []; damageEvidence = nil; damageEvidenceFindings = []; evidenceRef = ""; pendingEvidence = []
             streamCursor = 0; preUploaded = [:]; preUploadTask = nil; liveEvidence = [:]; motions = []; sentDuringScan = 0
+            recordingDuration = nil; recordingFinish = nil; recordingIssue = ""
+            videoRecorder = nil
             view.captureSession.run(configuration: RoomCaptureSession.Configuration())
+            startTime = ProcessInfo.processInfo.systemUptime
+            videoRecorder = ARVideoRecording(url: dir.appendingPathComponent("walkthrough.mp4"), session: view.captureSession.arSession, origin: startTime!)
             // Read the current frame without replacing RoomPlan's ARSession delegate.
             timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in Task { @MainActor in self?.recordFrame() } }
             scanning = true
@@ -307,6 +316,18 @@ struct PhoneFinding: Decodable, Identifiable {
             }
         }
         if let videoTimer { RunLoop.main.add(videoTimer, forMode: .common) }
+    }
+    private func finishRecording() async {
+        if let recordingFinish { await recordingFinish.value; return }
+        guard let recorder = videoRecorder else { return }
+        videoRecorder = nil
+        let generation = connectionGeneration
+        let task = Task { @MainActor in
+            do { let duration = try await recorder.finish(); if generation == connectionGeneration { recordingDuration = duration } }
+            catch { if generation == connectionGeneration { recordingIssue = "Continuous video could not be saved. Sampled photos are retained." } }
+        }
+        recordingFinish = task
+        await task.value
     }
     private func videoMarkers(_ frame: ARFrame) -> [[String: Any]] {
         let size = CGSize(width: 540, height: 960), inverse = simd_inverse(frame.camera.transform)
@@ -338,7 +359,7 @@ struct PhoneFinding: Decodable, Identifiable {
     /// Mark whatever is under the centre crosshair. Scanning carries on; nothing resets.
     func markDamage() {
         guard scanning, let frame = view.captureSession.arSession.currentFrame, let dir = directory else { return }
-        guard let point = centrePoint(frame) else { status = "Couldn't measure that spot. Move a little closer and mark again."; return }
+        let point = centrePoint(frame)
         let original = CIImage(cvPixelBuffer: frame.capturedImage).oriented(.right)
         let scale = min(1, 1600 / max(original.extent.width, original.extent.height))
         let image = original.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
@@ -346,10 +367,10 @@ struct PhoneFinding: Decodable, Identifiable {
         let id = UUID().uuidString.replacingOccurrences(of: "-", with: "")
         let name = "mark-\(id).jpg"
         do { try jpeg.write(to: dir.appendingPathComponent(name)) } catch { status = "Couldn't save that mark."; return }
-        let mark = PhoneMark(id: id, position: [point.x, point.y, point.z], timestamp: max(0, frame.timestamp - (startTime ?? frame.timestamp)), image: name)
-        marks.append(mark); markCount = marks.count; markPulse += 1
+        let mark = PhoneMark(id: id, position: point.map { [$0.x, $0.y, $0.z] }, timestamp: max(0, frame.timestamp - (startTime ?? frame.timestamp)), image: name, point: [0.5,0.5], imageWidth: Int(image.extent.width), imageHeight: Int(image.extent.height))
+        marks.append(mark); try? JSONEncoder().encode(marks).write(to: dir.appendingPathComponent("marks.json"), options: .atomic); markCount = marks.count; markPulse += 1
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        status = "Marked. It shows up on your laptop in a few seconds."
+        status = "Snapshot saved at the crosshair. Gemini is checking that exact spot."
         Task { _ = await sendMark(mark) }
     }
     /// LiDAR depth under the image centre (median of a small window), unprojected into the scan's world space.
@@ -376,7 +397,10 @@ struct PhoneFinding: Decodable, Identifiable {
         var request = URLRequest(url: pairedBase.appendingPathComponent("api/live/\(pairedSession)/marks")); request.httpMethod = "POST"; request.timeoutInterval = 60
         request.setValue("Bearer \(phoneToken)", forHTTPHeaderField: "Authorization")
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        let meta = (try? JSONSerialization.data(withJSONObject: ["observationId": mark.id, "position": mark.position, "timestampSeconds": mark.timestamp])) ?? Data()
+        var metadata: [String: Any] = ["observationId": mark.id, "timestampSeconds": mark.timestamp, "point": ["x":mark.point?.first ?? 0.5,"y":mark.point?.last ?? 0.5]]
+        if let position = mark.position { metadata["position"] = position }
+        if let width = mark.imageWidth, let height = mark.imageHeight { metadata["imageWidth"] = width; metadata["imageHeight"] = height }
+        let meta = (try? JSONSerialization.data(withJSONObject: metadata)) ?? Data()
         var body = Data()
         body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"metadata\"\r\n\r\n".utf8)); body.append(meta)
         body.append(Data("\r\n--\(boundary)\r\nContent-Disposition: form-data; name=\"image\"; filename=\"mark.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n".utf8)); body.append(jpeg)
@@ -385,7 +409,7 @@ struct PhoneFinding: Decodable, Identifiable {
         do {
             let (_, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return false }
-            if let i = marks.firstIndex(where: { $0.id == mark.id }) { marks[i].sent = true }
+            if let i = marks.firstIndex(where: { $0.id == mark.id }) { marks[i].sent = true; try? JSONEncoder().encode(marks).write(to: dir.appendingPathComponent("marks.json"), options: .atomic) }
             return true
         } catch { return false }
     }
@@ -504,6 +528,7 @@ struct PhoneFinding: Decodable, Identifiable {
         status = "Saving where everything is, so you can continue this scan later…"
         guard let capture = view.captureSession else { processing = false; status = "The capture session is unavailable. Your local files are retained."; return }
         Task { @MainActor in
+            await finishRecording()
             await saveWorldMap(from: capture.arSession)
             capture.stop()
             if processing { status = "Processing measured room geometry…" }
@@ -579,6 +604,10 @@ struct PhoneFinding: Decodable, Identifiable {
     }
     func captureView(didPresent processedResult: CapturedRoom, error: Error?) {
         guard processing else { return }
+        let generation = connectionGeneration
+        Task { @MainActor in
+        await finishRecording()
+        guard generation == connectionGeneration else { return }
         processing = false
         guard error == nil, let dir = directory else { status = "RoomPlan could not finish this scan."; return }
         do {
@@ -589,6 +618,9 @@ struct PhoneFinding: Decodable, Identifiable {
             }
             let surfaces = processedResult.walls + processedResult.doors + processedResult.windows + processedResult.openings + processedResult.floors
             let elements = surfaces.map { Element(id: $0.identifier.uuidString, category: String(describing: $0.category), dimensions: dimensions($0.dimensions), transform: matrix($0.transform)) } + processedResult.objects.map { Element(id: $0.identifier.uuidString, category: String(describing: $0.category), dimensions: dimensions($0.dimensions), transform: matrix($0.transform)) }
+            if let duration = recordingDuration {
+                assets.append(Asset(name: "walkthrough.mp4", mediaRef: preUploaded["walkthrough.mp4"] ?? "", kind: "video", startTimeSeconds: 0, durationSeconds: duration, fps: 30))
+            }
             // Retain the full calibrated capture on the phone for later training/export.
             let original = Manifest(sessionId: processedResult.identifier.uuidString, elements: elements, frames: frames, assets: assets + [Asset(name: "room.usdz", mediaRef: "", kind: "usdz")])
             try JSONEncoder().encode(original).write(to: dir.appendingPathComponent("original-manifest.json"))
@@ -598,7 +630,7 @@ struct PhoneFinding: Decodable, Identifiable {
             let fallback = count > 1 ? (0..<count).map { $0 * (frames.count - 1) / (count - 1) } : Array(0..<count)
             let indices = sentKeys.isEmpty ? Array(stride(from: 0, to: frames.count, by: 2)) : sentKeys
             var evidence: [FrameRecord] = []
-            var cloudAssets = assets.filter { $0.kind == "splat" }
+            var cloudAssets = assets.filter { $0.kind == "splat" || $0.kind == "video" }
             if FileManager.default.fileExists(atPath: dir.appendingPathComponent("room.arworldmap").path) {
                 cloudAssets.append(Asset(name: "room.arworldmap", mediaRef: "", kind: "worldmap"))
             }
@@ -614,9 +646,10 @@ struct PhoneFinding: Decodable, Identifiable {
             }
             manifest = Manifest(sessionId: processedResult.identifier.uuidString, elements: elements, frames: evidence, assets: cloudAssets)
             try JSONEncoder().encode(manifest).write(to: dir.appendingPathComponent("manifest.json"))
-            ready = true; status = "Ready: \(evidence.count) evidence samples and \(splatBuilder.count) LiDAR splats. Full-resolution capture stays on this phone."
+            ready = true; status = recordingIssue.isEmpty ? "Ready: \(evidence.count) evidence samples and \(splatBuilder.count) LiDAR splats. Full-resolution capture stays on this phone." : recordingIssue
             if !pairedSession.isEmpty { Task { await savePairedCapture() } }
         } catch { status = "Could not export the captured geometry. Local evidence is retained." }
+        }
     }
     private func httpFailure(_ response: URLResponse, data: Data) -> NSError {
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
@@ -733,7 +766,7 @@ struct PhoneFinding: Decodable, Identifiable {
                     let asset = m.assets[i]
                     group.addTask { @MainActor in
                         do {
-                let data = try Data(contentsOf: dir.appendingPathComponent(asset.name)), contentType = asset.kind == "image" ? "image/jpeg" : asset.kind == "usdz" ? "model/vnd.usdz+zip" : "application/octet-stream"
+                let data = try Data(contentsOf: dir.appendingPathComponent(asset.name)), contentType = asset.kind == "image" ? "image/jpeg" : asset.kind == "video" ? "video/mp4" : asset.kind == "usdz" ? "model/vnd.usdz+zip" : "application/octet-stream"
                 let initData = try JSONSerialization.data(withJSONObject: ["filename": asset.name, "contentType": contentType, "size": data.count])
                 let upload = try await request(uploadPath, data: initData)
                 guard let id = upload["uploadId"] as? String, let chunkSize = upload["chunkSize"] as? Int else { throw CocoaError(.fileWriteUnknown) }
@@ -765,7 +798,7 @@ struct PhoneFinding: Decodable, Identifiable {
             if let uploadError { throw uploadError }
             for mark in marks where !mark.sent {
                 status = "Saving a marked damage photo… Your room files have uploaded."
-                _ = await sendMark(mark)
+                if !pairedSession.isEmpty, !(await sendMark(mark)) { throw NSError(domain: "Dwelld", code: 1, userInfo: [NSLocalizedDescriptionKey: "A marked snapshot has not uploaded. Tap Retry save; the exact photo remains on this phone."]) }
             }
             status = "Confirming your saved room…"
             let saved = try await request(pairedSession.isEmpty ? "api/inspections/\(inspectionId)/spatial" : "api/live/\(pairedSession)/spatial", data: JSONEncoder().encode(m))

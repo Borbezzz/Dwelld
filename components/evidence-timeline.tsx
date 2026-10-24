@@ -32,7 +32,7 @@ export default function EvidenceTimeline({ frames, findings, selectedId, assetUr
   // Correct only their presentation; images already oriented by EXIF must not rotate twice.
   const rotate = portraitSensorFrames && frame.width > frame.height && !(loaded && loadedImage.width < loadedImage.height);
   const ratio = rotate ? frame.height / frame.width : loaded ? loadedImage.width / loadedImage.height : frame.width / frame.height;
-  const visible = loaded ? findingsForSourceFrame(findings, frame.timestamp) : [];
+  const visible = loaded ? findingsForSourceFrame(portraitSensorFrames ? findings.filter(f=>f.source!=="manual") : findings, frame.timestamp) : [];
   return <section className="walkthrough-player" aria-label="Inspection frames">
     <div className="walkthrough-stage" style={{ aspectRatio: ratio }}>
       <img src={source} style={rotate ? {position:"absolute",left:"50%",top:"50%",width:`${frame.width / frame.height * 100}%`,height:`${frame.height / frame.width * 100}%`,maxWidth:"none",transform:"translate(-50%, -50%) rotate(90deg)"} : undefined} onLoad={event => {const image=event.currentTarget;setLoadedImage({source:image.getAttribute("src")||"",width:image.naturalWidth,height:image.naturalHeight})}} alt={`Room at ${clock(frame.timestamp)}`} />
@@ -43,6 +43,7 @@ export default function EvidenceTimeline({ frames, findings, selectedId, assetUr
       <span className="walkthrough-stamp">{clock(frame.timestamp)} · {visible.length} marked observations</span>
     </div>
     <div className="walkthrough-controls"><button type="button" aria-label={playing ? "Pause frames" : "Play frames"} onClick={() => setPlaying(value => !value)}>{playing ? <Pause size={17} /> : <Play size={17} />}</button><time>{clock(frame.timestamp)}</time><span>{shownIndex + 1} / {ordered.length}</span><button type="button" onClick={() => { setPlaying(false); setIndex(i => (i + 1) % ordered.length); }}>Next frame <ChevronRight size={15} /></button></div>
+    <p className="sampled-playback-note">Sampled source photos · continuous video was not recorded for this scan.</p>
     <div className="walkthrough-timeline"><input aria-label="Frame timeline" type="range" min={0} max={Math.max(0, ordered.length - 1)} step={1} value={shownIndex} onChange={event => { setPlaying(false); setIndex(Number(event.target.value)); }} /></div>
   </section>;
 }
