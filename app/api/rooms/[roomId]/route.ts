@@ -52,6 +52,10 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ r
     const room = await requireOwnedRoom((await params).roomId, user.id);
     const db=await getDb();
     if(await db.collection("inspections").findOne({roomId:room._id,ownerId:{$ne:user.id}},{projection:{_id:1}}))return NextResponse.json({error:"This shared room contains another member’s inspection. Remove access and resolve those records before deleting the room."},{status:409});
+    const sources=await db.collection("inspections").find({roomId:room._id},{projection:{_id:1}}).toArray();
+    const linked=sources.length?await db.collection("roomScanSegments").find({sourceInspectionId:{$in:sources.map(s=>s._id)}}).toArray():[];
+    if(linked.some(s=>String(s.roomId)!==String(room._id)))return NextResponse.json({error:"This room's original scan is used by other linked rooms. Remove those rooms first."},{status:409});
+    await db.collection("roomScanSegments").deleteMany({roomId:room._id});
     return NextResponse.json({ deleted: true, ...(await deleteRoom(room)) });
   } catch (error) { return errorResponse(error, "room.delete"); }
 }
