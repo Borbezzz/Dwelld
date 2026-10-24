@@ -14,6 +14,6 @@ export default function NativePlayback({assets,findings,selectedId,assetUrl,onSe
  if(!active)return null;
  return <div className="native-playback">
   <div className="native-playback-heading"><span>Recorded walkthrough · 30 FPS</span>{recordings.length>1&&<label>Scan segment<select aria-label="Recorded scan segment" value={active.name} onChange={e=>setChosen({name:e.target.value,selection:selectedId})}>{recordings.map((a,i)=><option key={a.name} value={a.name}>Scan {i+1} · {Math.floor(a.startTimeSeconds!)}s</option>)}</select></label>}</div>
-  <WalkthroughPlayer key={active.mediaRef} src={assetUrl(active.name)} findings={findingsInRecording(findings,active)} selectedId={selectedId} onSelect={id=>{setChosen({name:'',selection:selectedId});onSelect(id)}} showOverlays={false} highlightIntervals={clipVisibility(highlightIntervals,active.startTimeSeconds||0,(active.startTimeSeconds||0)+(active.durationSeconds||0))} onMark={onMark?m=>onMark({...m,time:(active.startTimeSeconds||0)+m.time}):undefined}/>
+  <WalkthroughPlayer key={active.mediaRef} src={assetUrl(active.name)} findings={findingsInRecording(findings,active)} selectedId={selectedId} onSelect={id=>{setChosen({name:'',selection:selectedId});onSelect(id)}} sensorBoxes highlightIntervals={clipVisibility(highlightIntervals,active.startTimeSeconds||0,(active.startTimeSeconds||0)+(active.durationSeconds||0))} onMark={onMark?m=>onMark({...m,time:(active.startTimeSeconds||0)+m.time}):undefined}/>
  </div>;
 }

@@ -18,6 +18,8 @@ type Props = {
   onReviewFinding?: (findingId: string, status: "confirmed" | "rejected" | "pending") => void; reviewBusy?: string;
   /** The recorded walkthrough, shown as a third tab beside Room and Geometry. */
   video?: ReactNode;
+  /** Bump to bring the Video tab forward (e.g. when a piece or finding is picked). */
+  videoRequest?: number;
 };
 // Selection is blue so it never reads as a status. Amber = needs a look, red = damage confirmed.
 const INK = 0x2f3a2c, ACTIVE = 0x3f8fd2, CHECK = 0xe39a3b, DAMAGE = 0xc4573f;
@@ -26,7 +28,7 @@ const INK = 0x2f3a2c, ACTIVE = 0x3f8fd2, CHECK = 0xe39a3b, DAMAGE = 0xc4573f;
  * One 3D space: the Gaussian splat (when present) with the measured furniture boxes inside it.
  * Hover a box to outline it, click it to select it. Walls and floors are context, never listed.
  */
-export default function SpatialViewer({ manifest, markers, assetUrl, onPick, selectedElementId, hoveredElementId, onSelectElement, onHoverElement, damagedElementIds = [], elementTones = {}, compact = false, className = "", reconstruction = null, reconstructing = false, pieceFindings = [], onReviewFinding, reviewBusy = "", video }: Props) {
+export default function SpatialViewer({ manifest, markers, assetUrl, onPick, selectedElementId, hoveredElementId, onSelectElement, onHoverElement, damagedElementIds = [], elementTones = {}, compact = false, className = "", reconstruction = null, reconstructing = false, pieceFindings = [], onReviewFinding, reviewBusy = "", video, videoRequest = 0 }: Props) {
   const root = useRef<HTMLDivElement>(null);
   const splat = manifest.assets.find(a => a.kind === "splat");
   const aligned = !!splat && (!!splat.registration || splat.reconstructionMethod === "lidar-initialized");
@@ -34,6 +36,7 @@ export default function SpatialViewer({ manifest, markers, assetUrl, onPick, sel
   // The 3D scene stays mounted behind the video tab, so switching back is instant.
   const [showVideo, setShowVideo] = useState(false);
   const videoTab = !compact && !!video && showVideo;
+  useEffect(() => { if (videoRequest > 0) { setShowVideo(true); root.current?.parentElement?.scrollIntoView({ behavior: "smooth", block: "nearest" }); } }, [videoRequest]);
   const [error, setError] = useState(""), [loading, setLoading] = useState(!!splat);
   const [tip, setTip] = useState<{ text: string; x: number; y: number } | null>(null);
   const callbacks = useRef({ onPick, onSelectElement, onHoverElement }); callbacks.current = { onPick, onSelectElement, onHoverElement };

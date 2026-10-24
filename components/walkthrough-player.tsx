@@ -3,9 +3,10 @@ import {useCallback,useEffect,useRef,useState} from 'react';
 import {ChevronRight,Crosshair,LoaderCircle,Pause,Play} from 'lucide-react';
 import type {Finding} from '@/lib/types';
 import {findingsAtTime,timelineGroups} from '@/lib/inspection-timeline';
+import {portraitEvidenceBox,portraitEvidencePoint} from '@/lib/client/evidence-orientation';
 const clock=(time:number)=>`${Math.floor(time/60)}:${String(Math.floor(time%60)).padStart(2,'0')}`;
 export type VideoMark={time:number;point:{x:number;y:number};snapshot:string|null;video:{width:number;height:number};note:string};
-export default function WalkthroughPlayer({src,findings:allFindings,selectedId,onSelect,processing=false,showOverlays=true,onMark,highlightIntervals=[]}:{src:string;findings:Finding[];selectedId?:string;onSelect:(id:string)=>void;processing?:boolean;showOverlays?:boolean;onMark?:(mark:VideoMark)=>Promise<void>;highlightIntervals?:{startSeconds:number;endSeconds:number}[]}){
+export default function WalkthroughPlayer({src,findings:allFindings,selectedId,onSelect,processing=false,showOverlays=true,sensorBoxes=false,onMark,highlightIntervals=[]}:{sensorBoxes?:boolean;src:string;findings:Finding[];selectedId?:string;onSelect:(id:string)=>void;processing?:boolean;showOverlays?:boolean;onMark?:(mark:VideoMark)=>Promise<void>;highlightIntervals?:{startSeconds:number;endSeconds:number}[]}){
  // Only damage is marked on the video; furniture is shown by highlighting the timeline while it is in view.
  const findings=allFindings.filter(f=>f.kind==='damage');
  const [marking,setMarking]=useState(false),[draft,setDraft]=useState<Omit<VideoMark,'note'>|null>(null),[note,setNote]=useState(''),[saving,setSaving]=useState(false),[markStatus,setMarkStatus]=useState('');
@@ -22,7 +23,9 @@ export default function WalkthroughPlayer({src,findings:allFindings,selectedId,o
   catch(e){setMarkStatus(e instanceof Error?e.message:'Could not save this mark');}finally{setSaving(false);}}
  const video=useRef<HTMLVideoElement>(null),pending=useRef<number|null>(null);
  const [time,setTime]=useState(0),[duration,setDuration]=useState(0),[ratio,setRatio]=useState(16/9),[playing,setPlaying]=useState(false),[error,setError]=useState(''),[hover,setHover]=useState('');
- const groups=timelineGroups(findings),visible=playing?[]:findingsAtTime(findings,time,1/60),selected=findings.find(f=>f.id===selectedId);
+ const groups=timelineGroups(findings),visible=playing?[]:findingsAtTime(findings,time,.12),selected=allFindings.find(f=>f.id===selectedId);
+ /** Native scans: AI boxes are in landscape sensor pixels while the recording is upright portrait; marks made on the video are already in video space. */
+ const place=(f:Finding)=>sensorBoxes&&ratio<1&&f.source!=='manual'?{b:f.boundingBox?portraitEvidenceBox(f.boundingBox):undefined,p:f.point?portraitEvidencePoint(f.point):undefined}:{b:f.boundingBox,p:f.point};
  const seek=useCallback((t:number)=>{const v=video.current;if(!v)return;v.pause();pending.current=t;if(v.readyState>=1){v.currentTime=Math.max(0,Math.min(t,Number.isFinite(v.duration)?v.duration:t));pending.current=null;setTime(v.currentTime);}},[]);
  useEffect(()=>{if(selected?.timestampSeconds!=null)seek(selected.timestampSeconds);},[selected?.id,selected?.timestampSeconds,seek]);
  function select(f:Finding){seek(f.timestampSeconds??0);onSelect(f.id);}
@@ -32,7 +35,7 @@ export default function WalkthroughPlayer({src,findings:allFindings,selectedId,o
   <div className="walkthrough-stage" style={{aspectRatio:ratio,width:`min(100%, calc(var(--stage-max-height, 100000px) * ${ratio}))`}}>
    <video ref={video} src={src} playsInline preload="metadata" onLoadedMetadata={e=>{const v=e.currentTarget;setDuration(Number.isFinite(v.duration)?v.duration:0);if(v.videoWidth&&v.videoHeight)setRatio(v.videoWidth/v.videoHeight);if(pending.current!=null){v.currentTime=pending.current;pending.current=null;}}} onDurationChange={e=>{if(Number.isFinite(e.currentTarget.duration))setDuration(e.currentTarget.duration);}} onLoadedData={e=>{if(Number.isFinite(e.currentTarget.duration))setDuration(e.currentTarget.duration);}} onCanPlay={e=>{if(Number.isFinite(e.currentTarget.duration))setDuration(e.currentTarget.duration);}} onTimeUpdate={e=>setTime(e.currentTarget.currentTime)} onSeeked={e=>setTime(e.currentTarget.currentTime)} onPlay={()=>setPlaying(true)} onPause={()=>setPlaying(false)} onEnded={()=>setPlaying(false)} onError={()=>setError('The walkthrough could not load. Retry loading the record; your saved findings remain available.')} />
    <div className="walkthrough-marks" aria-label="Findings at this moment">{(showOverlays?visible:[]).map(f=>{
-    const b=f.boundingBox,p=f.point;if(!b&&!p)return null;
+    const {b,p}=place(f);if(!b&&!p)return null;
     return <button key={f.id} type="button" aria-label={`Damage: ${f.label}`} className={`walkthrough-mark is-damage ${f.id===selectedId?'is-selected':''} ${p?'is-pin':''}`} style={b?{left:`${b.x*100}%`,top:`${b.y*100}%`,width:`${b.width*100}%`,height:`${b.height*100}%`}:{left:`${p!.x*100}%`,top:`${p!.y*100}%`}} onMouseEnter={()=>setHover(f.id)} onMouseLeave={()=>setHover('')} onFocus={()=>setHover(f.id)} onBlur={()=>setHover('')} onClick={()=>select(f)}><span>{f.label}</span></button>;
    })}</div>
    {marking&&<div className="walkthrough-capture" role="button" tabIndex={0} aria-label="Click the damage in this frame to mark it" onClick={capture}>{draft&&<span className="walkthrough-draft" style={{left:`${draft.point.x*100}%`,top:`${draft.point.y*100}%`}}/>}{!draft&&<em>Click the damage</em>}</div>}
