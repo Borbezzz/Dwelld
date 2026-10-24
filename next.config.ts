@@ -27,7 +27,6 @@ const nextConfig: NextConfig = {
     "/api/inspections/[inspectionId]/spatial": [models.crack, models.yolo],
     "/api/live/[sessionId]/spatial": [models.crack, models.yolo],
     "/api/live/[sessionId]/analyze": [models.crack],
-    "/api/live/[sessionId]/frame": [models.crack],
   },
 };
 export default nextConfig;

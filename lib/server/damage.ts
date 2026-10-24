@@ -3,7 +3,7 @@ import sharp from "sharp";
 
 /** Normalized top-left x/y and width/height, relative to the displayed source image. */
 export type Box = { x: number; y: number; width: number; height: number };
-export const DAMAGE_TYPES = ["scratch", "scuff", "crack", "chip", "dent", "hole", "stain", "chipped paint", "tear", "broken component", "other"] as const;
+export const DAMAGE_TYPES = ["scratch", "scuff", "crack", "chip", "dent", "hole", "stain", "residue", "chipped paint", "tear", "broken component", "other"] as const;
 export type DamageObservation = { type: typeof DAMAGE_TYPES[number]; description: string; boundingBox: Box | null };
 
 export function validBox(value: unknown): Box | null {
@@ -150,11 +150,13 @@ export async function describeMarkedDamage(image: Buffer): Promise<DamageObserva
 }
 
 /** What to look for on each surface we inspect. Narrow scopes are far more accurate than "find any damage". */
+const NOT_DAMAGE = "These are NOT damage, never report them: the gap or seam where a door meets its frame or a wall, corners and junctions between surfaces, skirting and architrave joints, panel lines, hinges, fabric folds and creases in clothes, bedding or curtains, wood grain, wallpaper or paint texture, reflections, shadows and light gradients, cables, and anything that would come off with a wipe of a dry cloth. When unsure, leave it out.";
+/** What to look for on each surface we inspect. Narrow scopes are far more accurate than "find any damage". */
 export const INSPECTION_SCOPES = {
-  table: "This crop shows a table. Inspect only the table (top, edges, legs) for scratches, scuffs, chips, cracks, dents, burns, water rings or stains. Ignore objects sitting on it, reflections and wood grain.",
-  cabinet: "This crop shows a cabinet, wardrobe or chest of drawers. Inspect only its doors, drawer fronts, sides and top for scratches, scuffs, chips, cracks, dents, broken handles or hinges. Ignore wood grain, handles' normal shape and shadows between doors.",
-  door: "This crop shows a door. Inspect only the door leaf and frame for scuffs, dents, cracks, holes, chipped paint or broken handles. Ignore hinges, normal panel lines and shadows.",
-  wall: "Inspect the walls only, not the floor, ceiling, furniture, doors, windows, pictures, sockets or switches. Report cracks, holes, scuffs or marks, chipped or peeling paint, and damp or water stains. Ignore shadows, light gradients, skirting joints and wallpaper patterns.",
+  table: `This crop shows a table. Inspect only the table (top, edges, legs) for scratches, scuffs, chips, cracks, dents, burns, water rings, stains or sticker/adhesive residue. Ignore objects sitting on it. ${NOT_DAMAGE}`,
+  cabinet: `This crop shows a cabinet, wardrobe or chest of drawers. Inspect only its doors, drawer fronts, sides and top for scratches, scuffs, chips, cracks, dents, broken handles or hinges, and sticker/adhesive residue. Ignore anything stored on or in it. ${NOT_DAMAGE}`,
+  door: `This crop shows a door. Inspect the door leaf for holes or punctures (including a fist-sized hole or cracked panel), dents, scuffs, chipped paint, cracks in the panel itself, and sticker/adhesive residue. A hole shows as a dark opening, broken edges or exposed honeycomb/cardboard core: report it as "hole". ${NOT_DAMAGE}`,
+  wall: `Inspect the walls and any doors in this photo, not the floor, ceiling, furniture, windows, pictures, sockets or switches. Report holes (screw, nail or impact holes), cracks running across the plaster, scuffs and marks, chipped or peeling paint, damp or water stains, and sticker, tape or adhesive residue. ${NOT_DAMAGE}`,
 } as const;
 export async function inspectScoped(image: Buffer, scope: keyof typeof INSPECTION_SCOPES, box?: Box): Promise<DamageObservation[]> {
   if (!box) return inspect(await sharp(image).png().toBuffer(), INSPECTION_SCOPES[scope]);

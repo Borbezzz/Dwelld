@@ -1,6 +1,5 @@
 import sharp from "sharp";
 import { inspectScoped, type Box } from "./damage";
-import { inspectCracks } from "./crack-detector";
 import { verifyFinding, autoApproveThreshold, type Verdict } from "./verify";
 
 /** Camera pose of one evidence photo, in the scan's world space (ARKit, metres, Y up, column-major). */
@@ -13,7 +12,8 @@ export type ElementView = { elementId: string; category: string; box: Box; area:
 /** Only these are inspected: surfaces where scuffs, scratches and cracks can be judged reliably from a photo. */
 export function scopeFor(category: string): Scope | null {
   const c = category.toLowerCase().replace(/[^a-z]/g, "");
-  return c === "table" ? "table" : c === "storage" ? "cabinet" : c === "door" ? "door" : null;
+  // RoomPlan names doors "door(isOpen: false)", so match on the prefix.
+  return c === "table" ? "table" : c === "storage" ? "cabinet" : c.startsWith("door") ? "door" : null;
 }
 const NAMES: Record<string, string> = { table: "Table", cabinet: "Cabinet", door: "Door", wall: "Wall" };
 
@@ -67,6 +67,7 @@ function hitElement(px: number, py: number, pose: FramePose, e: RoomElement): { 
   return { point: [0, 1, 2].map(i => o[i] + dir[i] * hit) as V3, t: hit };
 }
 const centre = (b: Box): [number, number] => [b.x + b.width / 2, b.y + b.height / 2];
+const iou = (a: Box, b: Box) => { const w = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x)), h = Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y)), i = w * h; return i / (a.width * a.height + b.width * b.height - i || 1); };
 
 /**
  * One evidence photo: inspect the tables, cabinets and doors RoomPlan says are in view (cropped from
@@ -80,7 +81,7 @@ export async function analyzeEvidenceFrame(image: Buffer, pose: FramePose, eleme
     ? { ...pose, intrinsics: pose.intrinsics.map((v, i) => i === 0 || i === 6 ? v * meta.width! / pose.width : i === 4 || i === 7 ? v * meta.height! / pose.height : v), width: meta.width, height: meta.height } : pose;
   const views = elements.map(e => elementInView(e, scaled)).filter((v): v is ElementView => !!v);
   const targets = views.filter(v => scopeFor(v.category)).sort((a, b) => b.area - a.area).slice(0, 3);
-  const walls = elements.filter(e => /wall/i.test(e.category));
+  const walls = elements.filter(e => /wall|door/i.test(e.category));
   const out: FrameFinding[] = [];
   const add = (label: string, o: { type: string; description: string; boundingBox: Box | null }, element: RoomElement | null, source: FrameFinding["detectionSource"]) => {
     let worldPosition: V3 | null = null, owner = element;
@@ -89,15 +90,19 @@ export async function analyzeEvidenceFrame(image: Buffer, pose: FramePose, eleme
       if (element) worldPosition = hitElement(px, py, scaled, element)?.point ?? null;
       else { const hits = walls.map(w => ({ w, h: hitElement(px, py, scaled, w) })).filter(x => x.h).sort((a, b) => a.h!.t - b.h!.t); if (hits[0]) { owner = hits[0].w; worldPosition = hits[0].h!.point; } }
     }
+    const ownerScope = owner && scopeFor(owner.category);
+    if (!element && ownerScope === "door") label = NAMES.door;
+    // The same mark seen by a furniture crop and by the whole-photo pass is reported once.
+    if (o.boundingBox && out.some(f => f.boundingBox && iou(f.boundingBox, o.boundingBox!) > .35)) return;
     out.push({ label: `${label}: ${o.type}`, description: o.description, damageType: o.type, boundingBox: o.boundingBox, elementId: owner?.id ?? null, elementCategory: owner?.category ?? (element ? element.category : "wall"), worldPosition, detectionSource: source, reviewStatus: "pending", autoApproved: false });
   };
-  await Promise.allSettled([
-    ...targets.map(async v => { const scope = scopeFor(v.category)!, el = elements.find(e => e.id === v.elementId)!; for (const o of await inspectScoped(image, scope, v.box)) add(NAMES[scope], o, el, "gemini"); }),
-    ...(options.walls && walls.length ? [
-      inspectScoped(image, "wall").then(list => list.forEach(o => add(NAMES.wall, o, null, "gemini"))),
-      inspectCracks(image).then(list => list.forEach(c => add(NAMES.wall, { type: "crack", description: `Crack model candidate (${Math.round(c.confidence * 100)}% model score). Joints and shadows can look similar.`, boundingBox: c.boundingBox }, null, "crack-model"))),
-    ] : []),
+  // Both passes run at once; crop results are added first so they win when the same mark is seen twice.
+  const [crops, whole] = await Promise.all([
+    Promise.all(targets.map(async v => ({ v, list: await inspectScoped(image, scopeFor(v.category)!, v.box).catch(() => []) }))),
+    options.walls && walls.length ? inspectScoped(image, "wall").catch(() => []) : Promise.resolve([]),
   ]);
+  for (const { v, list } of crops) { const scope = scopeFor(v.category)!, el = elements.find(e => e.id === v.elementId)!; list.forEach(o => add(NAMES[scope], o, el, "gemini")); }
+  whole.forEach(o => add(NAMES.wall, o, null, "gemini"));
   // Cross-check: a second, adversarial Gemini look at each finding.
   const threshold = autoApproveThreshold();
   await Promise.allSettled(out.filter(f => f.boundingBox).map(async f => {
@@ -106,6 +111,6 @@ export async function analyzeEvidenceFrame(image: Buffer, pose: FramePose, eleme
     if (v.verdict === "damage" && v.confidence >= threshold) { f.reviewStatus = "confirmed"; f.autoApproved = true; }
   }));
   // Findings the verifier is confident are not damage are dropped rather than shown.
-  const kept = out.filter(f => !(f.verification?.verdict === "not_damage" && f.verification.confidence >= .8));
+  const kept = out.filter(f => !(f.verification?.verdict === "not_damage" && f.verification.confidence >= .6));
   return { findings: kept, views, dropped: out.length - kept.length };
 }
