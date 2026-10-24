@@ -11,7 +11,7 @@
 }
 
 /* Browser surfaces carry the palette too */
-::selection{background:#dfe6d4;color:#22301f}
+::selection{background:#e6e3dc;color:#302e28}
 input,textarea{caret-color:var(--mark-ink)}
 *{scrollbar-color:#c9cdbf transparent;scrollbar-width:thin}
 
@@ -85,7 +85,7 @@ input,textarea{caret-color:var(--mark-ink)}
 .room-row-actions>button,.room-row-actions>a{display:inline-flex;align-items:center;justify-content:center;flex:0 0 32px;width:32px;height:32px;padding:0;margin:0;border-radius:50%;line-height:0}
 .landing-room:hover .room-row-actions svg{transform:none}
 .room-row-actions>a:hover{background:#e3e4da}
-.room-row-actions>a:focus-visible,.room-delete:focus-visible{outline:2px solid #59664e;outline-offset:3px}
+.room-row-actions>a:focus-visible,.room-delete:focus-visible{outline:1px dashed var(--focus-outline);outline-offset:3px}
 .room-delete{border:0;background:none;padding:0;margin:0;color:#9a6a5c;cursor:pointer;opacity:0;transform:translateX(4px);transition:opacity .16s ease,transform .16s ease;line-height:0;border-radius:50%}
 .landing-room:hover .room-delete,.room-delete:focus-visible{opacity:1;transform:none}.room-delete:hover{color:#9a3f2c;background:#f2e7e2}
 @media(hover:none){.room-delete{opacity:.7;transform:none}}

@@ -7,7 +7,7 @@
 .ask-records .argon-source{display:inline-flex;vertical-align:middle;align-items:center;justify-content:center;gap:6px;width:auto;height:auto;min-height:28px;max-width:100%;margin:2px 1px;padding:4px 9px;border:1px solid #d7ddcf;border-radius:var(--argon-radius-detail);background:#eef1e8;color:#414d3b;font-family:inherit;font-size:11px;font-weight:500;line-height:1.5;text-decoration:none;text-align:left;white-space:normal;transition:background .15s,border-color .15s}
 .argon-source-label{overflow-wrap:anywhere}.argon-source-time{flex:none;font-size:10px;font-variant-numeric:tabular-nums;opacity:.7}.argon-source svg{flex:none}
 .ask-records button.argon-source:hover,.ask-records a.argon-source:hover{background:#e1e8d8;border-color:#a9b49c}.ask-records .argon-source-static{background:#f2f0e9;border-color:#e1ddd3;color:#706b61}
-.ask-records .argon-source:focus-visible,.scan-chat button:focus-visible,.scan-chat input:focus-visible{outline:2px solid #667b55;outline-offset:3px}
+.ask-records .argon-source:focus-visible,.scan-chat button:focus-visible{outline:1px dashed var(--focus-outline);outline-offset:3px}
 .argon-answer-copy{font-size:14px;line-height:1.85;color:#4f4c43;overflow-wrap:anywhere}.argon-answer-copy p{margin:0 0 14px;white-space:pre-line}.argon-answer-copy p:last-child{margin-bottom:0}.argon-answer-copy strong{font-weight:600;color:#302e28}.argon-answer-copy ul{margin:0 0 14px;padding-left:20px}.argon-answer-copy li+li{margin-top:8px}.argon-citations{white-space:normal}
 .argon-related{border-top:1px solid #e9e5dc;padding-top:12px;margin-top:18px}.argon-related>span{display:block;font-size:10px;color:#827d71;margin-bottom:6px}.argon-related>div{display:flex;flex-wrap:wrap;gap:4px}
 .scan-chat .ask-answer{padding:24px;max-height:min(65dvh,580px);overflow:auto}.scan-chat .ask-answer header{margin-bottom:22px}.scan-chat .ask-answer h2{font-size:24px}.scan-chat .scan-chat-turns{max-height:none;overflow:visible;padding-right:0}.scan-chat .scan-chat-question{width:fit-content;max-width:92%;margin:0 0 16px auto;padding:9px 13px;border-radius:var(--argon-radius-message);background:#f0eee7;font-size:12px;line-height:1.6;color:#625e54}.scan-chat .scan-chat-turn+.scan-chat-turn{margin-top:24px;padding-top:24px;border-color:#e9e5dc}
@@ -15,3 +15,6 @@
 @keyframes argon-dot{0%,70%,100%{opacity:.2;transform:scale(.8)}35%{opacity:1;transform:scale(1.2)}}@keyframes argon-shimmer{to{background-position:-200% 0}}
 @media(max-width:600px){.scan-chat .ask-answer{padding:18px}.scan-chat .ask-answer h2{font-size:22px}.argon-answer-copy{font-size:13px}.argon-thinking{gap:8px}}
 @media(prefers-reduced-motion:reduce){.argon-thinking-grid>span,.argon-thinking-label{animation:none}.argon-thinking-grid>span{opacity:.6}.argon-thinking-label{background:none;color:#706b61}.ask-records .argon-source{transition:none}}
+
+/* The composer stays quiet while typing; keyboard focus on actions uses neutral ink. */
+.ask-records .ask-composer input:focus,.ask-records .ask-composer input:focus-visible{outline:none;box-shadow:none}

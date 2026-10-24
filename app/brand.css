@@ -9,7 +9,7 @@
 .landing-footer .dwelld-logo{font-size:25px}
 .dwelld-logo--compact{font-size:24px}
 /* Keyboard focus only, drawn like the 3D view's outlines: a fine dashed ink line, never a green halo. */
-.landing a:focus-visible,.landing button:focus-visible,.landing summary:focus-visible,.editorial-page a:focus-visible,.ask-records button:focus-visible{outline:1px dashed #364b40;outline-offset:4px}
+.landing a:focus-visible,.landing button:focus-visible,.landing summary:focus-visible,.editorial-page a:focus-visible,.ask-records button:focus-visible{outline:1px dashed var(--focus-outline);outline-offset:4px}
 .landing-header nav a{transition:color .18s ease}
 .landing-header nav a:hover{color:#364b40}
 @media(max-width:600px){.landing-header .dwelld-logo{font-size:25px}.landing-footer .dwelld-logo{font-size:23px}.landing-header nav{gap:16px}}
