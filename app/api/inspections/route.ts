@@ -32,7 +32,9 @@ export async function GET(request: Request) {
     const db = await getDb();
     await ensureIndexes(db);
     const memberships=await db.collection("spaceMembers").find({userId:user.id},{projection:{spaceId:1}}).toArray();
-    const sharedRooms=memberships.length?await db.collection("rooms").find({spaceId:{$in:memberships.map(m=>m.spaceId)}},{projection:{_id:1}}).toArray():[];
+    const ownedSpaces=await db.collection("spaces").find({ownerId:user.id},{projection:{_id:1}}).toArray();
+    const visibleSpaceIds=[...ownedSpaces.map(s=>s._id),...memberships.map(m=>m.spaceId)];
+    const sharedRooms=visibleSpaceIds.length?await db.collection("rooms").find({spaceId:{$in:visibleSpaceIds}},{projection:{_id:1}}).toArray():[];
     const accessible=[...sharedRooms.map(r=>r._id),...(await db.collection("rooms").find({ownerId:user.id},{projection:{_id:1}}).toArray()).map(r=>r._id)];
     const docs = await db.collection("inspections").find({$or:[{ownerId:user.id},{roomId:{$in:accessible}}],...(roomId ? {roomId} : {})}).sort({ createdAt: -1 }).limit(100).toArray();
     return NextResponse.json({ inspections: docs.map(d=>serializeInspection(d,user.id)) });
