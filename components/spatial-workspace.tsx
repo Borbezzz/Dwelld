@@ -19,11 +19,11 @@ export default function SpatialWorkspace({ inspectionId }: { inspectionId: strin
   async function importFiles(files: FileList | null) {
     if (!files) return; setBusy("Reading capture…"); setError("");
     try {
-      const all = [...files], source = all.find(f => f.name === "manifest.json"); if (!source) throw new Error("Select manifest.json together with the capture's images, depth and USDZ files.");
+      const all = [...files], filesByName = new Map(all.map(file => [file.name, file])), source = filesByName.get("manifest.json"); if (!source) throw new Error("Select manifest.json together with the capture's images, depth and USDZ files.");
       if (source.size > 2 * 1024 * 1024) throw new Error("Manifest exceeds 2 MB");
       const m = JSON.parse(await source.text()) as SpatialManifest;
       if (m.version !== 1 || !Array.isArray(m.assets) || m.assets.length > 1805) throw new Error("Unsupported capture manifest");
-      for (let i = 0; i < m.assets.length; i++) { const asset = m.assets[i], file = all.find(f => f.name === asset.name); if (!file) throw new Error(`Missing ${asset.name}`); setBusy(`Uploading ${i + 1}/${m.assets.length} assets…`); asset.mediaRef = await uploadSpatial(file, asset.kind === "image" ? "image/jpeg" : asset.kind === "usdz" ? "model/vnd.usdz+zip" : "application/octet-stream"); }
+      for (let i = 0; i < m.assets.length; i++) { const asset = m.assets[i], file = filesByName.get(asset.name); if (!file) throw new Error(`Missing ${asset.name}`); setBusy(`Uploading ${i + 1}/${m.assets.length} assets…`); asset.mediaRef = await uploadSpatial(file, asset.kind === "image" ? "image/jpeg" : asset.kind === "usdz" ? "model/vnd.usdz+zip" : "application/octet-stream"); }
       const r = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(m) }); const b = await r.json(); if (!r.ok) throw new Error(b.error); await load();
     } catch (e) { setError(e instanceof Error ? e.message : "Import failed"); } finally { setBusy(""); }
   }
