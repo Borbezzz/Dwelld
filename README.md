@@ -222,13 +222,14 @@ sequenceDiagram
     participant A as Next.js API
     participant M as MongoDB / GridFS
     participant G as Gemini
-    B->>B: Decode video; YOLO at 15%, 50%, 85%
+    B->>B: Decode and sample video
+    B->>B: Run YOLO at three timestamps
     B->>A: Initialize, upload sequential parts, complete
     A->>M: Assemble validated original video
     B->>A: Submit media reference and detection frames
     A->>M: Save processing inspection
     A-->>B: Inspection ID
-    Note over A,G: after() work within function lifetime
+    Note over A,G: Analysis runs within the function lifetime
     A->>A: FFmpeg extracts original-resolution frames
     A->>G: Object crops, furniture fallback, surfaces
     A->>A: Specialized crack inference
