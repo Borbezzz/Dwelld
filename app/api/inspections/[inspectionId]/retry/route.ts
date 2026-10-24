@@ -39,7 +39,7 @@ export async function POST(request: Request, {params}: {params: Promise<{inspect
       return existing?NextResponse.json({inspection:{id:String(existing._id)}}):NextResponse.json({error:'A retry is being prepared. Please try again in a moment.'},{status:409});
     }
     try {
-      await inspections.insertOne({_id:id, ownerId:user.id, roomId:source.roomId, type:source.type||'move-in', sourceUrl:source.sourceUrl, videoMimeType:source.videoMimeType, detectionFrames, detector:source.detector||'yolo11n-coco', sourceInspectionId:source._id, status:'processing', createdAt:new Date(), durationSeconds:null});
+      await inspections.insertOne({_id:id, ownerId:user.id, roomId:source.roomId, type:source.type||'move-in',...(source.baselineInspectionId?{baselineInspectionId:source.baselineInspectionId}:{}), sourceUrl:source.sourceUrl, videoMimeType:source.videoMimeType, detectionFrames, detector:source.detector||'yolo11n-coco', sourceInspectionId:source._id, status:'processing', createdAt:new Date(), durationSeconds:null});
     } catch (error) {
       await inspections.updateOne({_id:source._id,retryInspectionId:id},{$unset:{retryInspectionId:''}});
       throw error;

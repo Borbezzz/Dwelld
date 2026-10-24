@@ -6,8 +6,8 @@ import { api } from "@/lib/api";
 import { detectVideoFrames } from "@/lib/client/video-detection";
 import { MAX_VIDEO_BYTES, uploadVideo } from "@/lib/client/upload-video";
 
-export default function InspectionUpload({ roomId, roomName, type, onBusy }: {
-  roomId: string; roomName: string; type: "move-in" | "move-out"; onBusy: (busy: boolean) => void;
+export default function InspectionUpload({ roomId, roomName, type, baselineId, onBusy }: {
+  baselineId?:string; roomId: string; roomName: string; type: "move-in" | "move-out"; onBusy: (busy: boolean) => void;
 }) {
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState("");
@@ -56,7 +56,7 @@ export default function InspectionUpload({ roomId, roomName, type, onBusy }: {
       const target = roomId || createdRoom.current || (await api.createRoom(roomName.trim() || "My room")).room.id;
       createdRoom.current = target;
       controller.signal.throwIfAborted();
-      const { inspection } = await api.createInspection(target, asset.url, asset.contentType, frames, type);
+      const { inspection } = await api.createInspection(target, asset.url, asset.contentType, frames, type,baselineId);
       window.location.assign(`/inspections/${inspection.id}`);
     } catch (e) {
       if (!controller.signal.aborted) setError(e instanceof Error ? e.message : "Could not start the inspection. Please retry.");

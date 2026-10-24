@@ -40,3 +40,13 @@ test('parallel report image loading is bounded and preserves chronological model
   assert.deepEqual(stamps,[1,2,3,4,5,6,7,8,9,10]);assert(peak>1);assert(peak<=4);
  }finally{if(saved===undefined)delete process.env.GEMINI_API_KEY;else process.env.GEMINI_API_KEY=saved;}
 });
+test('checkout uses the selected check-in and persists its identity before running the comparison',async()=>{
+ const previous=process.env.GEMINI_API_KEY;process.env.GEMINI_API_KEY='test';
+ const baselineId=new ObjectId(),current={_id:new ObjectId(),ownerId:'owner',roomId:new ObjectId(),type:'move-out',baselineInspectionId:baselineId,createdAt:new Date(),evidenceFrames:[{url:'gridfs:a',timestampSeconds:1}]},baseline={_id:baselineId};
+ const writes=[];let query,compared;
+ const inspections={findOne:async()=>current,updateOne:async(q,u)=>writes.push(u),find:q=>{query=q;return {sort:()=>({limit:()=>({next:async()=>baseline})})};}};
+ const db={collection:name=>name==='inspections'?inspections:name==='findings'?{find:()=>({limit:()=>({toArray:async()=>[]})}),updateOne:async()=>{}}:name==='comparisons'?{insertOne:async()=>({insertedId:new ObjectId()})}:{findOne:async()=>null}};
+ const client=load({'@google/genai':{GoogleGenAI:class{models={generateContent:async()=>({text:JSON.stringify(report)})}}},sharp:()=>({rotate(){return this},resize(){return this},jpeg(){return this},toBuffer:async()=>Buffer.from('pixels')}),'./media':{readMedia:async()=>Buffer.from('image')},'./comparison':{compareInspections:async(b,c,options)=>{compared=[b,c];assert(writes.some(w=>w.$set?.reportComparisonStatus==='processing'&&String(w.$set.baselineInspectionId)===String(baselineId)));await options.onProgress({phase:'Loading comparison images',processed:1,total:2});return {changes:[]};}}});
+ try{await client.finishScanReport(db,current._id);assert.equal(String(query._id),String(baselineId));assert.equal(String(query.roomId),String(current.roomId));assert.equal(compared[0],baseline);assert.equal(compared[1],current);assert(writes.some(w=>w.$set?.comparisonProgress?.processed===1));assert.equal(writes.at(-1).$set.scanReportStatus,'ready');}
+ finally{if(previous===undefined)delete process.env.GEMINI_API_KEY;else process.env.GEMINI_API_KEY=previous;}
+});

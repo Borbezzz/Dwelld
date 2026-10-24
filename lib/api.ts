@@ -14,7 +14,7 @@ export const api = {
   createRoom: (name: string, spaceId?: string) => request<{ room: Room }>("/api/rooms", { method: "POST", body: JSON.stringify({ name, ...(spaceId ? { spaceId } : {}) }) }),
   room: (id: string) => request<{ room: Room }>(`/api/rooms/${id}`),
   inspections: () => request<{ inspections: Inspection[] }>("/api/inspections"),
-  createInspection: (roomId: string, videoUrl: string, videoMimeType: string, detectionFrames: DetectionFrame[], type: "move-in" | "move-out" = "move-in") => request<{ inspection: Inspection }>("/api/inspections", { method: "POST", body: JSON.stringify({ roomId, videoUrl, videoMimeType, detectionFrames, type }) }),
+  createInspection: (roomId: string, videoUrl: string, videoMimeType: string, detectionFrames: DetectionFrame[], type: "move-in" | "move-out" = "move-in",baselineInspectionId?:string) => request<{ inspection: Inspection }>("/api/inspections", { method: "POST", body: JSON.stringify({ roomId, videoUrl, videoMimeType, detectionFrames, type,baselineInspectionId }) }),
   inspection: (id: string, roomId?: string) => request<{ inspection: Inspection; findings: Finding[] }>(`/api/inspections/${id}${roomId ? `?roomId=${encodeURIComponent(roomId)}` : ""}`),
   review: (inspectionId: string, findingId: string, reviewStatus: ReviewStatus) => request<{ finding: Finding }>(`/api/inspections/${inspectionId}/findings/${findingId}`, { method: "PATCH", body: JSON.stringify({ reviewStatus }) })
 };

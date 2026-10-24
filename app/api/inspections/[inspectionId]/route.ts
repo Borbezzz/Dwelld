@@ -1,3 +1,4 @@
+import {recoverStalledInspection} from "@/lib/server/processing-recovery";
 import { requireUser, requireOwnedInspection } from "@/lib/server/access";
 import { canReadRoom,requireReadableInspection } from "@/lib/server/space-access";
 import { deleteInspection } from "@/lib/server/delete";
@@ -24,6 +25,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ insp
       const target=await db.collection("rooms").findOne({_id:targetId});
       if(!segment||!target||!await canReadRoom(target as never,user.id))return NextResponse.json({error:"Room not found"},{status:404});
     }
+    await recoverStalledInspection(db,inspection);
     const findingFilter={inspectionId:id,reportEntry:{$ne:true},...(segment?{timestampSeconds:{$gte:segment.startTime,$lt:segment.endTime}}:{})};
     const findings = await db.collection("findings").find(findingFilter).sort({ createdAt: 1 }).toArray();
     const serializedFindings = findings.map((f) => ({
@@ -37,6 +39,8 @@ export async function GET(request: Request, { params }: { params: Promise<{ insp
       inspection: {
         captureSource: inspection.captureSource || "video", id: String(inspection._id), roomId: String(targetId), status: inspection.status, type: inspection.type || "move-in",isOwner:inspection.ownerId===user.id,virtual:String(targetId)!==String(inspection.roomId),
         createdAt: new Date(inspection.createdAt).toISOString(),
+    comparisonProgress:inspection.comparisonProgress,comparisonBaselineCreatedAt:inspection.comparisonBaselineCreatedAt,baselineInspectionId:inspection.baselineInspectionId?String(inspection.baselineInspectionId):undefined, reportComparisonStatus:inspection.reportComparisonStatus, searchIndexStatus:inspection.searchIndexStatus, searchIndexError:inspection.searchIndexError, framesAnalysed:inspection.framesAnalysed,
+
         videoUrl: typeof inspection.sourceUrl === "string" ? "/api/inspections/" + String(inspection._id) + "/video" : undefined,
         durationSeconds: inspection.durationSeconds ?? null,
         analysisWarnings: inspection.analysisWarnings ?? [],

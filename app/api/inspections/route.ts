@@ -1,3 +1,4 @@
+import {recoverStalledInspection} from "@/lib/server/processing-recovery";
 import { sealLater } from "@/lib/server/ledger";
 import {readJsonBody} from "@/lib/server/request-body";
 import { canReadRoom } from "@/lib/server/space-access";
@@ -19,6 +20,8 @@ function serializeInspection(doc: Record<string, any>, viewerId: string) {
   return {
     id: String(doc._id), roomId: String(doc.roomId), status: doc.status, type: doc.type || "move-in", isOwner: doc.ownerId===viewerId,
     createdAt: new Date(doc.createdAt).toISOString(),
+    comparisonProgress:doc.comparisonProgress,comparisonBaselineCreatedAt:doc.comparisonBaselineCreatedAt,baselineInspectionId:doc.baselineInspectionId?String(doc.baselineInspectionId):undefined, reportComparisonStatus:doc.reportComparisonStatus, searchIndexStatus:doc.searchIndexStatus, searchIndexError:doc.searchIndexError, framesAnalysed:doc.framesAnalysed,
+scanReportStatus:doc.scanReportStatus,scanReportError:doc.scanReportError,analysisProgress:doc.analysisProgress,reportComparison:doc.reportComparison,reportComparisonError:doc.reportComparisonError,
     ...(typeof doc.sourceUrl === "string" ? { videoUrl: "/api/inspections/" + String(doc._id) + "/video" } : {}),
   };
 }
@@ -43,6 +46,7 @@ export async function GET(request: Request) {
     const virtual=segments.flatMap(s=>{const source=sources.find(i=>String(i._id)===String(s.sourceInspectionId));if(!source||String(source.roomId)===String(s.roomId))return [];
       return [{...serializeInspection(source,user.id),roomId:String(s.roomId),virtual:true,segment:{startTime:s.startTime,endTime:s.endTime}}];
     });
+    await Promise.all(docs.map(d=>recoverStalledInspection(db,d)));
     const inspections=[...docs.map(d=>serializeInspection(d,user.id)),...virtual].sort((a,b)=>+new Date(b.createdAt)-+new Date(a.createdAt)).slice(0,100);
     return NextResponse.json({inspections},{headers:{"Cache-Control":"private, no-store"}});
   } catch (error) { return errorResponse(error, "app/api/inspections/route.ts"); }
@@ -51,7 +55,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const user = await requireUser(request);
-    const body = await readJsonBody(request, 1024*1024) as { roomId?: unknown; videoUrl?: unknown; videoMimeType?: unknown; detectionFrames?: unknown; type?: unknown };
+    const body = await readJsonBody(request, 1024*1024) as { roomId?: unknown; videoUrl?: unknown; videoMimeType?: unknown; detectionFrames?: unknown; type?: unknown;baselineInspectionId?:unknown };
     if (body.type !== undefined && !["move-in","move-out"].includes(String(body.type))) return NextResponse.json({error:"Invalid inspection type"},{status:400});
     const roomId = typeof body.roomId === "string" ? parseObjectId(body.roomId) : null;
     const videoUrl = typeof body.videoUrl === "string" ? body.videoUrl : "";
@@ -78,8 +82,10 @@ export async function POST(request: Request) {
     const inspections = db.collection("inspections");
     const inspectionId = new ObjectId();
     const createdAt = new Date();
+    const baselineId=typeof body.baselineInspectionId==='string'?parseObjectId(body.baselineInspectionId):null;
+    if(body.baselineInspectionId&&(!baselineId||body.type!=='move-out'||!await db.collection('inspections').findOne({_id:baselineId,roomId,type:'move-in',status:{$in:['completed','partial']}})))return NextResponse.json({error:'Choose a finished check-in from this room.'},{status:400});
     const inspectionDoc = {
-      _id: inspectionId, ownerId:user.id, roomId, type: body.type || "move-in", sourceUrl: videoUrl, videoMimeType: mimeType,
+      _id: inspectionId, ownerId:user.id, roomId, type: body.type || "move-in",...(baselineId?{baselineInspectionId:baselineId}:{}), sourceUrl: videoUrl, videoMimeType: mimeType,
       status: "processing", createdAt, durationSeconds: null, detector: "yolo11n-coco", detectionFrames,
     };
     await inspections.insertOne(inspectionDoc);

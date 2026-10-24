@@ -54,14 +54,15 @@ export async function finishScanReport(db:Db,inspectionId:ObjectId,deadlineMs=Da
   if(deadlineMs-Date.now()<5000)throw new Error("Room report time budget exhausted");
   await db.collection('inspections').updateOne({_id:inspectionId},{$set:{scanReportStatus:'processing'}});
   await generateScanReport(db,inspectionId,Math.min(45_000,deadlineMs-Date.now()));
+  await db.collection('inspections').updateOne({_id:inspectionId},{$set:{scanReportStatus:"ready"}});
   const current=await db.collection('inspections').findOne({_id:inspectionId});
   if(current?.type==='move-out') {
-   const baseline=await db.collection('inspections').find({ownerId:current.ownerId,roomId:current.roomId,type:'move-in',status:{$in:['completed','partial']},createdAt:{$lt:current.createdAt}}).sort({createdAt:-1}).limit(1).next();
+   const baseline=await db.collection('inspections').find({...((current.baselineInspectionId)?{_id:current.baselineInspectionId}:{ownerId:current.ownerId}),roomId:current.roomId,type:'move-in',status:{$in:['completed','partial']},createdAt:{$lt:current.createdAt}}).sort({createdAt:-1}).limit(1).next();
    if(!baseline)await db.collection('inspections').updateOne({_id:inspectionId},{$set:{reportComparisonStatus:'not-applicable'}});
    if(baseline)try{
-    await db.collection('inspections').updateOne({_id:inspectionId},{$set:{reportComparisonStatus:'processing'}});
+    await db.collection('inspections').updateOne({_id:inspectionId},{$set:{reportComparisonStatus:'processing',baselineInspectionId:baseline._id,comparisonBaselineCreatedAt:baseline.createdAt,comparisonProgress:{phase:'Preparing saved evidence'}}});
     if(deadlineMs-Date.now()<10_000)throw new Error("Comparison time budget exhausted");
-    const result=await compareInspections(baseline,current,{timeoutMs:Math.min(60_000,deadlineMs-Date.now())});
+    const result=await compareInspections(baseline,current,{timeoutMs:Math.min(60_000,deadlineMs-Date.now()),onProgress:async progress=>{await db.collection('inspections').updateOne({_id:inspectionId},{$set:{comparisonProgress:progress}});}});
     const saved=await db.collection('comparisons').insertOne({...result,ownerId:current.ownerId,roomId:current.roomId,baselineInspectionId:baseline._id,currentInspectionId:inspectionId,createdAt:new Date(),reviews:[]});
     await db.collection('inspections').updateOne({_id:inspectionId},{$set:{reportComparisonStatus:'ready',reportComparison:{id:String(saved.insertedId),baselineInspectionId:String(baseline._id),flags:result.changes.filter(c=>['missing_or_changed','potentially_new','uncertain'].includes(c.category))}},$unset:{reportComparisonError:''}});
    }catch {await db.collection('inspections').updateOne({_id:inspectionId},{$set:{reportComparisonStatus:'failed',reportComparisonError:'Automatic checkout comparison could not finish. Compare the scans from your room overview.'}});}
