@@ -1,5 +1,6 @@
 import {readJsonBody} from "@/lib/server/request-body";
-import { requireUser } from "@/lib/server/access";
+import { requireUser, requireOwnedRoom } from "@/lib/server/access";
+import { deleteRoom } from "@/lib/server/delete";
 import { errorResponse } from "@/lib/server/api-error";
 import { NextResponse } from "next/server";
 import { getDb, parseObjectId } from "@/lib/server/db";
@@ -29,4 +30,12 @@ export async function PATCH(request: Request, {params}: {params: Promise<{roomId
  if(!room)return NextResponse.json({error:"Room not found"},{status:404});
  return NextResponse.json({room:{id:String(room._id),name:room.name,createdAt:new Date(room.createdAt).toISOString()}});
  }catch(error){return errorResponse(error,"room.update");}
+}
+
+export async function DELETE(request: Request, { params }: { params: Promise<{ roomId: string }> }) {
+  try {
+    const user = await requireUser(request);
+    const room = await requireOwnedRoom((await params).roomId, user.id);
+    return NextResponse.json({ deleted: true, ...(await deleteRoom(room)) });
+  } catch (error) { return errorResponse(error, "room.delete"); }
 }

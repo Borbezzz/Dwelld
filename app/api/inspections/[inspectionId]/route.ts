@@ -1,4 +1,5 @@
-import { requireUser } from "@/lib/server/access";
+import { requireUser, requireOwnedInspection } from "@/lib/server/access";
+import { deleteInspection } from "@/lib/server/delete";
 import { errorResponse } from "@/lib/server/api-error";
 import { NextResponse } from "next/server";
 import { getDb, parseObjectId } from "@/lib/server/db";
@@ -37,4 +38,16 @@ export async function GET(request: Request, { params }: { params: Promise<{ insp
   } catch (error) {
     return errorResponse(error, "app/api/inspections/[inspectionId]/route.ts");
   }
+}
+
+export async function DELETE(request: Request, { params }: { params: Promise<{ inspectionId: string }> }) {
+  try {
+    const user = await requireUser(request);
+    const inspection = await requireOwnedInspection((await params).inspectionId, user.id);
+    if (inspection.status === "processing" || inspection.status === "queued") {
+      const started = new Date(inspection.updatedAt || inspection.createdAt).getTime();
+      if (Date.now() - started < 10 * 60_000) return NextResponse.json({ error: "This scan is still being analysed. Try deleting it in a few minutes." }, { status: 409 });
+    }
+    return NextResponse.json({ deleted: true, ...(await deleteInspection(inspection)) });
+  } catch (error) { return errorResponse(error, "inspection.delete"); }
 }

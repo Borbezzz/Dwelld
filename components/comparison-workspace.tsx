@@ -7,6 +7,7 @@ import type { ComparisonRecord, ComparisonEvidence, ChangeType } from "@/lib/com
 import "@/app/comparison.css";
 import ComparisonSpatial from "./comparison-spatial";
 import PixelLoader from "./pixel-loader";
+import BrandLogo from "./brand-logo";
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> { const r = await fetch(url, init); const body = await r.json().catch(() => ({})); if (!r.ok) throw new Error(body.error || "Comparison request failed"); return body; }
 const CATEGORY: Record<ChangeType, { label: string; tone: string }> = {
@@ -75,7 +76,7 @@ export default function ComparisonWorkspace({ roomId, baselineId = "", currentId
   const changes = record ? [...record.changes].sort((x, y) => ORDER.indexOf(x.category) - ORDER.indexOf(y.category)) : [];
 
   return <main className="live-shell comparison-page">
-    <header className="live-topbar"><Link href="/" className="brand">dwelld.</Link><div className="session-breadcrumb"><span>{room?.name || "Room"}</span><i /> <b>What changed</b></div></header>
+    <header className="live-topbar"><BrandLogo linked compact /><div className="session-breadcrumb"><span>{room?.name || "Room"}</span><i /> <b>What changed</b></div></header>
     <div className="workspace-heading"><div><Link href={`/rooms/${roomId}`} className="back-link"><ArrowLeft size={14} aria-hidden="true" /> {room?.name || "Back to the room"}</Link><h1>What changed?</h1><p>Your move-in and move-out scans, side by side. Confirm what looks right and dismiss what doesn&apos;t.</p></div></div>
     <div className="compare-selection">
       <label>Earlier scan<select className="field" value={baseline} disabled={!!busy} onChange={e => { setBaseline(e.target.value); setRecord(null); }}><option value="">Choose a scan</option>{done.map(i => <option value={i.id} key={i.id}>{label(i)}</option>)}</select></label>

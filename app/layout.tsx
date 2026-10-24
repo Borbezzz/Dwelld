@@ -9,6 +9,7 @@ import "./landing.css";
 import "./editorial.css";
 import "./brand.css";
 import "./room.css";
+import "./marks.css";
 
 export const metadata: Metadata = {
   title: "dwelld. — Your room remembers",

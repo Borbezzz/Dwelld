@@ -14,6 +14,7 @@ import dynamic from 'next/dynamic';
 import {isFurniture,furnitureNames} from '@/lib/spatial/furniture';
 const LiveRoomView=dynamic(()=>import('./live-room-view'),{ssr:false});
 import PixelLoader from '../pixel-loader';
+import BrandLogo from '../brand-logo';
 import InspectionUpload from '../inspection-upload';
 import RoomHistory from '../room-history';
 
@@ -147,7 +148,7 @@ export default function LiveWorkspace({sessionId,phone=false,initialRoomId='',ne
  const stage=savedId?'saved':busy&&stopping.current?'saving':recording||session?.status==='recording'?'scanning':session?.paired?'connected':id?'pairing':'prepare';
  const health=session?.nativeCapture?'LiDAR capture connected':connected?'Connected':session?.paired&&connectionPhase==='Waiting for phone'?'Phone paired · open camera on your phone':connectionPhase;
  return <main className={`live-shell ${phone?'phone-workspace':''}`} data-stage={stage}>
-  <header className="live-topbar"><Link href="/" className="brand"><span className="brand-mark">d.</span>dwelld.</Link><div className="session-breadcrumb"><span>Room record</span><i/> <b>{stage==='prepare'?'Prepare':stage==='pairing'?'Pair your phone':stage==='scanning'?'Live inspection':stage==='saved'?'Saved for you':stage==='saving'?'Saving evidence':'Ready to scan'}</b></div></header>
+  <header className="live-topbar"><BrandLogo linked compact /><div className="session-breadcrumb"><span>Room record</span><i/> <b>{stage==='prepare'?'Prepare':stage==='pairing'?'Pair your phone':stage==='scanning'?'Live inspection':stage==='saved'?'Saved for you':stage==='saving'?'Saving evidence':'Ready to scan'}</b></div></header>
   <div className="workspace-heading"><div><Link href={(lockRoom||baseline)&&(session?.roomId||roomId)?`/rooms/${session?.roomId||roomId}`:'/'} className="back-link"><ArrowLeft size={14} aria-hidden="true"/> {(lockRoom||baseline)&&(session?.roomId||roomId)?(rooms.find(r=>r.id===(session?.roomId||roomId))?.name||'Your room'):'Your spaces'}</Link><h1>{savedId?'A little more peace of mind.':phone?'Let your room tell its story.':'Room inspection'}</h1><p>{phone?'Move slowly. Keep the details in view.': 'Your phone captures the room. The details come together here.'}</p></div><div className="connection-pill"><span className={connected?'connected-dot':'waiting-dot'}/>{savedId?'Record saved':health}</div></div>
   {error&&<div role="alert" className="notice error-notice">{error}<button onClick={()=>setError('')} aria-label="Dismiss message"><X size={16}/></button></div>}
   <div className="live-columns"><section className="live-stage-panel"><div className="live-stage-heading"><span>{manual?'MARK A SOURCE FRAME':evidence?'PRESERVED EVIDENCE':savedId?'YOUR INSPECTION':'THE ROOM, IN VIEW'}</span><div>{recording&&<span className="recording-dot"/>}<time>{Math.floor(elapsed/60)}:{String(elapsed%60).padStart(2,'0')}</time></div></div>

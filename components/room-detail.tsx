@@ -2,8 +2,10 @@
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { ArrowLeft, ArrowUpRight, Check, X } from "lucide-react";
 import { api } from "@/lib/api";
+import BrandLogo from "./brand-logo";
 import type { Finding, Inspection, Room } from "@/lib/types";
 import type { SpatialManifest, SpatialMarker } from "@/lib/spatial/types";
 import { furnitureNames, isFurniture, isFurnitureLabel } from "@/lib/spatial/furniture";
@@ -20,6 +22,8 @@ export default function RoomDetail({ roomId }: { roomId: string }) {
   const [room, setRoom] = useState<Room | null>(null), [scans, setScans] = useState<Inspection[] | null>(null), [error, setError] = useState("");
   const [current, setCurrent] = useState(""), [capture, setCapture] = useState<Capture | null>(null), [findings, setFindings] = useState<Finding[]>([]), [loadingScan, setLoadingScan] = useState(false);
   const [selected, setSelected] = useState<string | null>(null), [hovered, setHovered] = useState<string | null>(null), [busy, setBusy] = useState("");
+  const [confirming, setConfirming] = useState<"" | "scan" | "room">(""), [deleting, setDeleting] = useState(false);
+  const router = useRouter();
 
   const loadScans = useCallback(async () => {
     const [r, list] = await Promise.all([api.room(roomId), fetch(`/api/inspections?roomId=${roomId}`).then(async res => { const b = await res.json(); if (!res.ok) throw new Error(b.error || "Could not load scans"); return b.inspections as Inspection[]; })]);
@@ -73,6 +77,16 @@ export default function RoomDetail({ roomId }: { roomId: string }) {
     catch (e) { setError(e instanceof Error ? e.message : "Could not save your review"); } finally { setBusy(""); }
   }
 
+  async function remove(kind: "scan" | "room") {
+    setDeleting(true); setError("");
+    try {
+      const r = await fetch(kind === "scan" ? `/api/inspections/${current}` : `/api/rooms/${roomId}`, { method: "DELETE" });
+      const b = await r.json().catch(() => ({})); if (!r.ok) throw new Error(b.error || "Could not delete");
+      setConfirming("");
+      if (kind === "room") { router.push("/"); return; }
+      setCurrent(""); setCapture(null); setFindings([]); await loadScans();
+    } catch (e) { setError(e instanceof Error ? e.message : "Could not delete"); } finally { setDeleting(false); }
+  }
   const completed = (scans || []).filter(ready);
   const latest = completed[0], earliest = completed[completed.length - 1];
   const next = !completed.length ? { href: `/live?room=${roomId}&type=move-in`, label: "Start the move-in scan" } : { href: `/live?room=${roomId}&type=move-out&baseline=${latest.id}`, label: "Scan again to compare" };
@@ -85,7 +99,7 @@ export default function RoomDetail({ roomId }: { roomId: string }) {
   </li>;
 
   return <main className="live-shell room-detail">
-    <header className="live-topbar"><Link href="/" className="brand">dwelld.</Link><div className="session-breadcrumb"><span>Your spaces</span><i /> <b>{room?.name || "Room"}</b></div></header>
+    <header className="live-topbar"><BrandLogo linked compact /><div className="session-breadcrumb"><span>Your spaces</span><i /> <b>{room?.name || "Room"}</b></div></header>
     <div className="workspace-heading room-detail-heading">
       <div><Link href="/" className="back-link"><ArrowLeft size={14} aria-hidden="true" /> Your spaces</Link>
         {room ? <h1>{room.name}</h1> : <span className="skeleton" style={{ display: "block", width: 260, height: 44, margin: "12px 0 10px" }} />}
@@ -106,14 +120,12 @@ export default function RoomDetail({ roomId }: { roomId: string }) {
       </section>
       <aside className="room-detail-panel" aria-label="What was found">
         <div className="room-summary">
-          <p className="eyebrow">WHAT WE FOUND</p>
           {loadingScan || !scans ? <><span className="skeleton" style={{ display: "block", height: 18, width: "80%" }} /><span className="skeleton" style={{ display: "block", height: 18, width: "60%", marginTop: 10 }} /></> :
             <p>{manifest ? `${furniture.length} ${furniture.length === 1 ? "piece" : "pieces"} of furniture measured` : `${looseFurniture.length} furniture ${looseFurniture.length === 1 ? "item" : "items"} seen`}. {open ? `${open} ${open === 1 ? "thing needs" : "things need"} your review` : "Nothing waiting for review"}{confirmed ? `, ${confirmed} confirmed` : ""}.</p>}
         </div>
         {manifest && <ol className="room-furniture" onMouseLeave={() => setHovered(null)}>
-          {furniture.map((e, index) => { const list = byElement.get(e.id) || [], active = list.filter(d => d.status !== "rejected").length; return <li key={e.id} data-selected={selected === e.id} data-hovered={hovered === e.id}>
+          {furniture.map(e => { const list = byElement.get(e.id) || [], active = list.filter(d => d.status !== "rejected").length; return <li key={e.id} data-selected={selected === e.id} data-hovered={hovered === e.id}>
             <button type="button" onMouseEnter={() => setHovered(e.id)} onFocus={() => setHovered(e.id)} onClick={() => setSelected(s => s === e.id ? null : e.id)} aria-expanded={selected === e.id}>
-              <span className="room-furniture-number">{String(index + 1).padStart(2, "0")}</span>
               <span className="room-furniture-name"><b>{names.get(e.id)}</b><small>{e.dimensions.map(n => n.toFixed(2)).join(" × ")} m</small></span>
               <span className={`room-furniture-state ${active ? "has-damage" : ""}`}>{active ? `${active} to check` : "No issues noted"}</span>
             </button>
@@ -121,9 +133,11 @@ export default function RoomDetail({ roomId }: { roomId: string }) {
           </li>; })}
           {!furniture.length && !loadingScan && <li className="room-furniture-empty">No furniture was measured in this scan.</li>}
         </ol>}
-        {!manifest && looseFurniture.length > 0 && <ol className="room-furniture">{looseFurniture.map((f, i) => <li key={f.id}><button type="button"><span className="room-furniture-number">{String(i + 1).padStart(2, "0")}</span><span className="room-furniture-name"><b>{f.label}</b><small>Seen at {Math.floor(f.timestampSeconds || 0)}s</small></span></button></li>)}</ol>}
+        {!manifest && looseFurniture.length > 0 && <ol className="room-furniture">{looseFurniture.map(f => <li key={f.id}><button type="button"><span className="room-furniture-name"><b>{f.label}</b><small>Seen at {Math.floor(f.timestampSeconds || 0)}s</small></span></button></li>)}</ol>}
         {elsewhere.length > 0 && <section className="room-elsewhere"><h3>Elsewhere in the room</h3><ul>{elsewhere.map(renderDamage)}</ul></section>}
         {current && scan && ready(scan) && <div className="room-detail-links"><Link href={`/inspections/${current}/report`}>Export report ↗</Link><Link href={`/inspections/${current}/spatial`}>Edit markers ↗</Link></div>}
+        {scans && <div className="room-danger">{confirming ? <div className="room-confirm" role="group" aria-label="Confirm delete"><p>{confirming === "scan" ? `Delete the ${scan ? purpose(scan).toLowerCase() : ""} scan? Its 3D room, photos and findings are removed for good.` : `Delete ${room?.name || "this room"} and all ${scans.length} ${scans.length === 1 ? "scan" : "scans"}? This can't be undone.`}</p><span><button className="button button-danger" disabled={deleting} onClick={() => void remove(confirming)}>{deleting ? "Deleting…" : confirming === "scan" ? "Delete scan" : "Delete room"}</button><button className="text-button" disabled={deleting} onClick={() => setConfirming("")}>Keep it</button></span></div>
+          : <>{current && <button className="text-button" onClick={() => setConfirming("scan")}>Delete this scan</button>}<button className="text-button" onClick={() => setConfirming("room")}>Delete room</button></>}</div>}
         <p className="inventory-note">AI suggestions need your review. A scan that notes nothing does not prove there is no damage.</p>
       </aside>
     </div>}
