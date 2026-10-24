@@ -81,8 +81,12 @@ input,textarea{caret-color:var(--mark-ink)}
 .room-scene-loading.is-live{align-content:end;padding-bottom:22px}.room-scene-loading.is-live>p{font-size:15px}
 /* Room rows: a trash icon appears on hover or keyboard focus; deleting asks first, in place */
 .spaces-split .landing-room{grid-template-columns:26px minmax(0,1fr) auto auto}
-.room-row-actions{display:inline-flex;align-items:center;gap:14px}
-.room-delete{border:0;background:none;padding:6px;margin:-6px;color:#9a6a5c;cursor:pointer;opacity:0;transform:translateX(4px);transition:opacity .16s ease,transform .16s ease;line-height:0;border-radius:2px}
+.room-row-actions{display:inline-flex;align-items:center;gap:8px}
+.room-row-actions>button,.room-row-actions>a{display:inline-flex;align-items:center;justify-content:center;flex:0 0 32px;width:32px;height:32px;padding:0;margin:0;border-radius:50%;line-height:0}
+.landing-room:hover .room-row-actions svg{transform:none}
+.room-row-actions>a:hover{background:#e3e4da}
+.room-row-actions>a:focus-visible,.room-delete:focus-visible{outline:2px solid #59664e;outline-offset:3px}
+.room-delete{border:0;background:none;padding:0;margin:0;color:#9a6a5c;cursor:pointer;opacity:0;transform:translateX(4px);transition:opacity .16s ease,transform .16s ease;line-height:0;border-radius:50%}
 .landing-room:hover .room-delete,.room-delete:focus-visible{opacity:1;transform:none}.room-delete:hover{color:#9a3f2c;background:#f2e7e2}
 @media(hover:none){.room-delete{opacity:.7;transform:none}}
 .room-delete-confirm{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:center;gap:12px 18px;padding:12px 0 2px 42px;animation:mark-settle .2s cubic-bezier(.16,1,.3,1) both}.room-delete-confirm p{margin:0;font-size:12px;color:#4b3a33;flex:1 1 220px}

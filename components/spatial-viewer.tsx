@@ -25,7 +25,7 @@ export default function SpatialViewer({ manifest, markers, assetUrl, onPick, sel
   const splat = manifest.assets.find(a => a.kind === "splat");
   const aligned = !!splat && (!!splat.registration || splat.reconstructionMethod === "lidar-initialized");
   const [mode, setMode] = useState<"room" | "geometry">(splat ? "room" : "geometry");
-  const [error, setError] = useState(""), [loading, setLoading] = useState(false);
+  const [error, setError] = useState(""), [loading, setLoading] = useState(!!splat);
   const [tip, setTip] = useState<{ text: string; x: number; y: number } | null>(null);
   const callbacks = useRef({ onPick, onSelectElement, onHoverElement }); callbacks.current = { onPick, onSelectElement, onHoverElement };
   const tones = { ...Object.fromEntries(damagedElementIds.map(id => [id, "check" as const])), ...elementTones };
@@ -44,6 +44,7 @@ export default function SpatialViewer({ manifest, markers, assetUrl, onPick, sel
     const element = root.current; if (!element) return;
     setError(""); setTip(null);
     const useSplat = mode === "room" && !!splatUrl;
+    setLoading(useSplat);
     const showBoxes = !useSplat || aligned;
     const names = furnitureNames(manifest.elements.filter(isFurniture));
     // ---- Overlay: furniture boxes, markers and (geometry mode only) faint room structure.
