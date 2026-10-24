@@ -1,5 +1,6 @@
 import {readJsonBody} from "@/lib/server/request-body";
 import { requireUser, requireOwnedRoom } from "@/lib/server/access";
+import { canReadRoom } from "@/lib/server/space-access";
 import { deleteRoom } from "@/lib/server/delete";
 import { errorResponse } from "@/lib/server/api-error";
 import { NextResponse } from "next/server";
@@ -14,8 +15,8 @@ export async function GET(request: Request, { params }: { params: Promise<{ room
   if (!id) return NextResponse.json({ error: "Room not found" }, { status: 404 });
   try {
     const user = await requireUser(request);
-    const room = await (await getDb()).collection("rooms").findOne({ _id: id, ownerId:user.id });
-    if (!room) return NextResponse.json({ error: "Room not found" }, { status: 404 });
+    const room = await (await getDb()).collection("rooms").findOne({ _id: id });
+    if (!room || !await canReadRoom(room as never,user.id)) return NextResponse.json({ error: "Room not found" }, { status: 404 });
     return NextResponse.json({ room: { id: String(room._id), name: room.name, createdAt: new Date(room.createdAt).toISOString(), spaceId: room.spaceId ? String(room.spaceId) : null } });
   } catch (error) {
     return errorResponse(error, "app/api/rooms/[roomId]/route.ts");
