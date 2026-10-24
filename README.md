@@ -21,6 +21,7 @@ This README reflects the source as of **24 October 2026**. Some older `docs/` fi
 - [Persistence and media](#persistence-and-media)
 - [Authentication and authorization](#authentication-and-authorization)
 - [Search and questions about records](#search-and-questions-about-records)
+- [Evidence seal (tamper-evident ledger)](#evidence-seal-tamper-evident-ledger)
 - [Comparisons and reports](#comparisons-and-reports)
 - [Pages and APIs](#pages-and-apis)
 - [Deployment and operations](#deployment-and-operations)
@@ -498,9 +499,56 @@ The global Ask Records interface supplies Gemini with up to 12 recent inspection
 
 ## Evidence seal (tamper-evident ledger)
 
-When a scan or video is saved, the server takes a SHA-256 fingerprint of every evidence file in GridFS (photos, depth maps, the 3D splat, the recording and marked photos). It appends a seal to the `evidenceLedger` collection. Each seal is the SHA-256 of `dwelld-seal-v1`, its position, the inspection and room IDs, the server time, the combined file fingerprint and **the previous seal**, so the entries form a chain. Editing a photo, backdating an inspection or deleting an entry breaks every seal after it. Seals are signed with Ed25519. The key is derived from `LEDGER_SECRET` (falls back to `BETTER_AUTH_SECRET`), and the public key is published at `GET /api/ledger/key`.
+Dwelld uses **SHA-256 file fingerprints, a chained ledger and Ed25519 signatures** to detect changes to saved evidence. This lets a reviewer check whether sealed files still match the recorded originals. It does **not** guarantee that a scene, photo or video was genuine before it reached the server.
 
-`GET /api/inspections/{id}/seal` re-hashes the stored files and checks the signature and the whole chain. Anyone the room is shared with (for example the landlord) can run it, and the report shows the result. `POST` seals an older inspection that predates sealing. Limit: the chain proves nothing changed after sealing, but whoever runs the server could rebuild the whole chain. Sharing the record with the landlord at move-in, or publishing the latest seal somewhere public, closes that gap. Core logic and tests: `lib/server/ledger-core.ts`, `tests/ledger.test.cjs`.
+### How file fingerprints and seals work
+
+1. **Hash the stored bytes.** Save routes schedule sealing after saving an inspection or updating its capture/evidence. The server gathers referenced GridFS media: the walkthrough recording, evidence frames, spatial capture assets (including photos, depth and splats), and finding photos. Each available file is streamed through SHA-256 on the server. Its manifest entry records `ref`, `name`, `kind`, `sha256` and `bytes`. A SHA-256 fingerprint is a 256-bit digest represented as 64 hexadecimal characters; changing even one byte is overwhelmingly likely to produce a different digest. This is an exact-byte fingerprint, not visual similarity matching or an AI authenticity score.
+2. **Combine the file manifest.** For each file, form the line `<sha256> <bytes> <ref>`, sort those lines, join them with newline characters, and hash the result into `filesRoot`. Reordering the list does not change the root; changing a digest, size or reference does. The display fields `name` and `kind` are not included in this root.
+3. **Link the evidence to the ledger.** The server hashes the following newline-separated fields into a seal, with no trailing newline:
+
+   ```text
+   dwelld-seal-v1
+   <seq>
+   <inspectionId>
+   <roomId>
+   <sealedAt>
+   <filesRoot>
+   <prevSeal>
+   ```
+
+   `sealedAt` is the server's ISO timestamp at sealing, not a claimed camera capture time. `seq` is the position in the database-wide `evidenceLedger`; `prevSeal` is the preceding entry's seal, or 64 zeroes for the first entry. A unique sequence index and retry logic handle concurrent appends. Changing a sealed field invalidates that seal; replacing its hash also breaks the next entry's link unless later entries are rewritten.
+4. **Sign the seal.** The server signs the raw 32-byte seal digest using Ed25519 and stores the signature as Base64. Recomputing hashes alone cannot produce a valid replacement signature without the private key. The signing seed is derived with HKDF-SHA-256 from `LEDGER_SECRET`, falling back to `BETTER_AUTH_SECRET`, using salt `dwelld` and context `evidence-ledger-v1`. The secret must be at least 32 characters. `GET /api/ledger/key` publishes the raw public key in Base64, algorithm and key ID so signatures can be checked without exposing the secret.
+
+An unchanged file root reuses the inspection's latest seal. A changed file set/root can append another seal while retaining earlier entries. Sealing skips unavailable GridFS files and returns no seal if no files can be hashed; background sealing failures are logged. A successful save alone therefore does not establish that evidence was sealed.
+
+### How to verify evidence
+
+Open an inspection's report and use **Verify again**, or call authenticated `GET /api/inspections/{id}/seal`. Owners and users with shared read access can verify. The check:
+
+- Re-downloads and hashes the files listed in the **latest seal**, reporting missing or changed files.
+- Recomputes the inspection's recorded manifest roots and seals, and checks each of its signatures against the currently published public key.
+- Checks sequence gaps, previous-seal links and seal contents across up to the first **20,000 ledger entries**. This chain check does not verify every other inspection's signatures or re-hash their media.
+
+The response includes `sealed`, `intact`, entry details, changed files, chain problems, the public key and the check time. The report displays **Verified** only when a seal exists and these checks pass. Owner-only `POST /api/inspections/{id}/seal` seals the currently available evidence, including older inspections; it does not establish an earlier capture date. The verification response contains manifest roots and seal details, but not the full per-file manifest needed to independently recompute those roots.
+
+### What this protects against, and its limits
+
+| Attempt or change | What the current implementation can establish |
+| --- | --- |
+| Replace, retouch or delete a file listed in the latest seal | Re-hashing detects a changed digest or missing file. |
+| Edit a sealed timestamp, room/inspection ID or file root in a ledger entry | Recomputing the seal detects the edit. Recomputing the hash without the signing key cannot create a valid signature. |
+| Remove an interior ledger entry or reorder entries | Sequence and link checks detect gaps or broken links within the checked chain. |
+| Upload an old, staged, edited or AI-generated photo before sealing | Hashing cannot distinguish it from a genuine capture. The seal records the bytes received. |
+| Edit finding descriptions, review decisions, inspection dates or other database metadata | These fields are not part of the seal. Only the explicitly listed seal fields and file digest/size/reference tuples are bound. |
+| Add a new media reference without creating another seal | Verification checks the latest sealed file list, not whether every current evidence reference is covered. |
+| Delete the newest ledger entries, or rewrite history with access to the signing secret | A self-hosted chain has no independent record of its former tip. A server operator with the secret can generate replacement signatures. |
+
+For stronger evidence of when a record existed, retain the public key and a dated copy of the seal outside this server, for example with the landlord at move-in or through an independent timestamp/checkpoint service. An independently retained checkpoint can expose later history replacement; external anchoring is not automated here. The server timestamp alone is not independent proof of capture time. Keep the signing secret stable and protected: verification currently uses one current key, with no historical key registry, so changing the secret causes older signatures to fail verification against the new key.
+
+The hashes used for upload parts and AI comparisons serve related but separate purposes. Upload-part SHA-256 checks detect changed parts and allow identical retries. Comparisons retain hashes of both original image bytes and the processed JPEG bytes sent to the model, identifying the exact inputs used. Neither mechanism proves that a scene was genuine or that an AI finding is correct.
+
+Implementation: [ledger core](lib/server/ledger-core.ts), [GridFS hashing and verification](lib/server/ledger.ts), [seal API](app/api/inspections/[inspectionId]/seal/route.ts), and [ledger tests](tests/ledger.test.cjs).
 
 ## Comparisons and reports
 
