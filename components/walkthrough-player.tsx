@@ -1,6 +1,7 @@
 "use client";
 import {useCallback,useEffect,useRef,useState} from 'react';
 import {ChevronRight,Crosshair,LoaderCircle,Pause,Play} from 'lucide-react';
+import FindingCallouts from "./finding-callouts";
 import type {Finding} from '@/lib/types';
 import {findingsAtTime,timelineGroups} from '@/lib/inspection-timeline';
 const clock=(time:number)=>`${Math.floor(time/60)}:${String(Math.floor(time%60)).padStart(2,'0')}`;
@@ -33,6 +34,7 @@ export default function WalkthroughPlayer({src,findings,selectedId,onSelect,proc
     const b=f.boundingBox,p=f.point;if(!b&&!p)return null;
     return <button key={f.id} type="button" aria-label={`${f.kind==='damage'?'Damage':'Object'}: ${f.label}`} className={`walkthrough-mark ${f.kind==='damage'?'is-damage':'is-object'} ${f.id===selectedId?'is-selected':''} ${p?'is-pin':''}`} style={b?{left:`${b.x*100}%`,top:`${b.y*100}%`,width:`${b.width*100}%`,height:`${b.height*100}%`}:{left:`${p!.x*100}%`,top:`${p!.y*100}%`}} onMouseEnter={()=>setHover(f.id)} onMouseLeave={()=>setHover('')} onFocus={()=>setHover(f.id)} onBlur={()=>setHover('')} onClick={()=>select(f)}><span>{f.label}</span></button>;
    })}</div>
+   {showOverlays&&!marking&&<FindingCallouts findings={visible} onSelect={id=>{const f=visible.find(f=>f.id===id);if(f)select(f);}}/>}
    {marking&&<div className="walkthrough-capture" role="button" tabIndex={0} aria-label="Click the damage in this frame to mark it" onClick={capture}>{draft&&<span className="walkthrough-draft" style={{left:`${draft.point.x*100}%`,top:`${draft.point.y*100}%`}}/>}{!draft&&<em>Click the damage</em>}</div>}
    <span className="walkthrough-stamp">{clock(time)} · {visible.length} marked observations</span>
    {processing&&<span className="walkthrough-live"><LoaderCircle size={12} className="spin"/> Checking saved frames</span>}

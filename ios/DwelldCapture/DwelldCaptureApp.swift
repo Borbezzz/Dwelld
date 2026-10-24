@@ -197,6 +197,14 @@ struct CaptureScreen: View {
                     }
                     ZStack {
                         LiveSplatView(samples: model.liveSplats, revision: model.splatRevision, error: $model.splatRenderError).frame(height: 200)
+                            .overlay(alignment: .topTrailing) {
+                                VStack(alignment: .leading, spacing: 7) {
+                                    Label("Room tally", systemImage: "list.bullet.rectangle").font(.system(size: 11, weight: .semibold))
+                                    ForEach(model.furnitureTally.keys.sorted(), id: \.self) { category in
+                                        HStack(spacing: 7) { Image(systemName: category.lowercased().contains("bed") ? "bed.double" : category.lowercased().contains("chair") || category.lowercased().contains("sofa") ? "chair.lounge" : category.lowercased().contains("table") ? "table.furniture" : "shippingbox").frame(width: 15); Text(category.capitalized); Spacer(minLength: 8); Text("\(model.furnitureTally[category] ?? 0)").monospacedDigit() }.font(.system(size: 10))
+                                    }
+                                }.padding(9).frame(maxWidth: 165).foregroundStyle(Dwelld.ink).background(Dwelld.paper.opacity(0.94)).clipShape(RoundedRectangle(cornerRadius: 5)).padding(8)
+                            }
                         if !model.splatRenderError.isEmpty { Text(model.splatRenderError).font(.system(size: 11)).foregroundStyle(.white).padding() }
                         else if model.liveSplats.isEmpty { Text(model.scanning ? "Waiting for steady depth. Move slowly." : "Builds as you scan").font(Dwelld.serif(15)).foregroundStyle(.white.opacity(0.8)).padding() }
                     }.clipShape(RoundedRectangle(cornerRadius: 2))

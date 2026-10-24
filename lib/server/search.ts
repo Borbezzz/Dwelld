@@ -24,7 +24,9 @@ function pendingFilter(ownerId:string,inspectionId?:ObjectId):Document{
 /** Incremental indexing is explicit and bounded; never embeds another user's records. */
 export async function indexFindings(ownerId:string,inspectionId?:ObjectId,options:{limit?:number;deadlineMs?:number;timeoutMs?:number}={}){
  const db=await getDb(),findings=db.collection("findings");
- const docs=await findings.find(pendingFilter(ownerId,inspectionId),{projection:{imageEmbedding:0}}).limit(options.limit??50).toArray();let indexed=0;const warnings=new Set<string>();
+ if(inspectionId)await db.collection('inspections').updateOne({_id:inspectionId,ownerId},{$set:{searchIndexStatus:'processing'}});
+ try {
+ const docs=await findings.find(pendingFilter(ownerId,inspectionId),{projection:{imageEmbedding:0}}).sort({reportEntry:-1}).limit(options.limit??50).toArray();let indexed=0;const warnings=new Set<string>();
  for(const doc of docs){
   if(Date.now()>=(options.deadlineMs??Infinity))break;
   const set:Document={searchText:searchText(doc)};
@@ -35,7 +37,10 @@ export async function indexFindings(ownerId:string,inspectionId?:ObjectId,option
   }
   await findings.updateOne({_id:doc._id,ownerId},{$set:set});indexed++;
  }
- return {indexed,remaining:await findings.countDocuments(pendingFilter(ownerId,inspectionId)),warnings:[...warnings]};
+ const remaining=await findings.countDocuments(pendingFilter(ownerId,inspectionId));
+ if(inspectionId)await db.collection('inspections').updateOne({_id:inspectionId,ownerId},{$set:{searchIndexStatus:remaining?'partial':'ready',...(remaining?{searchIndexError:`${remaining} records still need indexing; saved findings remain available.`}:{})},...(!remaining?{$unset:{searchIndexError:''}}:{})});
+ return {indexed,remaining,warnings:[...warnings]};
+ }catch(error){if(inspectionId)await db.collection('inspections').updateOne({_id:inspectionId,ownerId},{$set:{searchIndexStatus:'failed',searchIndexError:'Search preparation could not finish. Your saved scan and findings remain available.'}});throw error;}
 }
 export function reciprocalRankFusion(lists:Document[][],limit:number){return appRankFusion(Object.fromEntries(lists.map((l,i)=>[`p${i}`,l])),limit,{});}
 

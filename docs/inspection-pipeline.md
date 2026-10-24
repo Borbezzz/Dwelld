@@ -195,3 +195,23 @@ Validation: `npm test`, `npm run lint`, unsigned device `xcodebuild`, and
 `scripts/verify-native-recording.sh` on macOS. The recorder test encodes and decodes actual H.264,
 checks 30 FPS and portrait dimensions, and checks pixel colors after clockwise rotation.
 A fresh physical-device scan is still required to verify delivered cadence and upload end to end.
+
+### Room report and checkout inventory
+
+Every completion path (uploaded video, browser live capture, native LiDAR and imported spatial capture) calls `finishScanReport` before publishing the terminal inspection status. Argon receives up to 16 evenly spaced saved views and a fixed prompt in `lib/server/scan-report.ts`. It records a room summary, inventory groups including loose items such as pillows, visible counts, source timestamps and coverage limitations. Repeated views must not inflate counts. The server validates counts and requires inventory timestamps to match supplied images.
+
+The report is stored on the inspection, shown in review and the room overview, and included in printed/JSON exports. A separate `reportEntry` in the existing findings collection carries searchable report text; indexing prioritizes it for the existing Atlas keyword and vector indexes. It is excluded from marker lists and detector inventory so the report does not become another physical object.
+
+Move-out completion compares with the latest earlier ready move-in scan owned by the same account in the same room. Comparisons receive report inventory as evidence-linked observations, the two text reports, and original images. A count change can be flagged as potentially missing/changed only with a comparable current image of that location; a missing detection or obscured location remains uncertain. Saved comparisons keep the existing confirm/dismiss workflow. Automatic comparison failures are recorded without discarding the scan; comparison can still be run from the room page.
+
+Manual notes are untrusted context for `describeAtPoint`, including when the note is empty. Visual verdicts are kept separately from the person's note. Adding a review marker refreshes the report and search entry in the background. Damage labels and descriptions have leader lines in video/still review; native video overlays rotate calibrated sensor coordinates only for matching source timestamps. Manual snapshots retain their own source image rather than borrowing another frame's coordinates.
+
+### Visible processing and bounded recovery
+
+The live workspace exposes persisted batch IDs, four worker slots, attempt numbers, source references, source-specific observations and measured object boxes. `batchSummaries` derives display states from those records: queued, checking, retrying, findings, clear, failed or unassessed. Only batches where every source succeeded without warnings can be clear. The UI loads source images through the authenticated session media route; no credential is placed in the image URL. A clear card dissolves its source thumbnail into a checkmark, with reduced-motion support. RoomPlan object IDs drive the icon list and tally; view-level boxes never increment a distinct-object count on their own.
+
+The expandable workflow follows saved state for source preservation, frame checks, the room report, optional check-in comparison and search indexing. Transfer completion and final acknowledgement are separate. Saved sessions continue polling while background report/search stages are active; terminal failures remain visible. A worker that has been processing a saved inspection for more than six minutes is marked partial, retaining its sources and marking unfinished frames unassessed.
+
+Temporary AI service errors receive at most three attempts when the request budget allows. Billing/credentials failures stop provider work; rate limiting pauses the queue rather than immediately retrying four calls. Live coordinators renew a lease and recover frames abandoned by an expired coordinator. The live retry endpoint requeues retryable failed source frames within the authorized session. Required source files are never skipped to manufacture a successful save.
+
+Browser chunk uploads retain acknowledged parts for retries in the current page. Finalization recovers lost acknowledgements through an authenticated status endpoint, which also releases stale finalization leases. Active finalizations heartbeat their lease; abandoned ones become recoverable after one minute. The native app retries transient chunk and finalization failures up to three times and retains its manifest/source files when recovery fails. The new native behavior requires an updated iOS build. Background transfer after terminating the app is not implemented by these changes.

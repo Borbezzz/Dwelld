@@ -1,3 +1,4 @@
+import { finishScanReport } from "./scan-report";
 import {ObjectId,type Document} from 'mongodb';
 import {createHash} from 'node:crypto';
 import {normalizeSpatialImage} from './spatial-image';
@@ -74,6 +75,7 @@ export async function analyzeSpatialInspection(inspection:Document,manifest:Spat
   if(!frames.length)warnings.push('No camera frames were captured; only measured geometry is available.');
   // Verification loop: a second, adversarial look at every AI damage finding; confident ones are auto-approved.
   const review=await autoReviewInspection(inspection._id).catch(()=>null);
+  await finishScanReport(db,inspection._id);
   await db.collection('inspections').updateOne({_id:inspection._id},{$set:{...(review?{autoReview:review}:{}),status:success===frames.length&&warnings.length===1?'completed':'partial',analysisWarnings:[...new Set(warnings)],completedAt:new Date(),durationSeconds:manifest.frames.at(-1)?.timestamp||0}});
   await indexFindings(inspection.ownerId,inspection._id).catch(()=>{});
  }catch{await db.collection('inspections').updateOne({_id:inspection._id},{$set:{status:'partial',analysisWarnings:[...warnings,'Spatial analysis did not finish. Original capture is preserved.']}});}

@@ -24,10 +24,10 @@ export async function GET(request: Request, { params }: { params: Promise<{ insp
       const target=await db.collection("rooms").findOne({_id:targetId});
       if(!segment||!target||!await canReadRoom(target as never,user.id))return NextResponse.json({error:"Room not found"},{status:404});
     }
-    const findingFilter={inspectionId:id,...(segment?{timestampSeconds:{$gte:segment.startTime,$lt:segment.endTime}}:{})};
+    const findingFilter={inspectionId:id,reportEntry:{$ne:true},...(segment?{timestampSeconds:{$gte:segment.startTime,$lt:segment.endTime}}:{})};
     const findings = await db.collection("findings").find(findingFilter).sort({ createdAt: 1 }).toArray();
     const serializedFindings = findings.map((f) => ({
-      id: String(f._id), kind: f.kind, label: f.label, description: f.description,
+      visualCheck:f.visualCheck, id: String(f._id), kind: f.kind, label: f.label, description: f.description,
       timestampSeconds: f.timestampSeconds, evidenceFrameUrl: f.evidenceFrameUrl,
       detectionSource: f.detectionSource === "yolo" || f.detectionSource === "gemini" || f.detectionSource === "crack-model" || f.detectionSource === "roomplan" ? f.detectionSource : undefined,
       visibilityIntervals: f.visibilityIntervals, userNote:f.userNote, boundingBox: f.boundingBox ?? null, point: f.point ?? null, source: f.source ?? "ai", damageType: f.damageType ?? null, reviewStatus: f.reviewStatus, uncertain: !f.boundingBox && !f.point,
@@ -41,6 +41,11 @@ export async function GET(request: Request, { params }: { params: Promise<{ insp
         durationSeconds: inspection.durationSeconds ?? null,
         analysisWarnings: inspection.analysisWarnings ?? [],
         evidenceFrames: segment?(inspection.evidenceFrames??[]).filter((f:{timestampSeconds:number})=>f.timestampSeconds>=segment.startTime&&f.timestampSeconds<segment.endTime):inspection.evidenceFrames??[],
+        scanReportStatus: inspection.scanReportStatus,
+        scanReport: segment ? null : inspection.scanReport ?? null,
+        scanReportError: inspection.scanReportError ?? null,
+        reportComparison: segment ? null : inspection.reportComparison ?? null,
+        reportComparisonError: inspection.reportComparisonError ?? null,
         analysisRunId: inspection.analysisRunId ?? null,
         analysisProgress: inspection.analysisProgress ?? null,
         error: inspection.status === "failed" ? "Video analysis failed. Check service configuration and retry with a supported video." : null,

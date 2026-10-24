@@ -1,3 +1,4 @@
+import { finishScanReport } from "./scan-report";
 import { ObjectId, type Db } from "mongodb";
 import { analyzeVideo, type VideoCheckpoint } from "./inspection";
 import { autoReviewInspection } from "./verify";
@@ -6,6 +7,7 @@ import { reportError } from "./api-error";
 
 /** Publish real evidence/observations as each batch finishes; IDs and human reviews survive polling. */
 export async function runVideoInspection(db: Db, inspectionId: ObjectId, ownerId: string, roomId: ObjectId, videoUrl: string, mimeType: string, detectionFrames: unknown) {
+ const reportDeadline=Date.now()+280_000;
  const inspections=db.collection('inspections'), ids=new Map<string,ObjectId>(),saved=new Set<string>();
  let writes:Promise<void>=Promise.resolve();
  const persist=(point:VideoCheckpoint)=>{
@@ -18,10 +20,12 @@ export async function runVideoInspection(db: Db, inspectionId: ObjectId, ownerId
   writes=writes.then(write);return writes;
  };
  try{
+  await inspections.updateOne({_id:inspectionId},{$set:{analysisStartedAt:new Date()}});
   const result=await analyzeVideo(videoUrl,mimeType,detectionFrames,persist);
   await writes;
   await inspections.updateOne({_id:inspectionId},{$set:{evidenceFrames:result.evidenceFrames,analysisWarnings:result.warnings,analysisRunId:result.analysisRunId,'analysisProgress.phase':'verifying'}});
   const review=await autoReviewInspection(inspectionId,{limit:6,concurrency:3,timeoutMs:15_000,deadlineMs:Date.now()+35_000}).catch(()=>null);
+  await finishScanReport(db,inspectionId,reportDeadline);
   await inspections.updateOne({_id:inspectionId},{$set:{...(review?{autoReview:review}:{}),status:result.warnings.length?'partial':'completed',analysisWarnings:result.warnings,durationSeconds:result.durationSeconds,completedAt:new Date(),'analysisProgress.phase':'complete'}});
   await indexFindings(ownerId,inspectionId,{limit:6,timeoutMs:5000,deadlineMs:Date.now()+10_000}).catch(()=>{});
  }catch(error){

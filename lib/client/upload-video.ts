@@ -1,14 +1,23 @@
+import {finalizeUpload,type UploadState} from "./upload-finalize";
 import {uploadChunks} from "./upload-chunks";
 export const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
 const UPLOAD_CHUNK_BYTES = 2 * 1024 * 1024;
 
+const pendingUploads=new WeakMap<Blob,{uploadId:string;parts:Set<number>}>();
 type StoredVideo = { url: string; contentType: string };
 type UploadOptions = { signal?: AbortSignal; onProgress?: (percentage: number) => void };
+
+async function uploadRequest(url:string,init:RequestInit,timeoutMs=45_000){
+ const controller=new AbortController(),signal=init.signal;
+ const cancel=()=>controller.abort(signal?.reason);signal?.addEventListener('abort',cancel,{once:true});if(signal?.aborted)cancel();
+ const timer=setTimeout(()=>controller.abort(new Error('Upload request timed out; retry save to resume the retained parts.')),timeoutMs);
+ try{return await fetch(url,{...init,signal:controller.signal});}finally{clearTimeout(timer);signal?.removeEventListener('abort',cancel);}
+}
 
 async function readResponse(response: Response): Promise<Record<string, unknown>> {
   const body = await response.json().catch(() => null) as Record<string, unknown> | null;
   if (!response.ok) {
-    throw new Error(typeof body?.error === "string" ? body.error : "Video upload failed. Please try again.");
+    throw Object.assign(new Error(typeof body?.error === "string" ? body.error : "Video upload failed. Please try again."),{status:response.status});
   }
   if (!body) throw new Error("The upload service returned an invalid response.");
   return body;
@@ -21,21 +30,22 @@ export async function uploadVideo(file: File, { signal, onProgress }: UploadOpti
   signal?.throwIfAborted();
   onProgress?.(0);
   const contentType = file.type.split(";")[0];
-  const initialized = await readResponse(await fetch("/api/uploads", {
+  let pending=pendingUploads.get(file);
+  if(!pending){
+  const initialized = await readResponse(await uploadRequest("/api/uploads", {
     method: "POST", signal, headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ filename: file.name, contentType, size: file.size }),
   }));
   if (typeof initialized.uploadId !== "string") throw new Error("The upload service did not create an upload.");
-  const uploadId = initialized.uploadId;
+  pending={uploadId:initialized.uploadId,parts:new Set()};pendingUploads.set(file,pending);
+  }
+  const {uploadId,parts}=pending;
   await uploadChunks(file,UPLOAD_CHUNK_BYTES,async(part,chunk)=>{
     signal?.throwIfAborted();
-    return readResponse(await fetch(`/api/uploads?uploadId=${encodeURIComponent(uploadId)}&part=${part}`,{method:"PATCH",signal,headers:{"Content-Type":"application/octet-stream"},body:chunk}));
-  },onProgress);
+    return readResponse(await uploadRequest(`/api/uploads?uploadId=${encodeURIComponent(uploadId)}&part=${part}`,{method:"PATCH",signal,headers:{"Content-Type":"application/octet-stream"},body:chunk}));
+  },onProgress,3,{completedParts:parts});
   signal?.throwIfAborted();
-  const completed = await readResponse(await fetch("/api/uploads", {
-    method: "POST", signal, headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "complete", uploadId }),
-  }));
+  const completed=await finalizeUpload(async()=>await readResponse(await uploadRequest('/api/uploads',{method:'POST',signal,headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'complete',uploadId})},90_000)) as UploadState,async()=>await readResponse(await uploadRequest(`/api/uploads?uploadId=${encodeURIComponent(uploadId)}`,{signal})) as UploadState,{signal});
   if (typeof completed.url !== "string" || !/^gridfs:[a-f\d]{24}$/i.test(completed.url)) {
     throw new Error("The upload service did not return a saved video.");
   }

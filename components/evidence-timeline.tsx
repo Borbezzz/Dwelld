@@ -1,4 +1,5 @@
 "use client";
+import FindingCallouts from "./finding-callouts";
 import { useEffect, useMemo, useState } from "react";
 import { ChevronRight, Pause, Play } from "lucide-react";
 import type { Finding } from "@/lib/types";
@@ -40,6 +41,7 @@ export default function EvidenceTimeline({ frames, findings, selectedId, assetUr
         const box = finding.boundingBox ? rotate ? portraitEvidenceBox(finding.boundingBox) : finding.boundingBox : null, point = finding.point ? rotate ? portraitEvidencePoint(finding.point) : finding.point : null; if (!box && !point) return null;
         return <button key={finding.id} type="button" className={`walkthrough-mark ${finding.kind === "damage" ? "is-damage" : "is-object"} ${finding.id === selectedId ? "is-selected" : ""} ${point ? "is-pin" : ""}`} style={box ? { left: `${box.x * 100}%`, top: `${box.y * 100}%`, width: `${box.width * 100}%`, height: `${box.height * 100}%` } : { left: `${point!.x * 100}%`, top: `${point!.y * 100}%` }} onClick={() => onSelect(finding.id)}><span>{finding.label}</span></button>;
       })}</div>
+      <FindingCallouts findings={visible.map(f=>({...f,boundingBox:f.boundingBox&&rotate?portraitEvidenceBox(f.boundingBox):f.boundingBox,point:f.point&&rotate?portraitEvidencePoint(f.point):f.point}))} onSelect={onSelect}/>
       <span className="walkthrough-stamp">{clock(frame.timestamp)} · {visible.length} marked observations</span>
     </div>
     <div className="walkthrough-controls"><button type="button" aria-label={playing ? "Pause frames" : "Play frames"} onClick={() => setPlaying(value => !value)}>{playing ? <Pause size={17} /> : <Play size={17} />}</button><time>{clock(frame.timestamp)}</time><span>{shownIndex + 1} / {ordered.length}</span><button type="button" onClick={() => { setPlaying(false); setIndex(i => (i + 1) % ordered.length); }}>Next frame <ChevronRight size={15} /></button></div>

@@ -1,3 +1,5 @@
+import { finishScanReport } from "@/lib/server/scan-report";
+import { indexFindings } from "@/lib/server/search";
 import {readJsonBody} from "@/lib/server/request-body";
 import { ObjectId } from "mongodb";
 import { NextResponse } from "next/server";
@@ -16,7 +18,7 @@ import { isFurniture } from "@/lib/spatial/furniture";
 import { sealLater } from "@/lib/server/ledger";
 import { logAIFailure } from "@/lib/server/analysis-failure";
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 300;
 export const dynamic = "force-dynamic";
 export async function POST(request: Request, { params }: { params: Promise<{ inspectionId: string }> }) {
   try {
@@ -27,6 +29,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ ins
     if (!capture) return NextResponse.json({ error: "Import a real spatial capture first" }, { status: 409 });
     if (!["add", "addFromVideo", "move", "delete", "confirm", "reject"].includes(b.action)) return NextResponse.json({ error: "Invalid marker action" }, { status: 400 });
     const now = new Date();
+    const refreshReport = async () => {
+      await db.collection("inspections").updateOne({_id:inspection._id},{$set:{scanReportStatus:"processing"}});
+      after(async()=>{await finishScanReport(db,inspection._id);await indexFindings(user.id,inspection._id).catch(()=>{});await sealLater(inspection._id);});
+    };
     if (b.action === "addFromVideo") {
       // A click on the recorded walkthrough: place it in 3D from the scan's camera pose, keep the exact
       // video frame as evidence, and let Gemini describe what is at that spot.
@@ -47,11 +53,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ ins
       const ref = evidence ? await writeMedia(evidence, `video-mark-${Date.now()}.jpg`, "image/jpeg", { ownerId: user.id, inspectionId: String(inspection._id), kind: "manual-mark" }) : frameRef;
       const element = placed.element, furniture = isFurniture(element);
       const label = seen?.label || note.slice(0, 80);
-      const finding = { _id: new ObjectId(), ownerId: user.id, inspectionId: inspection._id, roomId: inspection.roomId, kind: "damage", source: "manual", label, damageType: seen?.type || "other", userNote: note, description: [seen?.description, note && `Your note: ${note}`].filter(Boolean).join(" "), evidenceFrameUrl: ref, point: at, boundingBox: seen?.boundingBox ?? null, timestampSeconds: b.scanTime, worldPosition: placed.position, ...(furniture ? { spatialElementId: element.id } : {}), reviewStatus: "confirmed", detectionSource: "manual-video", createdAt: now };
+      const finding = { _id: new ObjectId(), ownerId: user.id, inspectionId: inspection._id, roomId: inspection.roomId, kind: "damage", source: "manual", label, damageType: seen?.type || "other", userNote: note, visualCheck:{status:seen?seen.found?"visible_damage":"not_visible":"unavailable",description:seen?.description||"Visual check unavailable"}, description: [seen?.description, note && `Your note: ${note}`].filter(Boolean).join(" "), evidenceFrameUrl: ref, point: at, boundingBox: seen?.boundingBox ?? null, timestampSeconds: b.scanTime, worldPosition: placed.position, ...(furniture ? { spatialElementId: element.id } : {}), reviewStatus: "confirmed", detectionSource: "manual-video", createdAt: now };
       await db.collection("findings").insertOne(finding);
       const marker = { _id: new ObjectId(), findingId: String(finding._id), inspectionId: inspection._id, ownerId: user.id, sessionId: manifest.sessionId, position: placed.position, label, elementId: furniture ? element.id : null, reviewStatus: "confirmed", version: 1, createdAt: now, reviewHistory: [{ action: "add", source: "video", position: placed.position, userId: user.id, at: now }] };
       await db.collection("spatialMarkers").insertOne(marker);
-      after(() => sealLater(inspection._id));
+      await refreshReport();
       return NextResponse.json({ id: String(marker._id), findingId: String(finding._id), position: placed.position, elementId: marker.elementId, label, poseGapSeconds: placed.poseGapSeconds }, { status: 201 });
     }
     if (b.action === "add") {
@@ -68,7 +74,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ ins
         const seen = view ? await readMedia(view.ref!, 16 * 1024 * 1024).then(image => describeAtPoint(image, view.at!, note)).catch(() => null) : null;
         if (!seen && !note) return NextResponse.json({ error: view ? "Couldn't describe that spot automatically. Add a short note and save again." : "No photo shows that spot. Add a short note and save again." }, { status: 422 });
         if (seen && view) {
-          const finding = { _id: new ObjectId(), ownerId: user.id, inspectionId: inspection._id, roomId: inspection.roomId, kind: "damage", label: seen.label, damageType: seen.type, userNote: note, description: [seen.description, note && `Your note: ${note}`].filter(Boolean).join(" "), evidenceFrameUrl: view.ref, point: view.at, boundingBox: seen.boundingBox, timestampSeconds: view.frame.timestamp, spatialElementId: b.elementId || null, source: "manual", aiDescribed: true, reviewStatus: "confirmed", reviewHistory: [{ from: "pending", to: "confirmed", at: now, by: user.id }], createdAt: now };
+          const finding = { _id: new ObjectId(), ownerId: user.id, inspectionId: inspection._id, roomId: inspection.roomId, kind: "damage", label: seen.label, damageType: seen.type, userNote: note, visualCheck:{status:seen?seen.found?"visible_damage":"not_visible":"unavailable",description:seen?.description||"Visual check unavailable"}, description: [seen.description, note && `Your note: ${note}`].filter(Boolean).join(" "), evidenceFrameUrl: view.ref, point: view.at, boundingBox: seen.boundingBox, timestampSeconds: view.frame.timestamp, spatialElementId: b.elementId || null, source: "manual", aiDescribed: true, reviewStatus: "confirmed", reviewHistory: [{ from: "pending", to: "confirmed", at: now, by: user.id }], createdAt: now };
           await db.collection("findings").insertOne(finding);
           findingId = finding._id; initialReviewStatus = "confirmed"; b.label = seen.label;
         }
@@ -81,6 +87,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ ins
       }
       const marker = { findingId: findingId ? String(findingId) : null, _id: new ObjectId(), inspectionId: inspection._id, ownerId: user.id, sessionId: capture.manifest.sessionId, position: b.position, label: String(b.label || note).trim(), elementId: b.elementId || null, reviewStatus: initialReviewStatus, version: 1, createdAt: now, reviewHistory: [{ action: "add", position: b.position, userId: user.id, at: now }] };
       await db.collection("spatialMarkers").insertOne(marker);
+      await refreshReport();
       return NextResponse.json({ id: String(marker._id) }, { status: 201 });
     }
     const id = typeof b.id === "string" ? parseObjectId(b.id) : null;

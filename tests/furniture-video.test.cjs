@@ -88,9 +88,9 @@ function nativeWorkerFixture(fail=false,options={}){
  const session={_id:id,status:'recording',nativeLive:{elements:[]}},calls=[],findings=[];
  const sessions={
   findOneAndUpdate:async()=>{if(session.furnitureWorker)return null;session.furnitureWorker={};return session;},findOne:async()=>session,
-  updateOne:async(q,u)=>{if(u.$set)Object.assign(session,u.$set);if(u.$unset)delete session.furnitureWorker;},
+  updateOne:async(q,u)=>{if(u.$set)Object.assign(session,u.$set);if(u.$unset)for(const key of Object.keys(u.$unset))delete session[key];},
  };
- const frames={findOneAndUpdate:async(q,u)=>{const fr=records.filter(f=>f.status===q.status).sort((a,b)=>a.timestampSeconds-b.timestampSeconds)[0];if(fr)Object.assign(fr,u.$set);return fr;},updateOne:async(q,u)=>Object.assign(records.find(f=>f._id===q._id),u.$set),updateMany:async(q,u)=>records.filter(f=>q._id.$in.includes(f._id)&&f.status===q.status).forEach(f=>Object.assign(f,u.$set))};
+ const frames={findOneAndUpdate:async(q,u)=>{const fr=records.filter(f=>f.status===q.status).sort((a,b)=>a.timestampSeconds-b.timestampSeconds)[0];if(fr)Object.assign(fr,u.$set);return fr;},updateOne:async(q,u)=>Object.assign(records.find(f=>f._id===q._id),u.$set),updateMany:async(q,u)=>records.filter(f=>(!q._id||q._id.$in.includes(f._id))&&f.status===q.status).forEach(f=>Object.assign(f,u.$set))};
  const {analyzeLiveEvidenceFrame}=load('lib/server/native-analysis.ts',{
   './db':{getDb:async()=>({collection:name=>name==='liveSessions'?sessions:name==='liveFrames'?frames:{find:()=>({toArray:async()=>options.localized?findings:[]}),updateOne:async(q,u)=>{if(name==='liveFindings')findings.push(u.$setOnInsert);}}})},
   './media':{readMedia:async()=>Buffer.from('photo')},'./search':{indexFindings:async()=>{}},

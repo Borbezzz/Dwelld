@@ -3,7 +3,7 @@ import { requireUser } from "@/lib/server/access";
 import { errorResponse } from "@/lib/server/api-error";
 import { createHash, randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
-import { Binary, ObjectId } from "mongodb";
+import { Binary, ObjectId, type Db } from "mongodb";
 import { NextResponse } from "next/server";
 import { getDb, parseObjectId } from "@/lib/server/db";
 import { deleteMedia, writeMedia } from "@/lib/server/media";
@@ -16,21 +16,28 @@ const MAX_BYTES = 100 * 1024 * 1024;
 const TYPES = ["video/mp4", "video/webm", "video/quicktime", "video/x-msvideo", "video/mpeg", "application/octet-stream", "model/vnd.usdz+zip", "image/jpeg", "application/json"];
 type Upload = { _id: ObjectId; ownerId:string; filename: string; contentType: string; size: number; expiresAt: Date; status: "uploading" | "finalizing" | "complete"; lockId?: string; lockedAt?: Date; url?: string };
 type Part = { uploadId: ObjectId; part: number; data: Binary; digest: string; size: number; expiresAt: Date };
+const indexTasks = new WeakMap<Db, Promise<unknown>>();
 async function collections() {
   const db = await getDb();
   const uploads = db.collection<Upload>("mediaUploads");
   const parts = db.collection<Part>("mediaUploadParts");
-  await Promise.all([
-    uploads.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
-    parts.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
-    parts.createIndex({ uploadId: 1, part: 1 }, { unique: true }),
-  ]);
+  let ready = indexTasks.get(db);
+  if (!ready) {
+    ready = Promise.all([
+      uploads.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
+      parts.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
+      parts.createIndex({ uploadId: 1, part: 1 }, { unique: true }),
+    ]).catch(error => { indexTasks.delete(db); throw error; });
+    indexTasks.set(db, ready);
+  }
+  await ready;
   return { uploads, parts };
 }
 const failure = (message: string, status = 400) => NextResponse.json({ error: message }, { status });
 
 export async function POST(request: Request) {
   let cleanupRef: string | undefined;
+  let finalizeHeartbeat: ReturnType<typeof setInterval> | undefined;
   let unlock: (() => Promise<unknown>) | undefined;
   try {
     const user = await requireUser(request);
@@ -44,8 +51,10 @@ export async function POST(request: Request) {
       if (existing.status === "complete") return NextResponse.json({ url: existing.url, videoUrl: existing.url, contentType: existing.contentType });
       const lockId = randomUUID();
       // Recover a finalization abandoned by a terminated function after its maximum duration.
-      const upload = await uploads.findOneAndUpdate({ _id: id, ownerId:user.id, $or: [{ status: "uploading" }, { status: "finalizing", lockedAt: { $lt: new Date(Date.now() - 360_000) } }] }, { $set: { status: "finalizing", lockId, lockedAt: new Date() } }, { returnDocument: "after" });
+      const upload = await uploads.findOneAndUpdate({ _id: id, ownerId:user.id, $or: [{ status: "uploading" }, { status: "finalizing", lockedAt: { $lt: new Date(Date.now() - 60_000) } }] }, { $set: { status: "finalizing", lockId, lockedAt: new Date() } }, { returnDocument: "after" });
       if (!upload) return failure("Upload is being finalized; retry shortly", 409);
+      // Renew the lease while work is alive; a terminated function becomes recoverable in one minute.
+      finalizeHeartbeat=setInterval(()=>{void uploads.updateOne({_id:id,lockId,status:'finalizing'},{$set:{lockedAt:new Date()}}).catch(()=>{});},15_000);
       unlock = () => uploads.updateOne({ _id: id, lockId }, { $set: { status: "uploading" }, $unset: { lockId: "", lockedAt: "" } });
       const count = Math.ceil(upload.size / CHUNK_SIZE);
       const descriptors = await parts.find({ uploadId: id }, { projection: { part: 1, size: 1 } }).sort({ part: 1 }).toArray();
@@ -55,15 +64,18 @@ export async function POST(request: Request) {
       }
       async function* chunks() {
         let bytes = 0;
-        for (let i = 0; i < count; i++) {
-          const part = await parts.findOne({ uploadId: id!, part: i });
-          if (!part) throw new Error("Missing upload part");
+        let index = 0;
+        const cursor = parts.find({ uploadId: id! }).sort({ part: 1 }).batchSize(2);
+        try {
+        for await (const part of cursor) {
+          if (part.part !== index++) throw new Error("Missing or unordered upload part");
           const data = Buffer.from(part.data.buffer);
           bytes += data.length;
           if (data.length !== part.size || bytes > upload!.size || createHash("sha256").update(data).digest("hex") !== part.digest) throw new Error("Invalid upload part");
           yield data;
         }
-        if (bytes !== upload!.size) throw new Error("Invalid upload length");
+        if (bytes !== upload!.size || index !== count) throw new Error("Invalid upload length");
+        } finally { await cursor.close(); }
       }
       cleanupRef = await writeMedia(Readable.from(chunks()), upload.filename, upload.contentType, {ownerId:user.id});
       const result = await uploads.updateOne({ _id: id, lockId }, { $set: { status: "complete", url: cleanupRef }, $unset: { lockId: "", lockedAt: "" } });
@@ -83,7 +95,7 @@ export async function POST(request: Request) {
     if (cleanupRef) await deleteMedia(cleanupRef).catch(() => {});
     if (unlock) await unlock().catch(() => {});
     return errorResponse(error, "upload.finalize");
-  }
+  } finally {if(finalizeHeartbeat)clearInterval(finalizeHeartbeat);}
 }
 
 export async function PATCH(request: Request) {
@@ -114,7 +126,8 @@ export async function PATCH(request: Request) {
     if (size !== expected) return failure("Upload part has an incorrect size");
     const data = Buffer.concat(chunks);
     const digest = createHash("sha256").update(data).digest("hex");
-    if (part > 0 && !await parts.findOne({ uploadId: id, part: part - 1 }, { projection: { _id: 1 } })) return failure("Upload parts must arrive in sequence", 409);
+    // Parts are independent: concurrent requests may finish in any order.
+    // Completion validates the full sequence, sizes and hashes before publishing media.
     // Insert-only makes retries idempotent and prevents replacing data during finalization.
     await parts.updateOne({ uploadId: id, part }, { $setOnInsert: { uploadId: id, part, data: new Binary(data), digest, size, expiresAt: upload.expiresAt } }, { upsert: true });
     const stored = await parts.findOne({ uploadId: id, part }, { projection: { digest: 1 } });
@@ -122,3 +135,15 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ part, received: size });
   } catch (error) { return errorResponse(error, "upload.part"); }
 }
+
+export async function GET(request:Request){try{
+ const user=await requireUser(request);
+ const id=parseObjectId(new URL(request.url).searchParams.get('uploadId')||'');if(!id)return failure('Invalid upload ID');
+ const {uploads,parts}=await collections();const upload=await uploads.findOne({_id:id,ownerId:user.id,expiresAt:{$gt:new Date()}});if(!upload)return failure('Upload not found or expired',404);
+ if(upload.status==='finalizing'&&upload.lockedAt&&upload.lockedAt.getTime()<Date.now()-60_000){
+  const recovered=await uploads.updateOne({_id:id,lockId:upload.lockId,status:'finalizing',lockedAt:{$lt:new Date(Date.now()-60_000)}},{$set:{status:'uploading'},$unset:{lockId:'',lockedAt:''}});
+  if(recovered.modifiedCount)upload.status='uploading';
+ }
+ const received=upload.status==='uploading'?await parts.find({uploadId:id},{projection:{part:1}}).sort({part:1}).toArray():[];
+ return NextResponse.json({status:upload.status,url:upload.status==='complete'?upload.url:undefined,contentType:upload.contentType,parts:received.map(part=>part.part)},{headers:{'Cache-Control':'no-store'}});
+ }catch(error){return errorResponse(error,"upload.status");}}

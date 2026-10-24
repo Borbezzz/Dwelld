@@ -6,6 +6,9 @@ function fixture(){
  const capture={manifest:{sessionId:'scan',elements:[],frames:[{image:'photo.jpg',timestamp:0}],assets:[{name:'photo.jpg',kind:'image',mediaRef:'private-photo'}]}};
  const db={collection:name=>({findOne:async()=>name==='spatialCaptures'?capture:name==='spatialMarkers'?{_id:markerId,findingId:String(findingId),version:1}:{_id:findingId,reviewStatus:'rejected'},insertOne:async doc=>inserted.push({name,doc}),updateOne:async(q,u)=>{writes.push({name,q,u});return {modifiedCount:changed?0:1};}})};
  const route=load('app/api/inspections/[inspectionId]/spatial/markers/route.ts',{
+  'next/server':{...require('next/server'),after:()=>{}},
+  '@/lib/server/scan-report':{finishScanReport:async()=>{}},
+  '@/lib/server/search':{indexFindings:async()=>{}},
   '@/lib/server/request-body':{readJsonBody:r=>r.json()},
   '@/lib/server/access':{requireUser:async()=>({id:'owner'}),requireOwnedInspection:async()=>{if(denied)throw Object.assign(new Error('Forbidden'),{status:403});return inspection;}},
   '@/lib/server/db':{getDb:async()=>db,parseObjectId:s=>ObjectId.isValid(s)?new ObjectId(s):null},

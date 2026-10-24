@@ -1,4 +1,6 @@
 "use client";
+import ObjectIcon from "./object-icon";
+import {CircleAlert,Layers,ScanLine} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
@@ -192,8 +194,8 @@ export default function LiveRoomView({ live, stream = [], findings, selected, on
   const furniture = (live?.elements || []).filter(isFurniture), names = furnitureNames(furniture);
   return <div className="live-room-view">
     <div ref={root} className="live-room-canvas" aria-label="Your room building in 3D as the phone scans" />
-    <div className="live-room-legend">{baseCount > 0 && <span><i className="dot-base" />Earlier scan</span>}<span><i className="dot-splat" />{count ? `${count.toLocaleString()} ${baseCount ? "new " : ""}points` : baseCount ? "Find a part you already scanned" : "Waiting for depth"}</span><span><i className="dot-furniture" />{furniture.length} furniture</span><span><i className="dot-damage" />{findings.filter(f => (f.pose || f.worldPosition) && f.reviewStatus !== "rejected").length} pinned</span></div>
+    <aside className="live-room-tally" aria-label="Room inventory tally"><header><ScanLine size={14}/><b>Room tally</b></header><ul>{Object.entries(furniture.reduce<Record<string,number>>((counts,item)=>{counts[item.category]=(counts[item.category]||0)+1;return counts;},{})).map(([category,total])=><li key={category}><ObjectIcon label={category}/><span>{category}</span><b key={total} className="tally-count">{total}</b></li>)}<li><CircleAlert size={15}/><span>Potential damage</span><b>{findings.filter(f=>f.reviewStatus!=='rejected').length}</b></li></ul><footer><Layers size={12}/>{(count+baseCount).toLocaleString()} depth points</footer></aside>
     {!count && !baseCount && <div className="live-room-empty"><p>Your room builds here as you scan.</p></div>}
-    {furniture.length > 0 && <ul className="live-room-tags">{furniture.slice(0, 6).map(e => <li key={e.id}>{names.get(e.id)}</li>)}</ul>}
+
   </div>;
 }

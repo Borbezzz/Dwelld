@@ -55,6 +55,7 @@ struct PhoneFinding: Decodable, Identifiable {
     private var progressInFlight = false
     /// Latest RoomPlan furniture and walls, streamed to the laptop while scanning.
     private var liveElements: [Element] = []
+    @Published var furnitureTally: [String: Int] = [:]
     private let pairedBase = URL(string: "https://dwelld.vercel.app")!
     func pair(url: URL) async {
         guard !scanning, !uploading, !processing else { status = "Finish the current capture before pairing."; return }
@@ -183,6 +184,7 @@ struct PhoneFinding: Decodable, Identifiable {
         Task { @MainActor [weak self] in
             guard let self, self.scanning, ObjectIdentifier(self.view.captureSession) == source else { return }
             self.liveElements = elements
+            self.furnitureTally = elements.filter { !["wall", "floor", "door", "window", "opening"].contains($0.category.lowercased()) }.reduce(into: [:]) { counts, item in counts[item.category, default: 0] += 1 }
         }
     }
     func encode(with coder: NSCoder) {}
@@ -199,7 +201,7 @@ struct PhoneFinding: Decodable, Identifiable {
         scanning = false; processing = false; ready = false; uploading = false
         manifest = nil; directory = nil; frames = []; assets = []; inspectionId = ""
         startTime = nil; lastTimestamp = -1; frameCount = 0; depthCount = 0; featureCount = 0
-        uploadComplete = false; uploadProgress = 0; liveElements = []
+        uploadComplete = false; uploadProgress = 0; liveElements = []; furnitureTally = [:]
         liveFindings = []; damageEvidence = nil; damageEvidenceFindings = []
         evidenceRef = ""; evidenceLoading = false; liveEvidence = [:]
         damageCheckStatus = "Damage checks begin with the scan"
@@ -753,10 +755,28 @@ struct PhoneFinding: Decodable, Identifiable {
             }
         }
         defer { completionWatch.cancel() }
+        func sendRecoverable(_ req: URLRequest, label: String) async throws -> (Data, URLResponse) {
+            for attempt in 1...3 {
+                do {
+                    let result = try await session.data(for: req)
+                    guard let http = result.1 as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw httpFailure(result.1, data: result.0) }
+                    return result
+                } catch {
+                    let detail = error as NSError
+                    let temporary = (detail.domain == NSURLErrorDomain && detail.code != NSURLErrorCancelled) || [408, 425, 429, 500, 502, 503, 504].contains(detail.code) || (detail.code == 409 && detail.localizedDescription.contains("being finalized"))
+                    guard temporary, attempt < 3, !Task.isCancelled else { throw error }
+                    status = "\(label) · retry \(attempt + 1) of 3. Your local files are retained."
+                    try await Task.sleep(for: .seconds(attempt * 2))
+                }
+            }
+            throw URLError(.cannotConnectToHost)
+        }
         func request(_ path: String, method: String = "POST", data: Data, type: String = "application/json") async throws -> [String: Any] {
             var req = URLRequest(url: base.appendingPathComponent(path)); req.httpMethod = method; req.httpBody = data; req.setValue(type, forHTTPHeaderField: "Content-Type"); req.setValue(base.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")), forHTTPHeaderField: "Origin")
             for (key, value) in cookieHeader { req.setValue(value, forHTTPHeaderField: key) }
-            let (body, response) = try await session.data(for: req)
+            let isFinalization = path.hasSuffix("/spatial") || ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["action"] as? String == "complete"
+            if isFinalization { req.timeoutInterval = 90 }
+            let (body, response) = try await (isFinalization ? sendRecoverable(req, label: "Confirming saved files") : session.data(for: req))
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw httpFailure(response, data: body) }
             return (try JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
         }
@@ -790,7 +810,7 @@ struct PhoneFinding: Decodable, Identifiable {
                     func enqueueChunk(_ offset: Int) {
                         chunks.addTask { @MainActor in
                     var req = URLRequest(url: URL(string: "\(uploadPath)?uploadId=\(id)&part=\(offset / chunkSize)", relativeTo: base.appendingPathComponent("/"))!); req.httpMethod = "PATCH"; req.httpBody = data.subdata(in: offset..<min(data.count, offset + chunkSize)); req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type"); req.setValue(base.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")), forHTTPHeaderField: "Origin"); for (key, value) in cookieHeader { req.setValue(value, forHTTPHeaderField: key) }
-                    let (responseBody, response) = try await session.data(for: req); guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw self.httpFailure(response, data: responseBody) }
+                    let (responseBody, response) = try await sendRecoverable(req, label: "Sending a remaining file part"); guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw self.httpFailure(response, data: responseBody) }
                         }
                     }
                     while nextOffset < min(data.count, 2 * chunkSize) { enqueueChunk(nextOffset); nextOffset += chunkSize }
@@ -822,7 +842,7 @@ struct PhoneFinding: Decodable, Identifiable {
                 status = "Saving a marked damage photo… Your room files have uploaded."
                 if !pairedSession.isEmpty, !(await sendMark(mark)) { throw NSError(domain: "Dwelld", code: 1, userInfo: [NSLocalizedDescriptionKey: "A marked snapshot has not uploaded. Tap Retry save; the exact photo remains on this phone."]) }
             }
-            status = "Confirming your saved room…"
+            status = "Files transferred. Confirming your saved room…"
             let saved = try await request(pairedSession.isEmpty ? "api/inspections/\(inspectionId)/spatial" : "api/live/\(pairedSession)/spatial", data: JSONEncoder().encode(m))
             finishSaved(saved["inspectionId"] as? String); manifest = m
         } catch {

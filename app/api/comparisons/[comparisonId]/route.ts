@@ -23,6 +23,7 @@ export async function PATCH(request:Request,{params}:{params:Promise<{comparison
   // Rejection/reset deactivates this source; all original evidence and review history remain.
   const baseline=record.baseline.find(f=>f.id===change.baselineFindingId),current=record.current.find(f=>f.id===change.currentFindingId);
   if(baseline&&current){await db.collection<{_id:string;ownerId:string;roomId:ObjectId;comparisonId:ObjectId;changeId:string;baselineFindingId:string;currentFindingId:string;baselineInspectionId:ObjectId;currentInspectionId:ObjectId;kind:string;active:boolean;updatedAt:Date}>("observationCorrespondences").updateOne({_id:`${id}:${changeId}`},{$set:{ownerId:record.ownerId,roomId:record.roomId,comparisonId:id,changeId,baselineFindingId:baseline.id,currentFindingId:current.id,baselineInspectionId:record.baselineInspectionId,currentInspectionId:record.currentInspectionId,kind:baseline.kind===current.kind?baseline.kind:"mixed",active:status==="confirmed",updatedAt:new Date()}},{upsert:true,session});}
+  await db.collection("inspections").updateOne({_id:record.currentInspectionId,"reportComparison.id":String(id)},{$set:{"reportComparison.flags":record.changes.filter(c=>c.reviewStatus!=="rejected"&&["missing_or_changed","potentially_new","uncertain"].includes(c.category))}},{session});
   return record;
  });if(!result)return NextResponse.json({error:"Comparison not found"},{status:404});return NextResponse.json({comparison:{...result,id:String(result._id)}});
  }finally{await session.endSession();}

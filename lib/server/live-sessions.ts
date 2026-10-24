@@ -1,3 +1,4 @@
+import { batchSummaries } from "../live/batches";
 import {canReadRoom} from "./space-access";
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { ObjectId } from "mongodb";
@@ -67,8 +68,18 @@ export async function recordLiveAnalysis(session:SessionDoc,observationId:string
 export async function getLiveState(session:SessionDoc,role:LiveRole,_after:string|null) {
  const {db}=await liveCollections();
  const [objects,findings,signals]=await Promise.all([db.collection("liveObjects").find({sessionId:session._id},{projection:{_id:0,sessionId:0}}).limit(100).toArray(),db.collection("liveFindings").find({sessionId:session._id},{projection:{_id:0,sessionId:0}}).sort({timestampSeconds:-1,createdAt:-1}).limit(200).toArray(),db.collection("liveSignals").find({sessionId:session._id,to:role}).sort({sequence:-1,createdAt:-1,_id:-1}).limit(200).toArray()]);
- const progress = session.nativeCapture ? await liveFrameProgress(session._id) : undefined;
- return {session:{...safeSession(session),...(progress?{analysisProgress:progress}:{})},objects:objects as unknown as LiveObject[],findings,signals:signals.reverse().map(s=>({id:String(s._id),eventId:s.eventId,type:s.type,data:s.data,from:s.from}))};
+ const [progress,batchFrames]=await Promise.all([liveFrameProgress(session._id),db.collection('liveFrames').find({sessionId:session._id},{projection:{name:1,ref:1,timestampSeconds:1,status:1,batchId:1,workerSlot:1,attempt:1,retryMessage:1,error:1,findings:1,observations:1,views:1,warnings:1}}).sort({timestampSeconds:-1}).limit(121).toArray()]);
+ const record=session.inspectionId?await db.collection('inspections').findOne({_id:session.inspectionId},{projection:{analysisStartedAt:1,completedAt:1,status:1,scanReportStatus:1,scanReportError:1,reportComparisonStatus:1,reportComparisonError:1,searchIndexStatus:1,searchIndexError:1}}):null;
+ const began=record?.analysisStartedAt||record?.completedAt;
+ if(session.status==='saved'&&record?.status==='processing'&&began&&new Date(began).getTime()<Date.now()-360_000){
+  const updates={status:'partial',...(record.scanReportStatus!=='ready'?{scanReportStatus:'failed',scanReportError:'The report worker stopped before completion. Saved sources remain available.'}:{}),...(!['ready','partial'].includes(record.searchIndexStatus)?{searchIndexStatus:'failed',searchIndexError:'Search preparation was interrupted. Saved sources remain available.'}:{})};
+  const recovered=await db.collection('inspections').updateOne({_id:session.inspectionId,status:'processing',analysisStartedAt:record.analysisStartedAt},{$set:updates});
+  if(recovered.modifiedCount){Object.assign(record,updates);await db.collection('liveFrames').updateMany({sessionId:session._id,status:{$in:['queued','analyzing']}},{$set:{status:'failed',error:'The processing worker stopped before completion. This source has not been assessed.',errorCode:'AI_UNAVAILABLE'}});
+   for(const frame of batchFrames)if(frame.status==='queued'||frame.status==='analyzing'){frame.status='failed';frame.error='The processing worker stopped before completion. Source retained.';}
+   progress.failed+=progress.queued+progress.checking;progress.queued=0;progress.checking=0;
+  }
+ }
+ return {session:{...safeSession(session),workflow:record?{inspectionStatus:record.status,reportStatus:record.scanReportStatus,reportError:record.scanReportError,comparisonStatus:record.reportComparisonStatus,comparisonError:record.reportComparisonError,searchStatus:record.searchIndexStatus,searchError:record.searchIndexError}:undefined,analysisProgress:progress,analysisBatches:batchSummaries(batchFrames as never)},objects:objects as unknown as LiveObject[],findings,signals:signals.reverse().map(s=>({id:String(s._id),eventId:s.eventId,type:s.type,data:s.data,from:s.from}))};
 }
 
 export async function liveFrameProgress(sessionId: ObjectId) {

@@ -1,4 +1,5 @@
 import {readJsonBody} from "@/lib/server/request-body";
+import { finishScanReport } from "@/lib/server/scan-report";
 import {after} from "next/server";
 import {indexFindings} from "@/lib/server/search";
 import { requireUser } from "@/lib/server/access";
@@ -9,7 +10,7 @@ import { getDb, parseObjectId } from "@/lib/server/db";
 import { readMedia } from "@/lib/server/media";
 import { describeAtPoint } from "@/lib/server/damage";
 
-export const maxDuration = 60;
+export const maxDuration = 300;
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -39,12 +40,13 @@ export async function POST(request: Request, { params }: { params: Promise<{ ins
     if (!seen && !description) return NextResponse.json({ error: "Couldn't describe that spot automatically. Add a short note and save again." }, { status: 422 });
     const doc = {
       _id: new ObjectId(), ownerId:user.id, inspectionId, roomId: inspection.roomId, kind: "damage", label: seen?.label || "Manual damage",
-      userNote:description, damageType: seen?.type || "other", description: [seen?.description, description && (seen ? `Your note: ${description}` : description)].filter(Boolean).join(" "), point: { x: point.x, y: point.y }, boundingBox: seen?.boundingBox ?? null, aiDescribed: !!seen,
+      userNote:description, damageType: seen?.type || "other", description: [seen?.description, description && (seen ? `Your note: ${description}` : description)].filter(Boolean).join(" "), point: { x: point.x, y: point.y }, boundingBox: seen?.boundingBox ?? null, aiDescribed: !!seen, visualCheck: {status: seen ? seen.found ? "visible_damage" : "not_visible" : "unavailable", description: seen?.description || "Visual verification unavailable; user note has not been verified."},
       timestampSeconds: evidence.timestampSeconds, evidenceFrameUrl: evidence.evidenceFrameUrl,
       objectId, source: "manual", reviewStatus: "pending", reviewHistory: [], createdAt: new Date(),
     };
     await db.collection("findings").insertOne(doc);
-    after(async()=>{await indexFindings(user.id,inspectionId).catch(()=>{});});
+    await db.collection("inspections").updateOne({_id:inspectionId},{$set:{scanReportStatus:"processing"}});
+    after(async()=>{await finishScanReport(db,inspectionId);await indexFindings(user.id,inspectionId).catch(()=>{});});
     return NextResponse.json({ finding: { ...doc, id: String(doc._id), _id: undefined, inspectionId: String(inspectionId), roomId: String(doc.roomId), objectId: objectId ? String(objectId) : null, uncertain: false } }, { status: 201 });
   } catch (error) {
     return errorResponse(error, "finding.create");
