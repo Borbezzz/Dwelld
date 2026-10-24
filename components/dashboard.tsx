@@ -16,6 +16,7 @@ export default function Dashboard() {
   const {data:session,isPending:authPending,error:authError}=authClient.useSession();
   const [rooms, setRooms] = useState<Room[]>([]);
   const [spaces,setSpaces]=useState<Space[]>([]),[newSpace,setNewSpace]=useState(""),[spaceBusy,setSpaceBusy]=useState(false),[sharing,setSharing]=useState("");
+  const [confirmSpaceDelete,setConfirmSpaceDelete]=useState(""),[deletingSpace,setDeletingSpace]=useState(""),[spaceDeleteError,setSpaceDeleteError]=useState("");
   const [confirmDelete, setConfirmDelete] = useState(""), [deleting, setDeleting] = useState(false);
   async function deleteRoom(id: string) {
     setDeleting(true); setError("");
@@ -37,6 +38,11 @@ export default function Dashboard() {
   }
   useEffect(() => { if(session?.user.id)void refresh();else if(!authPending){setLoading(false);setRooms([]);setInspections([]);setSpaces([]);} }, [session?.user.id,authPending]);
   const roomFor = (id: string) => rooms.find((room) => room.id === id);
+  async function deleteSpace(id:string){
+    setDeletingSpace(id);setSpaceDeleteError("");
+    try{const r=await fetch(`/api/spaces/${id}`,{method:"DELETE"});const b=await r.json().catch(()=>({}));if(!r.ok)throw new Error(b.error||"Could not delete this property.");setConfirmSpaceDelete("");if(sharing===id)setSharing("");await refresh();}
+    catch(e){setSpaceDeleteError(e instanceof Error?e.message:"Could not delete this property.");}finally{setDeletingSpace("");}
+  }
   async function createSpace(e: React.FormEvent) { e.preventDefault();if(!newSpace.trim())return;setSpaceBusy(true);try{await api.createSpace(newSpace.trim());setNewSpace("");await refresh();}catch(e){setError(e instanceof Error?e.message:"Couldn't create this space.");}finally{setSpaceBusy(false);} }
   async function moveRoom(id:string,spaceId:string|null){setSpaceBusy(true);try{await api.assignRoomToSpace(id,spaceId);await refresh();}catch(e){setError(e instanceof Error?e.message:"Couldn't move this room.");}finally{setSpaceBusy(false);} }
 
@@ -69,7 +75,8 @@ export default function Dashboard() {
         const count=rooms.filter(r=>r.spaceId===s.id).length,expanded=sharing===s.id&&s.role==="owner";
         return <article className={`space-group${expanded?" is-sharing":""}`} key={s.id}>
           <div className="space-group-header"><span className="space-group-icon" aria-hidden="true"><Building2 size={21}/></span><div className="space-group-title"><h3><Link href={`/spaces/${s.id}`}>{s.name}<ArrowUpRight size={17} aria-hidden="true"/></Link></h3><p>{count} {count===1?"room":"rooms"}{s.role!=="owner"?` · ${s.role}`:""}</p></div>
-          {s.role==="owner"&&<button className="space-action" type="button" aria-expanded={expanded} aria-controls={`share-${s.id}`} aria-label={`${expanded?"Close sharing for":"Share"} ${s.name}`} onClick={()=>setSharing(expanded?"":s.id)}>{expanded?<X size={15} aria-hidden="true"/>:<Share2 size={15} aria-hidden="true"/>}{expanded?"Close":"Share"}</button>}</div>
+          {s.role==="owner"&&<div className="space-group-actions"><button type="button" className="space-delete" aria-label={`Delete ${s.name}`} title="Delete property" disabled={!!deletingSpace} onClick={()=>{setConfirmSpaceDelete(s.id);setSpaceDeleteError("");}}><Trash2 size={16} aria-hidden="true"/></button><button className="space-action" type="button" aria-expanded={expanded} aria-controls={`share-${s.id}`} aria-label={`${expanded?"Close sharing for":"Share"} ${s.name}`} onClick={()=>setSharing(expanded?"":s.id)}>{expanded?<X size={15} aria-hidden="true"/>:<Share2 size={15} aria-hidden="true"/>}{expanded?"Close":"Share"}</button></div>}</div>
+          {confirmSpaceDelete===s.id&&<div className="space-delete-confirm" role="group" aria-label={`Delete ${s.name}?`}><p>Delete {s.name}? Rooms and inspections will be kept ungrouped. Shared access through this property will end.</p>{spaceDeleteError&&<p role="alert">{spaceDeleteError}</p>}<div><button type="button" className="button button-danger" disabled={!!deletingSpace} onClick={()=>void deleteSpace(s.id)}>{deletingSpace===s.id?"Deleting…":"Delete property"}</button><button type="button" className="text-button" disabled={!!deletingSpace} onClick={()=>{setConfirmSpaceDelete("");setSpaceDeleteError("");}}>Keep it</button></div></div>}
           {expanded&&<div id={`share-${s.id}`}><ShareSpace spaceId={s.id}/></div>}
         </article>;
       })}</div>}

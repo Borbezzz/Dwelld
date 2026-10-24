@@ -24,7 +24,8 @@ export async function PATCH(request:Request,{params}:C){try{
 export async function DELETE(request:Request,{params}:C){try{
  const user=await requireUser(request),id=parseObjectId((await params).spaceId),db=await getDb();
  if(!id||!await db.collection("spaces").findOne({_id:id,ownerId:user.id}))return NextResponse.json({error:"Space not found"},{status:404});
- if(await db.collection("rooms").findOne({spaceId:id},{projection:{_id:1}}))return NextResponse.json({error:"Move or remove the rooms before deleting this space"},{status:409});
+ // Deleting the grouping preserves every room and its scans with their original owner.
+ await db.collection("rooms").updateMany({spaceId:id},{$unset:{spaceId:""},$set:{updatedAt:new Date()}});
  await Promise.all([db.collection("spaceMembers").deleteMany({spaceId:id}),db.collection("spaceInvites").deleteMany({spaceId:id})]);
  await db.collection("spaces").deleteOne({_id:id,ownerId:user.id});
  return NextResponse.json({deleted:true},{headers:{"Cache-Control":"no-store"}});
