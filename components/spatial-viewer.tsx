@@ -24,7 +24,7 @@ export default function SpatialViewer({ manifest, markers, assetUrl, onPick, sel
   const root = useRef<HTMLDivElement>(null);
   const splat = manifest.assets.find(a => a.kind === "splat");
   const aligned = !!splat && (!!splat.registration || splat.reconstructionMethod === "lidar-initialized");
-  const [mode, setMode] = useState<"room" | "geometry">(compact ? "geometry" : splat ? "room" : "geometry");
+  const [mode, setMode] = useState<"room" | "geometry">(splat ? "room" : "geometry");
   const [error, setError] = useState(""), [loading, setLoading] = useState(false);
   const [tip, setTip] = useState<{ text: string; x: number; y: number } | null>(null);
   const callbacks = useRef({ onPick, onSelectElement, onHoverElement }); callbacks.current = { onPick, onSelectElement, onHoverElement };
@@ -144,7 +144,7 @@ export default function SpatialViewer({ manifest, markers, assetUrl, onPick, sel
     const dispose = () => { group.traverse(o => { if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments) { o.geometry.dispose(); (o.material as THREE.Material).dispose(); } }); };
 
     if (useSplat) {
-      let viewer: import("@mkkellogg/gaussian-splats-3d").Viewer | undefined;
+      let viewer: import("@mkkellogg/gaussian-splats-3d").Viewer | undefined, visibility: IntersectionObserver | undefined;
       // Furniture outlines are drawn after the splat so they stay visible inside it.
       const overlay = new THREE.Scene(), top = new THREE.Scene(); top.add(group);
       setLoading(true);
@@ -162,9 +162,11 @@ export default function SpatialViewer({ manifest, markers, assetUrl, onPick, sel
         render = () => viewer?.forceRenderNextFrame();
         if (controls) { controls.autoRotate = compact && !reduced; controls.autoRotateSpeed = .35; }
         attach(); viewer.start(); highlight(); setLoading(false);
+        // The dashboard preview spins on its own: only render it while it is on screen.
+        if (compact) { const v = viewer; visibility = new IntersectionObserver(([entry]) => { if (dead) return; const loop = v as unknown as { stop: () => void; selfDrivenModeRunning: boolean }; if (!entry.isIntersecting) loop.stop(); else if (!loop.selfDrivenModeRunning) v.start(); }); visibility.observe(element); }
         if (state.current.selected) focus(state.current.selected);
       }).catch(() => { if (!dead) { setLoading(false); setError("The 3D room could not be loaded. Switch to geometry to keep reviewing."); } });
-      return () => { dead = true; cancelAnimationFrame(focusFrame); cancelAnimationFrame(moveFrame); detach(); scene.current = null; void viewer?.dispose(); dispose(); element.replaceChildren(); };
+      return () => { dead = true; visibility?.disconnect(); cancelAnimationFrame(focusFrame); cancelAnimationFrame(moveFrame); detach(); scene.current = null; void viewer?.dispose(); dispose(); element.replaceChildren(); };
     }
 
     const three = new THREE.Scene(); three.background = new THREE.Color("#f1f0ea"); three.add(group);
