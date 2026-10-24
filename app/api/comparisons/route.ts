@@ -17,6 +17,8 @@ export async function POST(request:Request){try{
  if(!parseObjectId(body.baselineInspectionId)||!parseObjectId(body.currentInspectionId))return NextResponse.json({error:"Invalid inspection IDs"},{status:400});
  const [baseline,current]=await Promise.all([requireReadableInspection(parseObjectId(body.baselineInspectionId)!,user.id),requireReadableInspection(parseObjectId(body.currentInspectionId)!,user.id)]);
  if(String(baseline.roomId)!==String(current.roomId))return NextResponse.json({error:"Inspections must belong to the same room."},{status:400});
+ const comparisonRoom=await(await getDb()).collection("rooms").findOne({_id:baseline.roomId});
+ if(!comparisonRoom||!await canReadRoom(comparisonRoom as never,user.id))return NextResponse.json({error:"Room access required to compare shared scans"},{status:403});
  if(![baseline,current].every(i=>["completed","partial"].includes(i.status))||new Date(baseline.createdAt)>=new Date(current.createdAt))return NextResponse.json({error:"Choose an earlier completed baseline and a later completed inspection."},{status:400});
  const db=await getDb();const key=createHash("sha256").update(`${user.id}:${baseline.roomId}`).digest("hex"),leaseId=randomUUID();
  const locks=db.collection<{_id:string;leaseId:string;expiresAt:Date}>("comparisonLeases");
