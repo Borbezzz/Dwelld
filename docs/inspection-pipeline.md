@@ -70,8 +70,7 @@ bounded `after()` execution; checkpoints do not make the job a durable queue.
 Video review uses one original-video player. Timestamp markers seek and pause at the assessed
 moment; hovering or focusing a mark shows its description. Boxes are visible only within
 0.4 seconds of their source timestamp, rather than pretending to track objects across frames.
-Native live observations select their exact source photo in the primary camera pane, with a
-return-to-live control. Saved captures expose a prominent next/review action independently
+Native live observations show their exact source photo in an inset without hiding the camera. Saved captures expose a prominent next/review action independently
 of whether optional analysis has finished. Transient laptop polling failures preserve progress,
 retry automatically, and distinguish a quiet phone upload from a failed scan.
 
@@ -100,7 +99,8 @@ sender polls a lightweight signalling endpoint instead of downloading its own JP
 Furniture boxes and damage pins travel over a bounded, unordered metadata channel at about
 6 Hz. They use the current AR camera and measured world geometry; the browser rejects invalid,
 out-of-order and stale marks. Unlocalized damage remains on its exact source photo. Incoming
-findings do not replace the live video unless the user selects evidence. The once-per-second
+findings and evidence selection never replace or hide the live video. Source photos open in an
+inset, with independently scrollable findings and a camera panel that stays in view on desktop. The once-per-second
 JPEG is a fallback, labelled as connecting while WebRTC is unavailable.
 
 Evidence upload and Gemini calls keep their separate, slower schedule. Crack candidates publish
@@ -119,3 +119,10 @@ Before installing a native build with embedded frameworks, run
 resolution using the built Mach-O runtime search paths, then verifies nested signatures.
 The app target requires `@executable_path/Frameworks` for both Debug and Release. A successful
 compile alone does not verify that dyld can load WebRTC on an iPhone.
+
+A physical scan exposed a playback regression: hovering findings selected an old source photo,
+which hid the video element and could pause decoding. The laptop briefly reported 22 FPS before
+that transition. Evidence inspection now leaves the video element visible, and the remote stream
+is retained independently of element mounting. A browser regression check confirms playback time
+continues to advance while the selected source-photo inset is open. Production frame checks from
+that scan also confirmed `AI_BILLING_BLOCKED`; the specialist still published candidates.
