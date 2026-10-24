@@ -29,7 +29,7 @@ export async function PATCH(request:Request,{params}:C){try{
  const boundaries=(capture.roomBoundaries??suggestRoomBoundaries(capture.manifest)) as RoomBoundary[];
  const index=boundaries.findIndex(x=>x.id===b.id);
  if(index<0)return NextResponse.json({error:"Boundary not found"},{status:404});
- boundaries[index]={...boundaries[index],status:b.status,label:b.label?.trim()||boundaries[index].label};
+ boundaries[index]={...boundaries[index],status:b.status==="confirmed"?"confirmed":"rejected",label:typeof b.label==="string"?b.label.trim()||boundaries[index].label};
  const result=await db.collection("spatialCaptures").updateOne({_id:capture._id,...(capture.roomBoundaries?{roomBoundaries:capture.roomBoundaries}:{roomBoundaries:{$exists:false}})},{$set:{roomBoundaries:boundaries,roomBoundariesUpdatedAt:new Date()}});
  if(!result.modifiedCount)return NextResponse.json({error:"Boundaries changed; reload and retry"},{status:409});
  return NextResponse.json({boundaries});
