@@ -30,6 +30,6 @@ export default function RoomReconstruction({roomId,name,inspections,hint=false,l
  return <aside className="room-reconstruction" aria-label="Room in 3D"><div className="reconstruction-heading"><span>{name||'Your room, in 3D'}</span>{hint&&<small>Pick a room on the left to see it here</small>}</div>
   {!loading&&scene?<RoomScene compact manifest={scene.manifest} markers={scene.markers} assetUrl={n=>`/api/inspections/${scene.inspectionId}/spatial/assets/${encodeURIComponent(n)}`} onSelectElement={()=>{}}/>
    :loading||status==='loading'?<div className="room-scene room-scene-compact"><div className="room-scene-loading is-live"><DotField /><p>Loading your room…</p></div></div>
-   :<div className="reconstruction-canvas"><div className="reconstruction-message" role="status"><h3>A space to return to.</h3><p>{status}</p></div></div>}
+   :<div className="room-scene room-scene-compact"><div className="room-scene-loading is-live"><DotField /><p>{status||"Choose a room to view it in 3D."}</p></div></div>}
   <div className="reconstruction-footer">{roomId?<Link href={`/rooms/${roomId}`}>Open room ↗</Link>:<span>Your rooms in 3D</span>}</div></aside>;
 }
