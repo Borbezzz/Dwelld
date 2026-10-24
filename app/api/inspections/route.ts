@@ -34,7 +34,7 @@ export async function GET(request: Request) {
     const memberships=await db.collection("spaceMembers").find({userId:user.id},{projection:{spaceId:1}}).toArray();
     const sharedRooms=memberships.length?await db.collection("rooms").find({spaceId:{$in:memberships.map(m=>m.spaceId)}},{projection:{_id:1}}).toArray():[];
     const accessible=[...sharedRooms.map(r=>r._id),...(await db.collection("rooms").find({ownerId:user.id},{projection:{_id:1}}).toArray()).map(r=>r._id)];
-    const docs = await db.collection("inspections").find({roomId:{$in:accessible},...(roomId ? {roomId} : {})}).sort({ createdAt: -1 }).limit(100).toArray();
+    const docs = await db.collection("inspections").find({$or:[{ownerId:user.id},{roomId:{$in:accessible}}],...(roomId ? {roomId} : {})}).sort({ createdAt: -1 }).limit(100).toArray();
     return NextResponse.json({ inspections: docs.map(d=>serializeInspection(d,user.id)) });
   } catch (error) { return errorResponse(error, "app/api/inspections/route.ts"); }
 }
