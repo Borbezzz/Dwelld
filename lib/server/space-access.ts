@@ -6,6 +6,7 @@ export async function canReadRoom(room:{_id:ObjectId;ownerId:string;spaceId?:Obj
  if(room.ownerId===userId)return true;
  if(!room.spaceId)return false;
  const db=await getDb();
+ if(await db.collection("spaces").findOne({_id:room.spaceId,ownerId:userId},{projection:{_id:1}}))return true;
  return !!await db.collection("spaceMembers").findOne({spaceId:room.spaceId,userId},{projection:{_id:1}});
 }
 export async function requireReadableInspection(id:ObjectId,userId:string){
