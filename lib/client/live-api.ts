@@ -1,3 +1,4 @@
+import {uploadChunks} from "./upload-chunks";
 export async function liveRequest<T>(id: string, token: string, path = '', init: RequestInit = {}): Promise<T> {
   const controller=new AbortController();let timedOut=false;
   const cancel=()=>controller.abort(init.signal?.reason);
@@ -21,6 +22,6 @@ export async function uploadLiveVideo(id:string,token:string,file:Blob,onProgres
  const contentType=file.type.split(';')[0];
  const init=await liveRequest<{uploadId:string}>(id,token,'/upload',{method:'POST',body:JSON.stringify({filename:`walkthrough.${contentType.includes('mp4')?'mp4':'webm'}`,contentType,size:file.size})});
  const size=2*1024*1024;
- for(let offset=0,part=0;offset<file.size;offset+=size,part++) {await liveRequest(id,token,`/upload?uploadId=${init.uploadId}&part=${part}`,{method:'PATCH',body:file.slice(offset,offset+size),headers:{'Content-Type':'application/octet-stream'}});onProgress(Math.min(99,Math.round((offset+Math.min(size,file.size-offset))/file.size*100)));}
+ await uploadChunks(file,size,(part,chunk)=>liveRequest(id,token,`/upload?uploadId=${init.uploadId}&part=${part}`,{method:'PATCH',body:chunk,headers:{'Content-Type':'application/octet-stream'}}),onProgress);
  await liveRequest(id,token,'/upload',{method:'POST',body:JSON.stringify({action:'complete',uploadId:init.uploadId})});onProgress(100);
 }

@@ -14,14 +14,14 @@ export function oneFramePerSecond<T extends { timestampSeconds: number }>(frames
 }
 
 /** Provider gets pixels + timestamps only. Room geometry is used AFTER the visual assessment. */
-export async function analyzeFurnitureVideoFrames<T extends { image: Buffer; timestampSeconds: number; pose: FramePose; depth?: DepthPatch | null }>(frames: T[], elements: RoomElement[]) {
+export async function analyzeFurnitureVideoFrames<T extends { image: Buffer; timestampSeconds: number; pose?: FramePose; depth?: DepthPatch | null }>(frames: T[], elements: RoomElement[]) {
   const observations = await inspectVideoDamageBatch(frames.map(({ image, timestampSeconds }) => ({ image, timestampSeconds })));
   return Promise.all(frames.map(async frame => {
     const damage = observations.get(frame.timestampSeconds);
     if (!damage) throw new Error('Furniture analysis omitted a source frame');
-    const result = await analyzeEvidenceFrame(frame.image, frame.pose, elements, {
+    const result:Awaited<ReturnType<typeof analyzeEvidenceFrame>> = frame.pose ? await analyzeEvidenceFrame(frame.image, frame.pose, elements, {
       walls: false, observations: damage, verify: false, specialist: false, furnitureOnly: true, depth: frame.depth,
-    });
+    }) : {findings:damage.map(o=>({label:o.type,description:o.description,damageType:o.type,boundingBox:o.boundingBox,elementId:null,elementCategory:'unassigned',worldPosition:null,detectionSource:'gemini' as const,reviewStatus:'pending' as const,autoApproved:false})),views:[],dropped:0,warnings:[]};
     return { frame, result };
   }));
 }

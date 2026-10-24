@@ -6,7 +6,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 }
 export const api = {
   addDamage: (inspectionId: string, body: {description: string; evidenceFindingId: string; point: {x:number;y:number}; objectId?: string|null}) => request<{finding: Finding}>(`/api/inspections/${inspectionId}/findings`, {method:"POST",body:JSON.stringify(body)}),
-  search: (query: string, roomId?: string, mode="text") => request<{results: SearchFinding[]}>(`/api/search?${new URLSearchParams({q:query, mode, ...(roomId ? {roomId} : {})})}`),
+  search: (query: string, roomId?: string, mode="text", includeMap=false) => request<{results: SearchFinding[];map?:import("@/components/search-lab").MapOut}>(`/api/search?${new URLSearchParams({q:query, mode, ...(includeMap?{map:"1"}:{}), ...(roomId ? {roomId} : {})})}`),
   spaces: () => request<{ spaces: Space[] }>("/api/spaces"),
   createSpace: (name: string) => request<{space: Space}>("/api/spaces", {method:"POST",body:JSON.stringify({name})}),
   assignRoomToSpace: (roomId: string, spaceId: string | null) => request<{room: Room}>(`/api/rooms/${roomId}`, {method:"PATCH",body:JSON.stringify({spaceId})}),

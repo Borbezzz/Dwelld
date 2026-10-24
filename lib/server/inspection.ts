@@ -1,4 +1,3 @@
-import {inspectCracks, CRACK_MODEL} from './crack-detector';
 import { readMedia, writeMedia, deleteMedia, parseMediaId } from "./media";
 import { videoSampleTimes } from "../video-sampling";
 import { createHash, randomUUID } from "node:crypto";
@@ -101,8 +100,6 @@ export async function analyzeDetectedImage(image: Buffer, detections: ClientDete
   findings.push(...supplementalFindings.flat());
   const surfaces = await runScope("room surface damage", () => inspectSurfaceDamage(image));
   findings.push(...(surfaces || []).map((item, index) => damageFinding(item, null, null, index)));
-  const cracks=await runScope("specialised crack detection",()=>inspectCracks(image));
-  for(const [index,crack] of (cracks||[]).entries()) findings.push({...base,kind:'damage',label:'Potential crack',description:`Pretrained crack model candidate (${CRACK_MODEL}); may confuse joints, shadows and texture with cracks. Requires human review.`,boundingBox:crack.boundingBox,localizationStatus:'localized',objectLabel:null,parentDetectionId:null,detectionId:`${frameKey}_crack_${index}`,detectionSource:'crack-model',confidence:crack.confidence});
   return findings;
 }
 
@@ -196,10 +193,7 @@ export async function analyzeVideo(videoUrl: string, mimeType: string, clientFra
             const owner=box?frame.detections.filter(o=>box.x+box.width/2>=o.boundingBox.x&&box.x+box.width/2<=o.boundingBox.x+o.boundingBox.width&&box.y+box.height/2>=o.boundingBox.y&&box.y+box.height/2<=o.boundingBox.y+o.boundingBox.height).sort((a,b)=>a.boundingBox.width*a.boundingBox.height-b.boundingBox.width*b.boundingBox.height)[0]:null;
             findings.push({...base, kind:'damage', label:d.type, description:d.description, boundingBox:box, localizationStatus:box?'localized':'uncertain', detectionSource:'gemini', detectionId:`${key}_damage_${i}`, parentDetectionId:owner?seenObjects.get(owner.objectId)||null:null, objectLabel:owner?.label||null});
           });
-          try {
-            const cracks=await inspectCracks(frame.image);
-            cracks.forEach((d,i)=>findings.push({...base, kind:'damage', label:'Potential crack', description:'Specialist crack candidate. Review against the source photo.', boundingBox:d.boundingBox, detectionSource:'crack-model', detectionId:`${key}_crack_${i}`, confidence:d.confidence}));
-          } catch { warnings.push(`Specialist crack check at ${frame.timestampSeconds}s could not finish.`); }
+
         }
         processedFrames+=batch.length;
         await checkpoint('checking');
@@ -208,7 +202,7 @@ export async function analyzeVideo(videoUrl: string, mimeType: string, clientFra
     const workers = await Promise.allSettled([worker(),worker()]);
     const failure = workers.find((result): result is PromiseRejectedResult => result.status === 'rejected');
     if (failure) throw failure.reason;
-    if (blocked) warnings.push('AI damage coverage is incomplete. Saved source frames, object detections and specialist crack candidates remain available; unassessed views are not declared undamaged.');
+    if (blocked) warnings.push('AI damage coverage is incomplete. Saved source frames and object detections remain available; unassessed views are not declared undamaged.');
     findings.sort((a,b)=>a.timestampSeconds-b.timestampSeconds);
     evidenceFrames.sort((a,b)=>a.timestampSeconds-b.timestampSeconds);
     return {durationSeconds:frames.durationSeconds, findings, warnings:[...new Set(warnings)], incomplete:warnings.length>0, evidenceFrames, analysisRunId};

@@ -1,5 +1,5 @@
 import type { NextConfig } from "next";
-const models = { yolo: "./public/models/yolo11n.onnx", crack: "./public/models/crack-seg.onnx" };
+const models = { yolo: "./public/models/yolo11n.onnx" };
 const nextConfig: NextConfig = {
   distDir: process.env.DWELLD_DIST_DIR || ".next",
   serverExternalPackages: ["ffmpeg-static", "onnxruntime-node"],
@@ -23,11 +23,9 @@ const nextConfig: NextConfig = {
   // Only the routes that run a model or FFmpeg get the files.
   outputFileTracingIncludes: {
     "/api/comparisons": ["./node_modules/ffmpeg-static/ffmpeg"],
-    "/api/inspections": ["./node_modules/ffmpeg-static/ffmpeg", models.crack],
-    "/api/inspections/[inspectionId]/spatial": [models.crack, models.yolo],
-    "/api/live/[sessionId]/spatial": [models.crack, models.yolo],
-    "/api/live/[sessionId]/analyze": [models.crack],
-    "/api/live/[sessionId]/frame": [models.crack],
+    "/api/inspections": ["./node_modules/ffmpeg-static/ffmpeg"],
+    "/api/inspections/[inspectionId]/spatial": [models.yolo],
+    "/api/live/[sessionId]/spatial": [models.yolo],
   },
 };
 export default nextConfig;

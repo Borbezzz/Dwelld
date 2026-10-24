@@ -42,12 +42,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ ins
       const frameRef = manifest.assets.find(a => a.name === placed.frame.image && a.kind === "image")?.mediaRef;
       const image = evidence ?? (frameRef ? await readMedia(frameRef, 16 * 1024 * 1024) : null);
       const at = evidence ? { x: p.x, y: p.y } : placed.sensor;
-      const seen = image ? await describeAtPoint(image, at).catch(e => { logAIFailure('mark.video', e); return null; }) : null;
+      const seen = image ? await describeAtPoint(image, at, note).catch(e => { logAIFailure('mark.video', e); return null; }) : null;
       if (!seen && !note) return NextResponse.json({ error: "Couldn't describe that spot automatically. Add a short note and save again." }, { status: 422 });
       const ref = evidence ? await writeMedia(evidence, `video-mark-${Date.now()}.jpg`, "image/jpeg", { ownerId: user.id, inspectionId: String(inspection._id), kind: "manual-mark" }) : frameRef;
       const element = placed.element, furniture = isFurniture(element);
       const label = seen?.label || note.slice(0, 80);
-      const finding = { _id: new ObjectId(), ownerId: user.id, inspectionId: inspection._id, roomId: inspection.roomId, kind: "damage", source: "manual", label, damageType: seen?.type || "other", description: [seen?.description, note && `Your note: ${note}`].filter(Boolean).join(" "), evidenceFrameUrl: ref, point: at, boundingBox: seen?.boundingBox ?? null, timestampSeconds: b.scanTime, worldPosition: placed.position, ...(furniture ? { spatialElementId: element.id } : {}), reviewStatus: "confirmed", detectionSource: "manual-video", createdAt: now };
+      const finding = { _id: new ObjectId(), ownerId: user.id, inspectionId: inspection._id, roomId: inspection.roomId, kind: "damage", source: "manual", label, damageType: seen?.type || "other", userNote: note, description: [seen?.description, note && `Your note: ${note}`].filter(Boolean).join(" "), evidenceFrameUrl: ref, point: at, boundingBox: seen?.boundingBox ?? null, timestampSeconds: b.scanTime, worldPosition: placed.position, ...(furniture ? { spatialElementId: element.id } : {}), reviewStatus: "confirmed", detectionSource: "manual-video", createdAt: now };
       await db.collection("findings").insertOne(finding);
       const marker = { _id: new ObjectId(), findingId: String(finding._id), inspectionId: inspection._id, ownerId: user.id, sessionId: manifest.sessionId, position: placed.position, label, elementId: furniture ? element.id : null, reviewStatus: "confirmed", version: 1, createdAt: now, reviewHistory: [{ action: "add", source: "video", position: placed.position, userId: user.id, at: now }] };
       await db.collection("spatialMarkers").insertOne(marker);
@@ -65,10 +65,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ ins
         const view = manifest.frames.map(frame => ({ frame, at: projectPoint(b.position as [number, number, number], frame), ref: manifest.assets.find(a => a.name === frame.image && a.kind === "image")?.mediaRef }))
           .filter(v => v.at && v.ref && v.at.x > .05 && v.at.x < .95 && v.at.y > .05 && v.at.y < .95)
           .sort((p, q) => Math.hypot(p.at!.x - .5, p.at!.y - .5) - Math.hypot(q.at!.x - .5, q.at!.y - .5))[0];
-        const seen = view ? await readMedia(view.ref!, 16 * 1024 * 1024).then(image => describeAtPoint(image, view.at!)).catch(() => null) : null;
+        const seen = view ? await readMedia(view.ref!, 16 * 1024 * 1024).then(image => describeAtPoint(image, view.at!, note)).catch(() => null) : null;
         if (!seen && !note) return NextResponse.json({ error: view ? "Couldn't describe that spot automatically. Add a short note and save again." : "No photo shows that spot. Add a short note and save again." }, { status: 422 });
         if (seen && view) {
-          const finding = { _id: new ObjectId(), ownerId: user.id, inspectionId: inspection._id, roomId: inspection.roomId, kind: "damage", label: seen.label, damageType: seen.type, description: [seen.description, note && `Your note: ${note}`].filter(Boolean).join(" "), evidenceFrameUrl: view.ref, point: view.at, boundingBox: seen.boundingBox, timestampSeconds: view.frame.timestamp, spatialElementId: b.elementId || null, source: "manual", aiDescribed: true, reviewStatus: "confirmed", reviewHistory: [{ from: "pending", to: "confirmed", at: now, by: user.id }], createdAt: now };
+          const finding = { _id: new ObjectId(), ownerId: user.id, inspectionId: inspection._id, roomId: inspection.roomId, kind: "damage", label: seen.label, damageType: seen.type, userNote: note, description: [seen.description, note && `Your note: ${note}`].filter(Boolean).join(" "), evidenceFrameUrl: view.ref, point: view.at, boundingBox: seen.boundingBox, timestampSeconds: view.frame.timestamp, spatialElementId: b.elementId || null, source: "manual", aiDescribed: true, reviewStatus: "confirmed", reviewHistory: [{ from: "pending", to: "confirmed", at: now, by: user.id }], createdAt: now };
           await db.collection("findings").insertOne(finding);
           findingId = finding._id; initialReviewStatus = "confirmed"; b.label = seen.label;
         }

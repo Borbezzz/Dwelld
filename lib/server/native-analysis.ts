@@ -1,3 +1,4 @@
+import {elementVisibility} from "../spatial/visibility";
 import {analysisFailure, logAIFailure} from "./analysis-failure";
 import { analyzeFurnitureVideoFrames, oneFramePerSecond } from "./furniture-video";
 import { ObjectId, type Document } from "mongodb";
@@ -77,7 +78,7 @@ export async function analyzeNativeInspection(inspection: Document, manifest: Sp
     await db.collection("inspections").updateOne({ _id: inspection._id }, { $set: { status: "processing" } });
     const elements = manifest.elements, base = { ownerId: inspection.ownerId, inspectionId: inspection._id, roomId: inspection.roomId };
     const imageRef = (name: string) => manifest.assets.find(a => a.name === name && a.kind === "image")?.mediaRef;
-    /** LiDAR depth and confidence for this photo, when the phone kept them, for the crack edge check. */
+    /** LiDAR depth and confidence for this photo, when the phone kept them, for calibrated 3D localization. */
     const depthFor = async (fr: { depth?: string; confidence?: string; depthWidth?: number; depthHeight?: number }): Promise<DepthPatch | null> => {
       const d = fr.depth && manifest.assets.find(a => a.name === fr.depth && a.kind === "depth")?.mediaRef, c = fr.confidence && manifest.assets.find(a => a.name === fr.confidence && a.kind === "confidence")?.mediaRef;
       const w = fr.depthWidth, h = fr.depthHeight;
@@ -156,7 +157,7 @@ export async function analyzeNativeInspection(inspection: Document, manifest: Sp
     for (const e of furniture.filter(e => !options.objectElementIds || options.objectElementIds.includes(e.id))) {
       let best: { box: { x: number; y: number; width: number; height: number }; area: number; ref: string; t: number } | null = null;
       for (const fr of manifest.frames) { const ref = imageRef(fr.image); if (!ref) continue; const v = elementInView(e as RoomElement, fr as FramePose); if (v && (!best || v.area > best.area)) best = { box: v.box, area: v.area, ref, t: fr.timestamp }; }
-      if (best) await db.collection("findings").insertOne({ ...base, kind: "object", label: names.get(e.id) || e.category, description: `Measured ${e.dimensions.map(n => Number(n).toFixed(2)).join(" × ")} m from this scan.`, dimensions: e.dimensions, spatialElementId: e.id, evidenceFrameUrl: best.ref, boundingBox: best.box, timestampSeconds: best.t, source: "ai", detectionSource: "roomplan", reviewStatus: "confirmed", reviewHistory: [], createdAt: new Date() });
+      if (best) await db.collection("findings").insertOne({ ...base, visibilityIntervals:elementVisibility(e,manifest.frames,Math.max(manifest.frames.at(-1)?.timestamp||0,...manifest.assets.filter(a=>a.kind==="video").map(a=>(a.startTimeSeconds||0)+(a.durationSeconds||0)))), kind: "object", label: names.get(e.id) || e.category, description: `Measured ${e.dimensions.map(n => Number(n).toFixed(2)).join(" × ")} m from this scan.`, dimensions: e.dimensions, spatialElementId: e.id, evidenceFrameUrl: best.ref, boundingBox: best.box, timestampSeconds: best.t, source: "ai", detectionSource: "roomplan", reviewStatus: "confirmed", reviewHistory: [], createdAt: new Date() });
     }
     const approved = collected.filter(f => f.autoApproved).length;
     await db.collection("inspections").updateOne({ _id: inspection._id }, { $set: { status: skipped || warnings.length > 1 ? "partial" : "completed", analysisWarnings: [...new Set(warnings)], autoReview: { checked: collected.filter(f => f.verification).length, approved }, framesAnalysed: analysed, completedAt: new Date(), durationSeconds: manifest.frames.at(-1)?.timestamp || 0 } });

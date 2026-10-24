@@ -1,3 +1,4 @@
+import {analysisFailure} from "./analysis-failure";
 import {GoogleGenAI} from "@google/genai";
 import {ObjectId,type Db,type Document} from "mongodb";
 import {getDb} from "./db";
@@ -23,18 +24,18 @@ function pendingFilter(ownerId:string,inspectionId?:ObjectId):Document{
 /** Incremental indexing is explicit and bounded; never embeds another user's records. */
 export async function indexFindings(ownerId:string,inspectionId?:ObjectId,options:{limit?:number;deadlineMs?:number;timeoutMs?:number}={}){
  const db=await getDb(),findings=db.collection("findings");
- const docs=await findings.find(pendingFilter(ownerId,inspectionId),{projection:{imageEmbedding:0}}).limit(options.limit??50).toArray();let indexed=0;
+ const docs=await findings.find(pendingFilter(ownerId,inspectionId),{projection:{imageEmbedding:0}}).limit(options.limit??50).toArray();let indexed=0;const warnings=new Set<string>();
  for(const doc of docs){
   if(Date.now()>=(options.deadlineMs??Infinity))break;
   const set:Document={searchText:searchText(doc)};
-  if(doc.embeddingModel!==EMBEDDING_MODEL||!doc.embedding){try{set.embedding=await embed(set.searchText,false,options.timeoutMs??20000);set.embeddingModel=EMBEDDING_MODEL;set.embeddedAt=new Date();}catch(e){if(!voyageConfigured())throw e;}}
+  if(doc.embeddingModel!==EMBEDDING_MODEL||!doc.embedding){try{set.embedding=await embed(set.searchText,false,options.timeoutMs??20000);set.embeddingModel=EMBEDDING_MODEL;set.embeddedAt=new Date();}catch(e){if(!voyageConfigured())throw e;warnings.add(`Gemini text embeddings: ${analysisFailure(e).message}`);}}
   if(voyageConfigured()&&typeof doc.evidenceFrameUrl==="string"&&doc.imageEmbeddingModel!==VOYAGE_MULTIMODAL_MODEL){
    try{set.imageEmbedding=await embedEvidence(doc.evidenceFrameUrl,doc.boundingBox);set.imageEmbeddingModel=VOYAGE_MULTIMODAL_MODEL;}
-   catch(e){console.error("photo embedding failed",e instanceof Error?e.message:e);set.imageEmbeddingFailed=VOYAGE_MULTIMODAL_MODEL;}
+   catch(e){warnings.add(`Voyage photo embeddings: ${analysisFailure(e).message}`);set.imageEmbeddingFailed=VOYAGE_MULTIMODAL_MODEL;}
   }
   await findings.updateOne({_id:doc._id,ownerId},{$set:set});indexed++;
  }
- return {indexed,remaining:await findings.countDocuments(pendingFilter(ownerId,inspectionId))};
+ return {indexed,remaining:await findings.countDocuments(pendingFilter(ownerId,inspectionId)),warnings:[...warnings]};
 }
 export function reciprocalRankFusion(lists:Document[][],limit:number){return appRankFusion(Object.fromEntries(lists.map((l,i)=>[`p${i}`,l])),limit,{});}
 

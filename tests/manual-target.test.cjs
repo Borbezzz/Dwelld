@@ -4,9 +4,9 @@ const photo=()=>sharp({create:{width:1000,height:800,channels:3,background:'#987
 test('manual target sends the exact snapshot context and crop, then maps crop coordinates to the full image',async()=>{
  const previous=process.env.GEMINI_API_KEY;process.env.GEMINI_API_KEY='test-only';
  try{const calls=[],{describeAtPoint}=load({found:true,type:'scratch',label:'Scratch',description:'Visible scratch at the marked point',boundingBox:{x:.25,y:.25,width:.5,height:.5}},calls);
- const seen=await describeAtPoint(await photo(),{x:.5,y:.5});
+ const seen=await describeAtPoint(await photo(),{x:.5,y:.5},"Scratch at the front edge");
  assert.deepEqual(seen.boundingBox,{x:.42000000000000004,y:.4,width:.16,height:.2});
- assert.equal(calls.length,1);assert.equal(calls[0].contents.filter(p=>p.inlineData).length,2);
+ assert.match(calls[0].contents[2].text,/Scratch at the front edge/);assert.equal(calls.length,1);assert.equal(calls[0].contents.filter(p=>p.inlineData).length,2);
  const full=await sharp(Buffer.from(calls[0].contents[0].inlineData.data,'base64')).metadata(),crop=await sharp(Buffer.from(calls[0].contents[1].inlineData.data,'base64')).metadata();
  assert.equal(full.width,1000);assert.equal(full.height,800);assert.equal(crop.width,768);assert.equal(crop.height,768);
  assert.match(calls[0].contents[2].text,/relative to IMAGE 2/);

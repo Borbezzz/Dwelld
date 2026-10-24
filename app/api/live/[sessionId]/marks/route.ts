@@ -15,7 +15,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ ses
     if (session.status === "saved") throw new LiveError("This scan is already saved", 409);
     if (Number(request.headers.get("content-length")) > 6 * 1024 * 1024) throw new LiveError("Photo too large", 413);
     const form = await request.formData(), file = form.get("image"), data = JSON.parse(String(form.get("metadata") || "{}"));
-    const position = data.position, point = data.point ?? {x:.5,y:.5};
+    const position = data.position, point = data.point ?? {x:.5,y:.5}, userNote = data.userNote ?? "";
+    if(typeof userNote!=="string"||userNote.length>1000)throw new LiveError("Keep the note under 1000 characters");
     if (!(file instanceof File) || !file.size || file.size > 5 * 1024 * 1024 || !validEventId(data.observationId) || (position != null && (!Array.isArray(position) || position.length !== 3 || !position.every((v: unknown) => typeof v === "number" && Number.isFinite(v) && Math.abs(v) < 100))) || ![point.x,point.y].every((v:unknown)=>typeof v==="number"&&Number.isFinite(v)&&v>=0&&v<=1) || !Number.isFinite(data.timestampSeconds) || data.timestampSeconds < 0) throw new LiveError("Invalid mark");
     const { db } = await liveCollections();
     const existing = await db.collection("liveFindings").findOne({ sessionId: session._id, id: data.observationId }, { projection: { _id: 0, sessionId: 0 } });
@@ -23,11 +24,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ ses
     const {data:image,info} = await sharp(Buffer.from(await file.arrayBuffer()), { limitInputPixels: 24_000_000 }).rotate().jpeg({ quality: 88 }).toBuffer({resolveWithObject:true});
     if ((data.imageWidth != null && data.imageWidth !== info.width) || (data.imageHeight != null && data.imageHeight !== info.height)) throw new LiveError("Snapshot dimensions do not match the marked frame");
     const ref = await writeMedia(image, `live/${sessionId}/mark-${data.observationId}.jpg`, "image/jpeg", { ownerId: session.ownerId, liveSessionId: String(session._id) });
-    const seen = await describeAtPoint(image, point).catch(() => null);
+    const seen = await describeAtPoint(image, point, userNote).catch(() => null);
     const finding: LiveFinding = {
-      id: data.observationId, kind: "damage", source: "manual",
+      id: data.observationId, kind: "damage", source: "manual", userNote:userNote.trim(),
       label: seen ? seen.label : "Marked on phone",
-      description: seen?.description || "Marked during the scan. Add a note if it needs one.",
+      description: [seen?.description || "Marked during the scan.",userNote.trim()?`Your note: ${userNote.trim()}`:""].filter(Boolean).join(" "),
       point, ...(seen?.boundingBox ? { boundingBox: seen.boundingBox } : {}),
       timestampSeconds: data.timestampSeconds, ...(position ? {worldPosition: position as [number, number, number]} : {}),
     };

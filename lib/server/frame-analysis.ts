@@ -1,8 +1,7 @@
 import {analysisFailure, logAIFailure} from "./analysis-failure";
 import sharp from "sharp";
 import { isFurniture } from "../spatial/furniture";
-import { inspectCracks } from "./crack-detector";
-import { checkCrack, type DepthPatch } from "./crack-check";
+import type {DepthPatch} from "./crack-check";
 import { inspectVisibleDamage, scopeForName, type DamageObservation, type Box } from "./damage";
 import { verifyFinding, autoApproveThreshold, reviewDecision, type Verdict } from "./verify";
 
@@ -11,7 +10,8 @@ export type FramePose = { transform: number[]; intrinsics: number[]; width: numb
 export type RoomElement = { id: string; category: string; dimensions: number[]; transform: number[] };
 type Scope = NonNullable<ReturnType<typeof scopeForName>>;
 export type FrameFinding = { label: string; description: string; damageType: string; boundingBox: Box | null; elementId: string | null; elementCategory: string; worldPosition: [number, number, number] | null; detectionSource: "gemini" | "crack-model"; verification?: Verdict & { threshold: number }; reviewStatus: "pending" | "confirmed"; autoApproved: boolean; confidence?: number };
-export type ElementView = { elementId: string; category: string; box: Box; area: number };
+import {elementInView,type ElementView} from "../spatial/visibility";
+export {elementInView,type ElementView} from "../spatial/visibility";
 
 /** Furniture and doors that share a narrow damage prompt. Walls stay on the full-frame pass. */
 export function scopeFor(category: string): Scope | null {
@@ -21,27 +21,6 @@ const NAMES: Record<string, string> = { table: "Table", cabinet: "Cabinet", door
 
 import { project, projectPoint, sub, dot, axes, origin, hitElement, type V3 } from "./projection";
 export { projectPoint };
-/** Where a furniture piece sits in this photo, if it is clearly in view. */
-export function elementInView(e: RoomElement, pose: FramePose): ElementView | null {
-  const [ax, ay, az] = axes(e.transform), o = origin(e.transform), h = e.dimensions.map(v => Math.max(v, .02) / 2);
-  const pts: { x: number; y: number }[] = [];
-  for (const sx of [-1, 1]) for (const sy of [-1, 1]) for (const sz of [-1, 1]) {
-    const p: V3 = [0, 1, 2].map(i => o[i] + ax[i] * sx * h[0] + ay[i] * sy * h[1] + az[i] * sz * h[2]) as V3;
-    const q = project(p, pose); if (q) pts.push(q);
-  }
-  // One edge may cross the camera plane (a close look at a door or tabletop). Two missing edges is not a usable view.
-  if (pts.length < 6) return null;
-  const x0 = Math.min(...pts.map(p => p.x)), x1 = Math.max(...pts.map(p => p.x)), y0 = Math.min(...pts.map(p => p.y)), y1 = Math.max(...pts.map(p => p.y));
-  const cx0 = Math.max(0, x0), cx1 = Math.min(1, x1), cy0 = Math.max(0, y0), cy1 = Math.min(1, y1);
-  if (cx1 <= cx0 || cy1 <= cy0) return null;
-  const visible = (cx1 - cx0) * (cy1 - cy0), full = (x1 - x0) * (y1 - y0);
-  if (visible < .03 || visible / full < .55) return null; // too small, or mostly out of frame
-  const pad = .04;
-  const box = { x: Math.max(0, cx0 - pad), y: Math.max(0, cy0 - pad), width: 0, height: 0 };
-  box.width = Math.min(1, cx1 + pad) - box.x; box.height = Math.min(1, cy1 + pad) - box.y;
-  return { elementId: e.id, category: e.category, box, area: visible };
-}
-
 /**
  * Which pieces to inspect when a photo is checked object by object. Take the largest of each
  * damage scope first, so a sofa filling the frame does not crowd out a door, then fill remaining
@@ -106,20 +85,6 @@ export async function analyzeEvidenceFrame(image: Buffer, pose: FramePose, eleme
     if (o.boundingBox && out.some(f => f.boundingBox && iou(f.boundingBox, o.boundingBox!) > .35)) return;
     out.push({ label: `${label}: ${o.type}`, description: o.description, damageType: o.type, boundingBox: o.boundingBox, elementId: owner?.id ?? null, elementCategory: owner?.category ?? (element ? element.category : "unassigned"), worldPosition, detectionSource: source, reviewStatus: "pending", autoApproved: false });
   };
-  // Cracks get an edge + LiDAR depth check: board borders, door gaps and shelf edges are dropped.
-  let edgesRejected = 0;
-  const screenCracks = async <T extends { type: string; description: string; boundingBox: Box | null }>(list: T[]) => {
-    const kept: T[] = [];
-    for (const o of list) {
-      if (o.type !== "crack" || !o.boundingBox) { kept.push(o); continue; }
-      try {
-        const c = await checkCrack(image, o.boundingBox, options.depth);
-        if (c.verdict === "edge") { edgesRejected++; continue; }
-        kept.push({ ...o, description: `${o.description} Edge check: ${c.reason}` });
-      } catch { kept.push(o); }
-    }
-    return kept;
-  };
   // Inspect the entire photo even before RoomPlan has recognized a surface or object.
   let wholeFailure: unknown;
   let publications: Promise<void> = Promise.resolve();
@@ -128,28 +93,13 @@ export async function analyzeEvidenceFrame(image: Buffer, pose: FramePose, eleme
     if (snapshot.length) publications = publications.then(async () => { await options.onCandidates?.(snapshot); });
     return publications;
   };
-  // Independent services publish as they finish. Gemini failure must not discard crack candidates.
-  await Promise.all([
-    (async () => {
-      let whole: DamageObservation[] = [];
-      try { whole = options.observations ?? await inspectVisibleDamage(image); }
-      catch (error) { wholeFailure = error; logAIFailure("frame.whole", error); warnings.push(analysisFailure(error).message); }
-      whole = await screenCracks(whole);
-      whole.forEach(o => add('Visible damage', o, null, 'gemini'));
-      await publish();
-    })(),
-    (async () => {
-      if (options.specialist === false) return;
-      let cracks: Awaited<ReturnType<typeof inspectCracks>> = [];
-      try { cracks = await inspectCracks(image); }
-      catch { warnings.push('Specialist crack check was unavailable.'); }
-      const screened = await screenCracks(cracks.map(o => ({ type: 'crack', description: 'Specialist crack candidate; requires cross-checking against the photo.', boundingBox: o.boundingBox as Box | null })));
-      screened.forEach(o => add('Potential crack', o, null, 'crack-model'));
-      await publish();
-    })(),
-  ]);
+  // Argon is the only damage detector. Geometry is used after visual assessment.
+  try {
+    const whole = options.observations ?? await inspectVisibleDamage(image);
+    whole.forEach(o => add('Visible damage', o, null, 'gemini'));
+    await publish();
+  } catch (error) { wholeFailure = error; logAIFailure('frame.damage', error); warnings.push(analysisFailure(error).message); }
   await publications;
-  if (edgesRejected) warnings.push(`${edgesRejected} crack candidate${edgesRejected === 1 ? " was" : "s were"} dropped: the edge and depth check found the border of an object, not a crack.`);
   if (wholeFailure && !out.length) throw wholeFailure;
   // Cross-check: a second, adversarial Gemini look at each finding.
   const threshold = autoApproveThreshold();

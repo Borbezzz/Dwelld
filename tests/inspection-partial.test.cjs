@@ -38,7 +38,7 @@ test('expired deadline skips AI calls while retaining detected object', async ()
   const { analyzeDetectedImage } = load({ inspectObjectDamage: work, inspectUnsupportedFurniture: work, inspectSurfaceDamage: work });
   const warnings = [];
   const findings = await analyzeDetectedImage(Buffer.from('fixture'), [detection], 1, 'frame', warnings, Date.now());
-  assert.equal(calls, 0); assert.equal(findings.length, 1); assert.equal(warnings.length, 4);
+  assert.equal(calls, 0); assert.equal(findings.length, 1); assert.equal(warnings.length, 3);
 });
 test('surface failure and optional furniture failure are reported', async () => {
   const fail = async () => { throw new Error('invalid response'); };

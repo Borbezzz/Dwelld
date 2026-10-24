@@ -1,3 +1,4 @@
+import {uploadChunks} from "./upload-chunks";
 export const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
 const UPLOAD_CHUNK_BYTES = 2 * 1024 * 1024;
 
@@ -26,15 +27,10 @@ export async function uploadVideo(file: File, { signal, onProgress }: UploadOpti
   }));
   if (typeof initialized.uploadId !== "string") throw new Error("The upload service did not create an upload.");
   const uploadId = initialized.uploadId;
-  for (let offset = 0, part = 0; offset < file.size; offset += UPLOAD_CHUNK_BYTES, part++) {
+  await uploadChunks(file,UPLOAD_CHUNK_BYTES,async(part,chunk)=>{
     signal?.throwIfAborted();
-    const end = Math.min(offset + UPLOAD_CHUNK_BYTES, file.size);
-    await readResponse(await fetch(`/api/uploads?uploadId=${encodeURIComponent(uploadId)}&part=${part}`, {
-      method: "PATCH", signal, headers: { "Content-Type": "application/octet-stream" },
-      body: file.slice(offset, end),
-    }));
-    onProgress?.(Math.min(99, Math.round(end / file.size * 100)));
-  }
+    return readResponse(await fetch(`/api/uploads?uploadId=${encodeURIComponent(uploadId)}&part=${part}`,{method:"PATCH",signal,headers:{"Content-Type":"application/octet-stream"},body:chunk}));
+  },onProgress);
   signal?.throwIfAborted();
   const completed = await readResponse(await fetch("/api/uploads", {
     method: "POST", signal, headers: { "Content-Type": "application/json" },

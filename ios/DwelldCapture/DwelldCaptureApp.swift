@@ -210,6 +210,27 @@ struct CaptureScreen: View {
         }
         .background(Dwelld.paper.ignoresSafeArea())
         .tint(Dwelld.ink)
+        .sheet(item: $model.pendingMark) { _ in
+            NavigationStack {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        if let photo = model.markSnapshot {
+                            Image(uiImage: photo).resizable().scaledToFit().frame(maxHeight: 300)
+                                .overlay { Image(systemName: "scope").font(.system(size: 30)).foregroundStyle(.red).shadow(color: .white, radius: 2) }
+                        }
+                        Text("This is the exact frame you marked. Add context for Gemini about the spot under the crosshair.").font(.system(size: 13)).foregroundStyle(Dwelld.muted)
+                        Text("Your note (optional)").font(.system(size: 14, weight: .medium))
+                        TextField("e.g. Scratch on the front edge, already here at move-in", text: $model.markNote, axis: .vertical)
+                            .lineLimit(3...6).padding(14).background(Dwelld.well).clipShape(RoundedRectangle(cornerRadius: 6))
+                            .onChange(of: model.markNote) { _, value in if value.count > 1000 { model.markNote = String(value.prefix(1000)) } }
+                            .accessibilityLabel("Note for the marked snapshot")
+                        Text("Your words stay with this photo. Gemini checks the pixels; the note does not confirm damage.").font(.system(size: 11)).foregroundStyle(Dwelld.muted)
+                        Button("Save snapshot & note") { model.savePendingMark() }.buttonStyle(DwelldButtonStyle())
+                    }.padding(20)
+                }.background(Dwelld.paper).navigationTitle("Marked snapshot").navigationBarTitleDisplayMode(.inline)
+                    .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { model.cancelPendingMark() } } }
+            }.interactiveDismissDisabled()
+        }
         .onOpenURL { url in Task { await model.pair(url: url) } }
     }
 }

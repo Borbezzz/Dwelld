@@ -1,7 +1,7 @@
-import {inspectCracks, CRACK_MODEL} from './crack-detector';
+import {logAIFailure} from "./analysis-failure";
 import { randomUUID } from 'node:crypto';
 import sharp from 'sharp';
-import { inspectVisibleDamage, inspectObjectDamage, inspectSurfaceDamage, validBox } from './damage';
+import { inspectVisibleDamage, validBox } from './damage';
 import { deleteMedia, writeMedia } from './media';
 import type { LiveAnalysisObject, LiveAnalysisResult, LiveDamageFinding } from '../live/detection-types';
 
@@ -25,32 +25,11 @@ export async function analyzeLiveFrame(image: Buffer, input: LiveAnalysisInput):
   const size=await sharp(normalized).metadata();
   const ref=await writeMedia(normalized,`live/${input.sessionId}/${input.observationId}.png`,'image/png');
   try{
-    if (input.fullFrame) {
-      const results = await Promise.allSettled([inspectVisibleDamage(normalized), inspectCracks(normalized)]);
-      const analysisWarnings: string[] = [];
-      const findings: LiveDamageFinding[] = [];
-      const damage = results[0], cracks = results[1];
-      if (damage.status === 'fulfilled') damage.value.forEach(item => findings.push({ id: randomUUID(), parentObjectId: null, label: item.type, description: item.description, boundingBox: item.boundingBox, timestampSeconds: input.timestampSeconds, damageType: item.type, source: 'ai', detectionSource: 'gemini' }));
-      else analysisWarnings.push('Whole-frame damage analysis could not finish. This view remains unassessed.');
-      if (cracks.status === 'fulfilled') cracks.value.forEach(item => findings.push({ id: randomUUID(), parentObjectId: null, label: 'Potential crack', description: 'Specialist crack candidate; review the source image.', boundingBox: item.boundingBox, timestampSeconds: input.timestampSeconds, damageType: 'crack', source: 'ai', detectionSource: 'crack-model' }));
-      else analysisWarnings.push('Specialist crack analysis could not finish.');
-      return { analysisWarnings, evidenceFrameRef: ref, sourceWidth: size.width!, sourceHeight: size.height!, findings, analyzedObjectIds: damage.status === 'fulfilled' ? input.objects.map(o => o.objectId) : [], surfacesAnalyzed: damage.status === 'fulfilled' };
-    }
-    const findings:LiveDamageFinding[]=[];const analysisWarnings:string[]=[];
-    const checks=await Promise.allSettled([
-      ...input.objects.map(async object=>{
-        const observations=await inspectObjectDamage(normalized,object.label,object.boundingBox);
-        findings.push(...observations.map(item=>({id:randomUUID(),parentObjectId:object.objectId,label:`${object.label}: ${item.type}`,description:item.description,boundingBox:item.boundingBox,timestampSeconds:input.timestampSeconds,damageType:item.type,source:'ai' as const})));
-      }),
-      ...(input.includeSurfaces?[inspectSurfaceDamage(normalized).then(observations=>{
-        findings.push(...observations.map(item=>({id:randomUUID(),parentObjectId:null,label:`Room surface: ${item.type}`,description:item.description,boundingBox:item.boundingBox,timestampSeconds:input.timestampSeconds,damageType:item.type,source:'ai' as const})));
-      })]:[]),
-      ...(input.includeSurfaces?[inspectCracks(normalized).then(cracks=>{findings.push(...cracks.map(crack=>({id:randomUUID(),parentObjectId:null,label:'Potential crack',description:`Pretrained crack model candidate (${CRACK_MODEL}, ${(crack.confidence*100).toFixed(0)}% model score); review against the source image. Joints and shadows can be false positives.`,boundingBox:crack.boundingBox,timestampSeconds:input.timestampSeconds,damageType:'crack',source:'ai' as const,detectionSource:'crack-model' as const})));})]:[]),
-    ]);
-    const analyzedObjectIds=input.objects.filter((object,index)=>{if(checks[index].status==='fulfilled')return true;analysisWarnings.push(`Damage check for ${object.label} could not finish. Assessment is incomplete.`);return false}).map(object=>object.objectId);
-    const surfacesAnalyzed=input.includeSurfaces&&checks[input.objects.length]?.status==='fulfilled';
-    if(input.includeSurfaces&&!surfacesAnalyzed)analysisWarnings.push('Gemini surface analysis could not finish. Assessment is incomplete.');
-    if(input.includeSurfaces){const specialist=checks[input.objects.length+1];if(specialist?.status==='rejected')analysisWarnings.push('Specialised crack detection was unavailable. Gemini observations are retained; crack assessment is incomplete.');}
-    return{analysisWarnings,evidenceFrameRef:ref,sourceWidth:size.width!,sourceHeight:size.height!,findings,analyzedObjectIds,surfacesAnalyzed};
+    let damage: Awaited<ReturnType<typeof inspectVisibleDamage>> = [];
+    const analysisWarnings:string[]=[];
+    try { damage=await inspectVisibleDamage(normalized); }
+    catch(error) { logAIFailure('live.damage',error); analysisWarnings.push('Argon damage analysis could not finish. This view remains unassessed.'); }
+    const findings:LiveDamageFinding[]=damage.map(item=>({id:randomUUID(),parentObjectId:null,label:item.type,description:item.description,boundingBox:item.boundingBox,timestampSeconds:input.timestampSeconds,damageType:item.type,source:'ai',detectionSource:'gemini'}));
+    return {analysisWarnings,evidenceFrameRef:ref,sourceWidth:size.width!,sourceHeight:size.height!,findings,analyzedObjectIds:analysisWarnings.length?[]:input.objects.map(o=>o.objectId),surfacesAnalyzed:!analysisWarnings.length};
   }catch(error){await deleteMedia(ref).catch(()=>{});throw error;}
 }

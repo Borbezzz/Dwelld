@@ -14,7 +14,7 @@ struct FrameRecord: Codable { let timestamp: Double; let image: String; let dept
 struct Registration: Codable { let sessionId: String; var source = "arkit-calibrated"; var transform = matrix(matrix_identity_float4x4) }
 struct Asset: Codable { let name: String; var mediaRef: String; let kind: String; var registration: Registration? = nil; var reconstructionMethod: String? = nil; var startTimeSeconds: Double? = nil; var durationSeconds: Double? = nil; var fps: Int? = nil }
 /// A spot the person marked during the scan: the photo and the LiDAR point under the centre crosshair.
-struct PhoneMark: Codable { let id: String; let position: [Float]?; let timestamp: Double; let image: String; var sent = false; var point: [Double]? = nil; var imageWidth: Int? = nil; var imageHeight: Int? = nil }
+struct PhoneMark: Codable, Identifiable { let id: String; let position: [Float]?; let timestamp: Double; let image: String; var sent = false; var point: [Double]? = nil; var imageWidth: Int? = nil; var imageHeight: Int? = nil; var userNote: String? = nil }
 struct Manifest: Codable { var version = 1; let sessionId: String; var coordinateSystem = "arkit-right-handed-y-up-metres"; var elements: [Element]; var frames: [FrameRecord]; var assets: [Asset] }
 
 struct PhoneDamageBox: Decodable { let x: Double; let y: Double; let width: Double; let height: Double }
@@ -136,6 +136,9 @@ struct PhoneFinding: Decodable, Identifiable {
         } catch { /* Capture continues locally if the laptop connection drops. */ }
     }
     @Published var liveSplats: [LiveGaussian] = []
+    @Published var pendingMark: PhoneMark?
+    @Published var markNote = ""
+    @Published var markSnapshot: UIImage?
     @Published var markCount = 0
     @Published var sentDuringScan = 0
     private var streamCursor = 0
@@ -200,7 +203,7 @@ struct PhoneFinding: Decodable, Identifiable {
         liveFindings = []; damageEvidence = nil; damageEvidenceFindings = []
         evidenceRef = ""; evidenceLoading = false; liveEvidence = [:]
         damageCheckStatus = "Damage checks begin with the scan"
-        marks = []; markCount = 0; markPulse = 0; motions = []
+        pendingMark = nil; markNote = ""; markSnapshot = nil; marks = []; markCount = 0; markPulse = 0; motions = []
         preUploaded = [:]; sentDuringScan = 0; streamCursor = 0
         streamInFlight = false; progressInFlight = false
         splatBuilder.reset(); liveSplats = []; splatCount = 0; splatRevision += 1
@@ -358,7 +361,7 @@ struct PhoneFinding: Decodable, Identifiable {
     }
     /// Mark whatever is under the centre crosshair. Scanning carries on; nothing resets.
     func markDamage() {
-        guard scanning, let frame = view.captureSession.arSession.currentFrame, let dir = directory else { return }
+        guard scanning, pendingMark == nil, let frame = view.captureSession.arSession.currentFrame, let dir = directory else { return }
         let point = centrePoint(frame)
         let original = CIImage(cvPixelBuffer: frame.capturedImage).oriented(.right)
         let scale = min(1, 1600 / max(original.extent.width, original.extent.height))
@@ -368,11 +371,20 @@ struct PhoneFinding: Decodable, Identifiable {
         let name = "mark-\(id).jpg"
         do { try jpeg.write(to: dir.appendingPathComponent(name)) } catch { status = "Couldn't save that mark."; return }
         let mark = PhoneMark(id: id, position: point.map { [$0.x, $0.y, $0.z] }, timestamp: max(0, frame.timestamp - (startTime ?? frame.timestamp)), image: name, point: [0.5,0.5], imageWidth: Int(image.extent.width), imageHeight: Int(image.extent.height))
-        marks.append(mark); try? JSONEncoder().encode(marks).write(to: dir.appendingPathComponent("marks.json"), options: .atomic); markCount = marks.count; markPulse += 1
+        pendingMark = mark; markNote = ""; markSnapshot = UIImage(data: jpeg)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    }
+    func savePendingMark() {
+        guard var mark = pendingMark, let dir = directory else { return }
+        mark.userNote = String(markNote.trimmingCharacters(in: .whitespacesAndNewlines).prefix(1000))
+        marks.append(mark); try? JSONEncoder().encode(marks).write(to: dir.appendingPathComponent("marks.json"), options: .atomic)
+        markCount = marks.count; markPulse += 1
+        pendingMark = nil; markSnapshot = nil; markNote = ""
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        status = "Snapshot saved at the crosshair. Gemini is checking that exact spot."
+        status = "Snapshot and note saved. Gemini is checking that exact spot."
         Task { _ = await sendMark(mark) }
     }
+    func cancelPendingMark() { pendingMark = nil; markSnapshot = nil; markNote = "" }
     /// LiDAR depth under the image centre (median of a small window), unprojected into the scan's world space.
     private func centrePoint(_ frame: ARFrame) -> SIMD3<Float>? {
         guard let depth = (frame.sceneDepth ?? frame.smoothedSceneDepth)?.depthMap else { return nil }
@@ -397,7 +409,7 @@ struct PhoneFinding: Decodable, Identifiable {
         var request = URLRequest(url: pairedBase.appendingPathComponent("api/live/\(pairedSession)/marks")); request.httpMethod = "POST"; request.timeoutInterval = 60
         request.setValue("Bearer \(phoneToken)", forHTTPHeaderField: "Authorization")
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        var metadata: [String: Any] = ["observationId": mark.id, "timestampSeconds": mark.timestamp, "point": ["x":mark.point?.first ?? 0.5,"y":mark.point?.last ?? 0.5]]
+        var metadata: [String: Any] = ["observationId": mark.id, "timestampSeconds": mark.timestamp, "point": ["x":mark.point?.first ?? 0.5,"y":mark.point?.last ?? 0.5], "userNote":mark.userNote ?? ""]
         if let position = mark.position { metadata["position"] = position }
         if let width = mark.imageWidth, let height = mark.imageHeight { metadata["imageWidth"] = width; metadata["imageHeight"] = height }
         let meta = (try? JSONSerialization.data(withJSONObject: metadata)) ?? Data()
@@ -522,6 +534,7 @@ struct PhoneFinding: Decodable, Identifiable {
     }
     func stop() {
         guard scanning else { return }
+        if pendingMark != nil { savePendingMark() }
         videoTimer?.invalidate(); videoTimer = nil
         timer?.invalidate(); timer = nil; scanning = false; processing = true
         pendingEvidence = []
@@ -596,6 +609,7 @@ struct PhoneFinding: Decodable, Identifiable {
     }
     func captureView(shouldPresent roomDataForProcessing: CapturedRoomData, error: Error?) -> Bool {
         guard scanning || processing else { return false }
+        if pendingMark != nil { savePendingMark() }
         videoTimer?.invalidate(); videoTimer = nil
         timer?.invalidate(); timer = nil; scanning = false; processing = true
         pendingEvidence = []
@@ -770,9 +784,17 @@ struct PhoneFinding: Decodable, Identifiable {
                 let initData = try JSONSerialization.data(withJSONObject: ["filename": asset.name, "contentType": contentType, "size": data.count])
                 let upload = try await request(uploadPath, data: initData)
                 guard let id = upload["uploadId"] as? String, let chunkSize = upload["chunkSize"] as? Int else { throw CocoaError(.fileWriteUnknown) }
-                for offset in stride(from: 0, to: data.count, by: chunkSize) {
+                // Two chunks per asset may travel together; completed part hashes make retries safe.
+                try await withThrowingTaskGroup(of: Void.self) { chunks in
+                    var nextOffset = 0
+                    func enqueueChunk(_ offset: Int) {
+                        chunks.addTask { @MainActor in
                     var req = URLRequest(url: URL(string: "\(uploadPath)?uploadId=\(id)&part=\(offset / chunkSize)", relativeTo: base.appendingPathComponent("/"))!); req.httpMethod = "PATCH"; req.httpBody = data.subdata(in: offset..<min(data.count, offset + chunkSize)); req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type"); req.setValue(base.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")), forHTTPHeaderField: "Origin"); for (key, value) in cookieHeader { req.setValue(value, forHTTPHeaderField: key) }
                     let (responseBody, response) = try await session.data(for: req); guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw self.httpFailure(response, data: responseBody) }
+                        }
+                    }
+                    while nextOffset < min(data.count, 2 * chunkSize) { enqueueChunk(nextOffset); nextOffset += chunkSize }
+                    for try await _ in chunks { if nextOffset < data.count { enqueueChunk(nextOffset); nextOffset += chunkSize } }
                 }
                 let completed = try await request(uploadPath, data: JSONSerialization.data(withJSONObject: ["action": "complete", "uploadId": id]))
                         guard let ref = completed["url"] as? String else { throw CocoaError(.fileWriteUnknown) }

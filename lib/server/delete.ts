@@ -25,12 +25,13 @@ export async function deleteInspection(inspection: Document) {
     db.collection("comparisons").find({ $or: [{ baselineInspectionId: id }, { currentInspectionId: id }] }).toArray(),
   ]);
   const sessionIds = sessions.map(s => s._id);
-  const live = sessionIds.length ? await Promise.all(["liveEvidence", "liveFindings", "liveAnalyses"].map(c => db.collection(c).find({ sessionId: { $in: sessionIds } }).toArray())) : [];
+  const live = sessionIds.length ? await Promise.all(["liveEvidence", "liveFindings", "liveAnalyses", "liveFrames"].map(c => db.collection(c).find({ sessionId: { $in: sessionIds } }).toArray())) : [];
   collectRefs([inspection, findings, captures, markers, sessions, live], refs);
   // A comparison borrows the other scan's evidence; only frames it generated itself are removed.
   comparisons.forEach(c => (c.generatedRefs as string[] | undefined)?.forEach(r => REF.test(r) && refs.add(r)));
   await Promise.all([
     db.collection("findings").deleteMany({ inspectionId: id }),
+    db.collection("scanChat").deleteMany({contextId:{$in:[`inspection:${id}`,...sessionIds.map(s=>`live:${s}`)]}}),
     db.collection("spatialCaptures").deleteMany({ inspectionId: id }),
     db.collection("spatialMarkers").deleteMany({ inspectionId: id }),
     db.collection("objectReconstructions").deleteMany({ inspectionId: id }),

@@ -9,7 +9,7 @@ type Hit = { id: string; inspectionId: string; roomId: string; type: string; lab
 type Pipeline = { name: string; label: string; index: string; engine: string; results: Hit[]; query: unknown };
 type SearchOut = { engine: string; reranked: boolean; notes: string[]; fusionQuery?: unknown; results: Hit[]; pipelines: Pipeline[] } | { error: string };
 type MapPoint = { id: string; inspectionId: string; label: string; kind: string; damageType?: string; reviewStatus?: string; evidenceFrameUrl?: string; boundingBox?: Box; x: number; y: number; similarity: number };
-type MapOut = { space: string; photo: boolean; query: { x: number; y: number } | null; points: MapPoint[] } | { error: string };
+export type MapOut = { space: string; photo: boolean; query: { x: number; y: number } | null; points: MapPoint[] } | { error: string };
 type Status = { indexes: Record<string, { status: string; queryable: boolean; type: string }>; version: string; rankFusion: boolean | null; voyage: boolean; gemini: boolean; models: { autoEmbed: string; photo: string; rerank: string; gemini: string; weights: Record<string, number> }; counts: { total: number; searchText: number; geminiVectors: number; photoVectors: number } };
 
 const INDEXES = [
@@ -40,7 +40,7 @@ function RankBars({ ranks, weights }: { ranks?: Record<string, number>; weights:
   </div>;
 }
 
-function SemanticMap({ map }: { map: Extract<MapOut, { points: MapPoint[] }> }) {
+export function SemanticMap({ map }: { map: Extract<MapOut, { points: MapPoint[] }> }) {
   const [hover, setHover] = useState<MapPoint | null>(null);
   const W = 720, H = 420, P = 36;
   const sx = (x: number) => P + (x + 1) / 2 * (W - 2 * P), sy = (y: number) => P + (1 - (y + 1) / 2) * (H - 2 * P);
@@ -79,7 +79,7 @@ export default function SearchLab({ rooms }: { rooms: Room[] }) {
   }, []);
   async function action(kind: "indexes" | "prepare") {
     setBusy(kind); setMessage(kind === "indexes" ? "Sending index definitions to Atlas…" : "Preparing findings: search text, Gemini vectors and Voyage photo vectors…");
-    try { const r = await fetch(`/api/search/setup?action=${kind}`, { method: "POST" }), b = await r.json(); if (!r.ok) throw new Error(b.error); setStatus(b); setMessage(kind === "indexes" ? `Submitted. ${Object.entries(b.submitted as Record<string, string>).filter(([, v]) => v !== "submitted").map(([k, v]) => `${k} ${v}`).join("; ") || "Atlas builds them in the background, usually within a minute."}` : `${b.prepared.indexed} findings prepared, ${b.prepared.remaining} remaining.`); if (kind === "prepare") void explore(query); }
+    try { const r = await fetch(`/api/search/setup?action=${kind}`, { method: "POST" }), b = await r.json(); if (!r.ok) throw new Error(b.error); setStatus(b); setMessage(kind === "indexes" ? `Submitted. ${Object.entries(b.submitted as Record<string, string>).filter(([, v]) => v !== "submitted").map(([k, v]) => `${k} ${v}`).join("; ") || "Atlas builds them in the background, usually within a minute."}` : `${b.prepared.indexed} findings prepared, ${b.prepared.remaining} remaining. ${(b.prepared.warnings||[]).join(" ")}`); if (kind === "prepare") void explore(query); }
     catch (e) { setMessage(e instanceof Error ? e.message : "Failed"); } finally { setBusy(""); }
   }
   function submit(e: FormEvent) { e.preventDefault(); if (query.trim().length >= 2) void explore(query.trim()); }
@@ -87,7 +87,7 @@ export default function SearchLab({ rooms }: { rooms: Room[] }) {
   const ok = search && "results" in search;
 
   return <section className="search-lab">
-    <div className="lab-intro"><p className="eyebrow">SEARCH THE EVIDENCE</p><h1>Ask for damage in your own words.</h1><p>Every search runs inside MongoDB Atlas: keywords, meaning and the photos themselves are ranked separately, then fused with <code>$rankFusion</code> and reranked by Voyage.</p></div>
+    <div className="lab-intro"><p className="eyebrow">SEARCH THE EVIDENCE</p><h1>Ask for damage in your own words.</h1><p>Combine keywords, meaning and evidence photos from MongoDB Atlas. See which retrieval methods are active, how they rank, and where the findings sit in vector space.</p></div>
 
     <div className="lab-status" aria-label="Atlas search status">
       <div className="lab-status-head"><Database size={16} /><b>MongoDB Atlas</b>{status && <span>v{status.version}{status.rankFusion ? " · $rankFusion supported" : status.rankFusion === false ? " · $rankFusion needs 8.0+" : ""}</span>}<button className="lab-icon" onClick={() => void loadStatus()} aria-label="Refresh status"><RefreshCw size={14} /></button></div>

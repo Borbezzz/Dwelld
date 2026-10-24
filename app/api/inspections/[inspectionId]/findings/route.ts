@@ -35,11 +35,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ ins
       return NextResponse.json({ error: "Parent object must belong to this inspection" }, { status: 400 });
     }
     // Gemini looks at the marked spot and writes the description in context; the person's note is kept alongside.
-    const seen = await readMedia(evidence.evidenceFrameUrl, 16 * 1024 * 1024).then(image => describeAtPoint(image, point)).catch(() => null);
+    const seen = await readMedia(evidence.evidenceFrameUrl, 16 * 1024 * 1024).then(image => describeAtPoint(image, point, description)).catch(() => null);
     if (!seen && !description) return NextResponse.json({ error: "Couldn't describe that spot automatically. Add a short note and save again." }, { status: 422 });
     const doc = {
       _id: new ObjectId(), ownerId:user.id, inspectionId, roomId: inspection.roomId, kind: "damage", label: seen?.label || "Manual damage",
-      damageType: seen?.type || "other", description: [seen?.description, description && (seen ? `Your note: ${description}` : description)].filter(Boolean).join(" "), point: { x: point.x, y: point.y }, boundingBox: seen?.boundingBox ?? null, aiDescribed: !!seen,
+      userNote:description, damageType: seen?.type || "other", description: [seen?.description, description && (seen ? `Your note: ${description}` : description)].filter(Boolean).join(" "), point: { x: point.x, y: point.y }, boundingBox: seen?.boundingBox ?? null, aiDescribed: !!seen,
       timestampSeconds: evidence.timestampSeconds, evidenceFrameUrl: evidence.evidenceFrameUrl,
       objectId, source: "manual", reviewStatus: "pending", reviewHistory: [], createdAt: new Date(),
     };
