@@ -1,4 +1,4 @@
-import { requireReadableInspection } from "@/lib/server/space-access";
+import {canReadRoom,requireReadableInspection } from "@/lib/server/space-access";
 import { requireUser } from "@/lib/server/access";
 import { errorResponse } from "@/lib/server/api-error";
 import { mediaResponse, parseMediaId } from "@/lib/server/media";
@@ -22,9 +22,14 @@ export async function GET(request: Request) {
       // A shared member can view evidence only if it belongs to an inspection in their space.
       const candidate=await db.collection("inspections").findOne({$or:[{sourceUrl:raw},{"evidenceFrames.url":raw}]},{projection:{_id:1}})
         || await db.collection("findings").findOne({evidenceFrameUrl:raw},{projection:{inspectionId:1}});
-      if(!candidate)return new NextResponse("Not found",{status:404});
-      try {await requireReadableInspection(candidate.inspectionId || candidate._id,user.id);}
-      catch {return new NextResponse("Not found",{status:404});}
+      if(candidate){
+        try {await requireReadableInspection(candidate.inspectionId || candidate._id,user.id);}
+        catch {return new NextResponse("Not found",{status:404});}
+      }else{
+        const comparison=await db.collection("comparisons").findOne({$or:[{evidenceRefs:raw},{generatedRefs:raw}]},{projection:{roomId:1}});
+        const room=comparison?await db.collection("rooms").findOne({_id:comparison.roomId}):null;
+        if(!room||!await canReadRoom(room as never,user.id))return new NextResponse("Not found",{status:404});
+      }
     }
     return await mediaResponse(raw, request);
   } catch (error) {
