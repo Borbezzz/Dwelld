@@ -12,9 +12,9 @@ export async function GET(request:Request,{params}:C){try{
  const user=await requireUser(request),id=parseObjectId((await params).inspectionId);
  if(!id)return NextResponse.json({error:"Inspection not found"},{status:404});
  await requireReadableInspection(id,user.id);const db=await getDb();
- const capture=await db.collection("spatialCaptures").findOne({inspectionId:id},{projection:{manifest:1,roomBoundaries:1}});
+ const capture=await db.collection("spatialCaptures").findOne({inspectionId:id},{projection:{manifest:1,roomBoundaries:1,roomSplitFinalizedAt:1,roomSplitSpaceId:1}});
  if(!capture)return NextResponse.json({boundaries:[]});
- return NextResponse.json({boundaries:capture.roomBoundaries??suggestRoomBoundaries(capture.manifest)},{headers:{"Cache-Control":"private, no-store"}});
+ return NextResponse.json({boundaries:capture.roomBoundaries??suggestRoomBoundaries(capture.manifest),materialized:!!capture.roomSplitFinalizedAt,spaceId:capture.roomSplitSpaceId?String(capture.roomSplitSpaceId):null},{headers:{"Cache-Control":"private, no-store"}});
  }catch(e){return errorResponse(e,"room.boundaries.read")}}
 export async function PATCH(request:Request,{params}:C){try{
  const user=await requireUser(request),id=parseObjectId((await params).inspectionId);
@@ -26,6 +26,7 @@ export async function PATCH(request:Request,{params}:C){try{
  if(b.label!==undefined&&(typeof b.label!=="string"||!b.label.trim()||b.label.trim().length>80))return NextResponse.json({error:"Room name must be 1–80 characters"},{status:400});
  const capture=await db.collection("spatialCaptures").findOne({inspectionId:id},{projection:{manifest:1,roomBoundaries:1}});
  if(!capture)return NextResponse.json({error:"Capture not found"},{status:404});
+ if(capture.roomSplitFinalizedAt)return NextResponse.json({error:"Rooms have already been created for this scan"},{status:409});
  const boundaries=(capture.roomBoundaries??suggestRoomBoundaries(capture.manifest)) as RoomBoundary[];
  const index=boundaries.findIndex(x=>x.id===b.id);
  if(index<0)return NextResponse.json({error:"Boundary not found"},{status:404});
