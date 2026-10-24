@@ -50,6 +50,8 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ r
   try {
     const user = await requireUser(request);
     const room = await requireOwnedRoom((await params).roomId, user.id);
+    const db=await getDb();
+    if(await db.collection("inspections").findOne({roomId:room._id,ownerId:{$ne:user.id}},{projection:{_id:1}}))return NextResponse.json({error:"This shared room contains another member’s inspection. Remove access and resolve those records before deleting the room."},{status:409});
     return NextResponse.json({ deleted: true, ...(await deleteRoom(room)) });
   } catch (error) { return errorResponse(error, "room.delete"); }
 }
