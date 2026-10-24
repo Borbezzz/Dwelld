@@ -37,7 +37,13 @@ export async function GET(request: Request) {
     const sharedRooms=visibleSpaceIds.length?await db.collection("rooms").find({spaceId:{$in:visibleSpaceIds}},{projection:{_id:1}}).toArray():[];
     const accessible=[...sharedRooms.map(r=>r._id),...(await db.collection("rooms").find({ownerId:user.id},{projection:{_id:1}}).toArray()).map(r=>r._id)];
     const docs = await db.collection("inspections").find({$or:[{ownerId:user.id},{roomId:{$in:accessible}}],...(roomId ? {roomId} : {})}).sort({ createdAt: -1 }).limit(100).toArray();
-    return NextResponse.json({ inspections: docs.map(d=>serializeInspection(d,user.id)) });
+    const segments=accessible.length?await db.collection("roomScanSegments").find({roomId:{$in:accessible},...(roomId?{roomId}:{})}).limit(100).toArray():[];
+    const sources=segments.length?await db.collection("inspections").find({_id:{$in:segments.map(s=>s.sourceInspectionId)}}).toArray():[];
+    const virtual=segments.flatMap(s=>{const source=sources.find(i=>String(i._id)===String(s.sourceInspectionId));if(!source||String(source.roomId)===String(s.roomId))return [];
+      return [{...serializeInspection(source,user.id),roomId:String(s.roomId),virtual:true,segment:{startTime:s.startTime,endTime:s.endTime}}];
+    });
+    const inspections=[...docs.map(d=>serializeInspection(d,user.id)),...virtual].sort((a,b)=>+new Date(b.createdAt)-+new Date(a.createdAt)).slice(0,100);
+    return NextResponse.json({inspections},{headers:{"Cache-Control":"private, no-store"}});
   } catch (error) { return errorResponse(error, "app/api/inspections/route.ts"); }
 }
 
