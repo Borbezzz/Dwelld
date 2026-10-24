@@ -74,3 +74,17 @@ Native live observations select their exact source photo in the primary camera p
 return-to-live control. Saved captures expose a prominent next/review action independently
 of whether optional analysis has finished. Transient laptop polling failures preserve progress,
 retry automatically, and distinguish a quiet phone upload from a failed scan.
+
+## Pairing lifetime
+
+Each QR creates a session with a fixed owner, room and inspection purpose. Repeating an
+unfinished phone claim remains idempotent; a saved claim cannot be paired again. Saved
+sessions reject capture mutations, while read access and idempotent final-save acknowledgement
+remain available to recover a lost response.
+
+New phone pairings replace RoomPlan's capture view and clear all in-memory capture, evidence,
+findings, geometry, upload-cache and stream state. A connection generation fences late network
+responses; chunk requests keep the original session and token. Saved phone claims are removed
+from secure storage. Original capture files remain on the phone. The laptop remounts the live
+workspace on room/session navigation, aborts outgoing polls and closes media resources after
+save; continuing analysis is viewed from the saved room record.

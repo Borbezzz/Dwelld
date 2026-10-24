@@ -37,6 +37,8 @@ struct PhoneFinding: Decodable, Identifiable {
     @Published var uploadComplete = false
     @Published var uploadProgress: Double = 0
     private var connection: CaptureConnection?
+    private var connectionGeneration = UUID()
+    @Published var captureViewID = UUID()
     private var phoneToken = ""
     private var progressInFlight = false
     /// Latest RoomPlan furniture and walls, streamed to the laptop while scanning.
@@ -51,9 +53,10 @@ struct PhoneFinding: Decodable, Identifiable {
         pairing = true; defer { pairing = false }
         do {
             // Save the claim BEFORE sending it. Retrying a lost response reuses the same identity.
-            var claim = connection?.session == session ? connection! : CaptureConnection(session: session, phone: UUID().uuidString.replacingOccurrences(of: "-", with: "") + UUID().uuidString.replacingOccurrences(of: "-", with: ""), device: UUID().uuidString, pairingToken: token)
+            let previous = connection?.session == session ? connection : CaptureConnectionStore.load()
+            var claim = previous?.session == session ? previous! : CaptureConnection(session: session, phone: UUID().uuidString.replacingOccurrences(of: "-", with: "") + UUID().uuidString.replacingOccurrences(of: "-", with: ""), device: UUID().uuidString, pairingToken: token)
             claim.pairingToken = token
-            try CaptureConnectionStore.save(claim); connection = claim
+            try CaptureConnectionStore.save(claim)
             var request = URLRequest(url: pairedBase.appendingPathComponent("api/live/\(session)/pair")); request.httpMethod = "POST"; request.timeoutInterval = 30; request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try JSONSerialization.data(withJSONObject: ["pairingToken": token, "phoneToken": claim.phone, "deviceId": claim.device])
             let (data, response) = try await URLSession.shared.data(for: request)
@@ -63,8 +66,8 @@ struct PhoneFinding: Decodable, Identifiable {
             claim.paired = true
             if let expiry = remote?["expiresAt"] as? String { let formatter = ISO8601DateFormatter(); formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; claim.expiresAt = formatter.date(from: expiry) ?? claim.expiresAt }
             if remote?["status"] as? String == "saved" { claim.completed = true }
+            if changesSession { resetCaptureState() }
             try CaptureConnectionStore.save(claim); connection = claim
-            if changesSession { ready = false; manifest = nil; directory = nil; uploadProgress = 0 }
             phoneToken = claim.phone; pairedSession = session; uploadComplete = claim.completed
             if !ready { inspectionId = "" }
             status = uploadComplete ? "Inspection already saved. Start a new inspection on your laptop for another scan." : "Connected. Finish & save sends your scan to the laptop automatically."
@@ -73,6 +76,7 @@ struct PhoneFinding: Decodable, Identifiable {
     }
     private func restoreConnection() {
         guard let saved = CaptureConnectionStore.load() else { return }
+        if saved.completed { try? CaptureConnectionStore.clear(); return }
         connection = saved; uploadComplete = saved.completed
         if saved.paired { pairedSession = saved.session; phoneToken = saved.phone }
         if let folder = saved.captureFolder, UUID(uuidString: folder) != nil {
@@ -85,7 +89,7 @@ struct PhoneFinding: Decodable, Identifiable {
     }
     func savePairedCapture() async { await upload(base: pairedBase, roomId: "", type: "move-in") }
     private func publishProgress(stage: String) async {
-        guard !pairedSession.isEmpty, !progressInFlight else { return }; progressInFlight = true; defer { progressInFlight = false }
+        guard !pairedSession.isEmpty, !uploadComplete, !progressInFlight else { return }; let generation = connectionGeneration; progressInFlight = true; defer { if generation == connectionGeneration { progressInFlight = false } }
         do {
             var request = URLRequest(url: pairedBase.appendingPathComponent("api/live/\(pairedSession)/spatial")); request.httpMethod = "PUT"; request.timeoutInterval = 10
             request.setValue("Bearer \(phoneToken)", forHTTPHeaderField: "Authorization"); request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -106,6 +110,7 @@ struct PhoneFinding: Decodable, Identifiable {
             if uploading { progress["upload"] = uploadProgress }
             request.httpBody = try JSONSerialization.data(withJSONObject: progress)
             let (data, response) = try await URLSession.shared.data(for: request)
+            guard generation == connectionGeneration, !uploadComplete else { return }
             if let http = response as? HTTPURLResponse, http.statusCode == 200, let body = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
                 if let raw = body["findings"], let encoded = try? JSONSerialization.data(withJSONObject: raw), let findings = try? JSONDecoder().decode([PhoneFinding].self, from: encoded) { liveFindings = findings }
                 if let p = body["analysisProgress"] as? [String: Int] { damageCheckStatus = "\(p["checked"] ?? 0) photos checked · \(p["checking"] ?? 0) checking · \(p["queued"] ?? 0) waiting" }
@@ -138,7 +143,7 @@ struct PhoneFinding: Decodable, Identifiable {
     @Published var uploading = false
     @Published var rooms: [OwnedRoom] = []
     @Published var inspectionId = ""
-    let view = RoomCaptureView(frame: .zero)
+    private(set) var view = RoomCaptureView(frame: .zero)
     let login = WKWebView()
     private let context = CIContext()
     private var timer: Timer?
@@ -155,16 +160,41 @@ struct PhoneFinding: Decodable, Identifiable {
         let objects = room.objects.map { Element(id: $0.identifier.uuidString, category: String(describing: $0.category), dimensions: dimensions($0.dimensions), transform: matrix($0.transform)) }
         let surfaces = (room.walls + room.doors + room.floors).map { Element(id: $0.identifier.uuidString, category: String(describing: $0.category), dimensions: dimensions($0.dimensions), transform: matrix($0.transform)) }
         let elements = Array((objects + surfaces).prefix(80))
-        Task { @MainActor [weak self] in self?.liveElements = elements }
+        let source = ObjectIdentifier(session)
+        Task { @MainActor [weak self] in
+            guard let self, self.scanning, ObjectIdentifier(self.view.captureSession) == source else { return }
+            self.liveElements = elements
+        }
     }
     func encode(with coder: NSCoder) {}
+    /// A pairing owns its capture state. Retained files stay on disk, never in the next room.
+    private func resetCaptureState() {
+        connectionGeneration = UUID()
+        timer?.invalidate(); timer = nil
+        preUploadTask?.cancel(); preUploadTask = nil; pendingEvidence = nil
+        view.delegate = nil; view.captureSession.delegate = nil; view.captureSession.arSession.pause()
+        view = RoomCaptureView(frame: .zero)
+        view.delegate = self; view.captureSession.delegate = self; view.isModelEnabled = false
+        captureViewID = UUID()
+        scanning = false; processing = false; ready = false; uploading = false
+        manifest = nil; directory = nil; frames = []; assets = []; inspectionId = ""
+        startTime = nil; lastTimestamp = -1; frameCount = 0; depthCount = 0; featureCount = 0
+        uploadComplete = false; uploadProgress = 0; liveElements = []
+        liveFindings = []; damageEvidence = nil; damageEvidenceFindings = []
+        evidenceRef = ""; evidenceLoading = false; liveEvidence = [:]
+        damageCheckStatus = "Damage checks begin with the scan"
+        marks = []; markCount = 0; markPulse = 0; motions = []
+        preUploaded = [:]; sentDuringScan = 0; streamCursor = 0
+        streamInFlight = false; progressInFlight = false
+        splatBuilder.reset(); liveSplats = []; splatCount = 0; splatRevision += 1
+        splatRenderError = ""; tracking = "Camera idle"
+    }
     func prepareNewInspection() {
         guard uploadComplete, !scanning, !processing, !uploading, !pairing else { return }
         do { try CaptureConnectionStore.clear() }
         catch { status = "Could not prepare a new inspection. Retry after unlocking the phone."; return }
-        connection = nil; pairedSession = ""; phoneToken = ""; inspectionId = ""
-        ready = false; uploadComplete = false; uploadProgress = 0; manifest = nil; directory = nil
-        liveSplats = []; splatCount = 0; splatRevision += 1; frameCount = 0; depthCount = 0
+        resetCaptureState()
+        connection = nil; pairedSession = ""; phoneToken = ""
         status = "Start a new inspection on your laptop, then scan its QR code."
     }
     func start() {
@@ -242,8 +272,9 @@ struct PhoneFinding: Decodable, Identifiable {
     }
     /// New LiDAR points and the latest RoomPlan furniture, about once a second, so the laptop builds the room live.
     private func publishStream() async {
-        guard !pairedSession.isEmpty, !streamInFlight else { return }
-        streamInFlight = true; defer { streamInFlight = false }
+        guard !pairedSession.isEmpty, !uploadComplete, !streamInFlight else { return }
+        let generation = connectionGeneration
+        streamInFlight = true; defer { if generation == connectionGeneration { streamInFlight = false } }
         let (data, next) = splatBuilder.packedNew(from: streamCursor, limit: 9000)
         var body: [String: Any] = ["points": data.base64EncodedString()]
         body["elements"] = liveElements.map { ["id": $0.id, "category": $0.category, "dimensions": $0.dimensions, "transform": $0.transform] as [String: Any] }
@@ -252,7 +283,7 @@ struct PhoneFinding: Decodable, Identifiable {
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
             let (_, response) = try await URLSession.shared.data(for: request)
-            if let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) { streamCursor = next }
+            if generation == connectionGeneration, !uploadComplete, let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) { streamCursor = next }
         } catch { /* The next tick resends from the same cursor. */ }
     }
     /// Downscaled evidence photo with intrinsics rescaled to the encoded size.
@@ -276,14 +307,17 @@ struct PhoneFinding: Decodable, Identifiable {
         // All other one-second evidence photos are still retained in the final manifest.
         pendingEvidence = evidence
         guard preUploadTask == nil else { return }
+        let generation = connectionGeneration
         preUploadTask = Task { [weak self] in
             guard let self else { return }
-            defer { self.preUploadTask = nil }
-            while let current = self.pendingEvidence {
+            defer { if generation == self.connectionGeneration { self.preUploadTask = nil } }
+            while !Task.isCancelled, generation == self.connectionGeneration, !self.uploadComplete, let current = self.pendingEvidence {
                 self.pendingEvidence = nil
                 do {
                     if self.preUploaded[current.image] == nil {
-                        self.preUploaded[current.image] = try await self.uploadNow(current.image, contentType: "image/jpeg")
+                        let ref = try await self.uploadNow(current.image, contentType: "image/jpeg")
+                        guard !Task.isCancelled, generation == self.connectionGeneration else { return }
+                        self.preUploaded[current.image] = ref
                         self.sentDuringScan += 1
                     }
                     if let ref = self.preUploaded[current.image] { await self.requestAnalysis(current, ref: ref) }
@@ -298,14 +332,15 @@ struct PhoneFinding: Decodable, Identifiable {
         guard !evidenceLoading else { return }
         let marks = liveFindings.filter { $0.evidenceFrameRef == ref }
         if evidenceRef == ref { damageEvidenceFindings = marks; return }
-        evidenceLoading = true; defer { evidenceLoading = false }
+        let generation = connectionGeneration
+        evidenceLoading = true; defer { if generation == connectionGeneration { evidenceLoading = false } }
         var parts = URLComponents(url: pairedBase.appendingPathComponent("api/live/\(pairedSession)/media"), resolvingAgainstBaseURL: false)!
         parts.queryItems = [URLQueryItem(name: "ref", value: ref)]
         guard let url = parts.url else { return }
         var request = URLRequest(url: url); request.setValue("Bearer \(phoneToken)", forHTTPHeaderField: "Authorization")
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
-            if let http = response as? HTTPURLResponse, http.statusCode == 200, let image = UIImage(data: data), liveFindings.first?.evidenceFrameRef == ref {
+            if generation == connectionGeneration, !uploadComplete, let http = response as? HTTPURLResponse, http.statusCode == 200, let image = UIImage(data: data), liveFindings.first?.evidenceFrameRef == ref {
                 evidenceRef = ref; damageEvidence = image; damageEvidenceFindings = marks
             }
         } catch { /* Keep scanning if an evidence preview cannot load. */ }
@@ -337,10 +372,13 @@ struct PhoneFinding: Decodable, Identifiable {
     private func uploadNow(_ name: String, contentType: String) async throws -> String {
         guard let dir = directory else { throw CocoaError(.fileNoSuchFile) }
         let data = try Data(contentsOf: dir.appendingPathComponent(name))
+        let generation = connectionGeneration, token = phoneToken
         let path = "api/live/\(pairedSession)/upload", origin = pairedBase.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         func call(_ url: URL, method: String, body: Data, type: String) async throws -> Data {
+            try Task.checkCancellation()
+            guard generation == connectionGeneration, !uploadComplete else { throw CancellationError() }
             var req = URLRequest(url: url); req.httpMethod = method; req.httpBody = body; req.timeoutInterval = 60
-            req.setValue(type, forHTTPHeaderField: "Content-Type"); req.setValue("Bearer \(phoneToken)", forHTTPHeaderField: "Authorization"); req.setValue(origin, forHTTPHeaderField: "Origin")
+            req.setValue(type, forHTTPHeaderField: "Content-Type"); req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization"); req.setValue(origin, forHTTPHeaderField: "Origin")
             let (out, response) = try await URLSession.shared.data(for: req)
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw httpFailure(response, data: out) }
             return out
@@ -407,11 +445,13 @@ struct PhoneFinding: Decodable, Identifiable {
         try data.write(to: url)
     }
     func captureView(shouldPresent roomDataForProcessing: CapturedRoomData, error: Error?) -> Bool {
-        timer?.invalidate(); timer = nil; scanning = false
+        guard scanning || processing else { return false }
+        timer?.invalidate(); timer = nil; scanning = false; processing = true
         if let error { processing = false; status = "Room scan stopped: \(error.localizedDescription). Start a new scan in good light."; return false }
         status = "Processing measured room geometry…"; return true
     }
     func captureView(didPresent processedResult: CapturedRoom, error: Error?) {
+        guard processing else { return }
         processing = false
         guard error == nil, let dir = directory else { status = "RoomPlan could not finish this scan."; return }
         do {
@@ -505,7 +545,10 @@ struct PhoneFinding: Decodable, Identifiable {
         func finishSaved(_ id: String?) {
             if let id, !id.isEmpty { self.inspectionId = id }
             uploadComplete = true; uploadProgress = 1
-            if var saved = connection { saved.completed = true; connection = saved; try? CaptureConnectionStore.save(saved) }
+            if var saved = connection { saved.completed = true; connection = saved }
+            try? CaptureConnectionStore.clear()
+            timer?.invalidate(); timer = nil; pendingEvidence = nil; preUploadTask?.cancel()
+            view.captureSession.arSession.pause()
             status = "Saved to your laptop inspection. You can close Dwelld."
         }
         func checkRemoteSave() async -> Bool {

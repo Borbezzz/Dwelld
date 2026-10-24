@@ -12,13 +12,19 @@ export async function liveCollections() {
  await Promise.all([db.collection("liveSignals").createIndex({expiresAt:1},{expireAfterSeconds:0}),db.collection("liveSignals").createIndex({sessionId:1,eventId:1},{unique:true}),db.collection("liveAnalyses").createIndex({sessionId:1,observationId:1},{unique:true}),db.collection("liveEvidence").createIndex({sessionId:1,observationId:1},{unique:true}),db.collection("liveEvents").createIndex({sessionId:1,eventId:1},{unique:true}),db.collection("liveObjects").createIndex({sessionId:1,objectId:1},{unique:true}),db.collection("liveFindings").createIndex({sessionId:1,id:1},{unique:true})]);
  return {db,sessions};
 }
-export function safeSession(s: SessionDoc): InspectionSession { return {id:String(s._id),roomId:String(s.roomId),status:s.status,createdAt:s.createdAt.toISOString(),expiresAt:s.expiresAt.toISOString(),pairingExpiresAt:s.pairingExpiresAt.toISOString(),paired:!!s.phoneHash,nativeCapture:!!s.nativeCapture,nativePreview:s.nativePreview,nativeProgress:s.nativeProgress&&s.status==='saved'?{...s.nativeProgress,stage:'saved',upload:1}:s.nativeProgress,nativeLive:s.nativeLive,phoneLastSeenAt:s.phoneLastSeenAt?.toISOString(),desktopLastSeenAt:s.desktopLastSeenAt?.toISOString(),inspectionId:s.inspectionId?.toHexString(),stopRequested:!!s.stopRequested}; }
+export function safeSession(s: SessionDoc): InspectionSession { return {id:String(s._id),roomId:String(s.roomId),status:s.status,createdAt:s.createdAt.toISOString(),expiresAt:s.expiresAt.toISOString(),pairingExpiresAt:s.pairingExpiresAt.toISOString(),paired:!!s.phoneHash&&s.status!=="saved",nativeCapture:!!s.nativeCapture,nativePreview:s.nativePreview,nativeProgress:s.nativeProgress&&s.status==='saved'?{...s.nativeProgress,stage:'saved',upload:1}:s.nativeProgress,nativeLive:s.nativeLive,phoneLastSeenAt:s.phoneLastSeenAt?.toISOString(),desktopLastSeenAt:s.desktopLastSeenAt?.toISOString(),inspectionId:s.inspectionId?.toHexString(),stopRequested:!!s.stopRequested}; }
+/** Saved captures remain readable, but their phone connection cannot start more work. */
+export function assertLiveRequestOpen(session: Pick<SessionDoc,'status'>, request: Request) {
+ const acknowledgement = /\/api\/live\/[a-f0-9]{24}\/spatial$/.test(new URL(request.url).pathname) && ['PUT','POST'].includes(request.method);
+ if (session.status === 'saved' && !['GET','HEAD'].includes(request.method) && !acknowledgement) throw new LiveError('This inspection is saved and its capture connection is closed. Pair a new inspection to scan again.',409);
+}
 export async function authenticateLive(request: Request,id: string,required?: LiveRole) {
  const oid=parseObjectId(id); const token=request.headers.get("authorization")?.replace(/^Bearer /,"") || "";
  if(!oid || !validToken(token)) throw new LiveError("Session authorization required",401);
  const {sessions}=await liveCollections(); const session=await sessions.findOne({_id:oid,expiresAt:{$gt:new Date()}});
  const hash=hashToken(token); const role:LiveRole|null=session?.desktopHash===hash?"desktop":session?.phoneHash===hash?"phone":null;
  if(!session || !role || (required && required!==role)) throw new LiveError("Session expired or access denied",403);
+ assertLiveRequestOpen(session,request);
  await sessions.updateOne({_id:oid},{$set:{[role+"LastSeenAt"]:new Date()}});
  return {session,role};
 }

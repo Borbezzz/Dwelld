@@ -9,3 +9,12 @@ test('saved native sessions override stale uploading percentages in public progr
  const active=safeSession({...base,status:'connected'});assert.equal(active.nativeProgress.upload,.957);assert.equal(active.nativeProgress.stage,'uploading');
  const saved=safeSession({...base,status:'saved'});assert.equal(saved.nativeProgress.upload,1);assert.equal(saved.nativeProgress.stage,'saved');assert.equal(saved.nativeProgress.frames,16);assert.equal(base.nativeProgress.upload,.957);
 });
+
+test('saved capture connections reject new mutations but allow review and lost-save acknowledgements',()=>{
+ const {assertLiveRequestOpen}=mod.exports,id='a'.repeat(24),base=`https://dwelld.example/api/live/${id}`;
+ for(const path of ['/stream','/frame','/upload','/marks','/signal','/analyze','/events'])for(const method of ['POST','PUT','PATCH'])assert.throws(()=>assertLiveRequestOpen({status:'saved'},new Request(base+path,{method})),e=>e.status===409);
+ for(const path of ['', '/stream','/media?ref=photo'])assert.doesNotThrow(()=>assertLiveRequestOpen({status:'saved'},new Request(base+path)));
+ for(const method of ['PUT','POST'])assert.doesNotThrow(()=>assertLiveRequestOpen({status:'saved'},new Request(base+'/spatial',{method})));
+ assert.doesNotThrow(()=>assertLiveRequestOpen({status:'recording'},new Request(base+'/stream',{method:'POST'})));
+ const d=new Date();assert.equal(safeSession({_id:new ObjectId(),roomId:new ObjectId(),phoneHash:'closed',status:'saved',createdAt:d,expiresAt:d,pairingExpiresAt:d}).paired,false);
+});

@@ -105,7 +105,7 @@ struct CaptureScreen: View {
                 }
                 if model.pairing { LineLoader(label: "Connecting securely") }
                 ZStack(alignment: .topLeading) {
-                    RoomView(model: model).frame(height: 300)
+                    RoomView(model: model).id(model.captureViewID).frame(height: 300)
                     if !model.scanning && (model.ready || model.processing || model.uploadComplete) {
                         Dwelld.well.overlay(Text(model.processing ? "Finishing capture…" : (model.uploadComplete ? "Inspection saved" : "Capture ready")).font(Dwelld.serif(20)).foregroundStyle(Dwelld.ink))
                     }

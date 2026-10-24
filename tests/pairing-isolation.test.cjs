@@ -1,0 +1,10 @@
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),Module=require('node:module'),ts=require('typescript'),{ObjectId}=require('mongodb');
+function route(sessions){const name=path.resolve('app/api/live/[sessionId]/pair/route.ts'),mod=new Module(name,module);mod.filename=name;mod.paths=module.paths;mod.require=id=>id.endsWith('/db')?{parseObjectId:s=>new ObjectId(s)}:id.endsWith('/live-sessions')?{liveCollections:async()=>({sessions}),hashToken:t=>t,validToken:t=>typeof t==='string',LiveError:class extends Error{constructor(m,status){super(m);this.status=status}},liveFailure:e=>Response.json({error:e.message},{status:e.status||500}),safeSession:s=>({id:String(s._id),roomId:String(s.roomId),status:s.status}),iceServers:()=>[]}:require(id);mod._compile(ts.transpileModule(fs.readFileSync(name,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText,name);return mod.exports.POST;}
+const id=new ObjectId(),roomId=new ObjectId(),params={params:Promise.resolve({sessionId:String(id)})},request=()=>new Request(`https://dwelld.example/api/live/${id}/pair`,{method:'POST',body:JSON.stringify({pairingToken:'pair',phoneToken:'phone',deviceId:'device'})});
+test('pairing stays bound to the QR room and refuses to reopen a saved connection',async()=>{
+ let queried;const pair=route({findOne:async()=>null,findOneAndUpdate:async q=>{queried=q;return {_id:id,roomId,status:'connected'}}});
+ const result=await pair(request(),params);assert.equal(result.status,200);assert.equal((await result.json()).session.roomId,String(roomId));assert.equal(queried.status.$ne,'saved');
+ const closed=route({findOne:async()=>({_id:id,roomId,status:'saved'}),findOneAndUpdate:async()=>{throw new Error('must not reopen')}});
+ assert.equal((await closed(request(),params)).status,409);
+ const retry=route({findOne:async()=>({_id:id,roomId,status:'connected'})});assert.equal((await retry(request(),params)).status,200);
+});

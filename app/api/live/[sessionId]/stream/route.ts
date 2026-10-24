@@ -18,7 +18,8 @@ export async function POST(request: Request, { params }: Context) {
     const bytes = Buffer.from(b.points, "base64"); if (bytes.length % 9) throw new LiveError("Invalid stream chunk");
     const elements = b.elements === undefined ? undefined : validElements(b.elements);
     const { db, sessions } = await liveCollections();
-    const next = await sessions.findOneAndUpdate({ _id: session._id }, { $inc: { streamSeq: 1 }, $set: { nativeCapture: true, ...(elements ? { "nativeLive.elements": elements } : {}), "nativeLive.updatedAt": new Date().toISOString() } }, { returnDocument: "after" });
+    const next = await sessions.findOneAndUpdate({ _id: session._id, status: { $ne: "saved" } }, { $inc: { streamSeq: 1 }, $set: { nativeCapture: true, ...(elements ? { "nativeLive.elements": elements } : {}), "nativeLive.updatedAt": new Date().toISOString() } }, { returnDocument: "after" });
+    if (!next) throw new LiveError("Capture connection is closed",409);
     const seq = (next as unknown as { streamSeq?: number } | null)?.streamSeq ?? 0;
     if (bytes.length) await db.collection("liveStream").insertOne({ sessionId: session._id, seq, points: new Binary(bytes), count: bytes.length / 9, createdAt: new Date(), expiresAt: new Date(Date.now() + 6 * 3600_000) });
     return Response.json({ seq, stopRequested: !!session.stopRequested });

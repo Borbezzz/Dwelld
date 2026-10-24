@@ -23,7 +23,10 @@ import RoomHistory from '../room-history';
 type Credentials={token:string;pairingToken?:string;iceServers:RTCIceServer[]};
 type ConnectionPhase='Waiting for phone'|'Phone paired'|'Camera permission required'|'Establishing video'|'Connected'|'Connection failed'|'Reconnecting';
 const fallbackIce=[{urls:'stun:stun.l.google.com:19302'}];
-export default function LiveWorkspace({sessionId,phone=false,initialRoomId='',newRoom=false,lockRoom=false,initialType='move-in',baselineId=''}:{sessionId?:string;phone?:boolean;initialRoomId?:string;newRoom?:boolean;lockRoom?:boolean;initialType?:'move-in'|'move-out';baselineId?:string}) {
+export default function LiveWorkspace(props:Parameters<typeof LiveWorkspaceInner>[0]) {
+ return <LiveWorkspaceInner key={[props.sessionId||'new',props.initialRoomId,props.initialType,props.newRoom,props.baselineId,props.phone].join(':')} {...props}/>;
+}
+function LiveWorkspaceInner({sessionId,phone=false,initialRoomId='',newRoom=false,lockRoom=false,initialType='move-in',baselineId=''}:{sessionId?:string;phone?:boolean;initialRoomId?:string;newRoom?:boolean;lockRoom?:boolean;initialType?:'move-in'|'move-out';baselineId?:string}) {
  const [id,setId]=useState(sessionId||''),[credentials,setCredentials]=useState<Credentials|null>(null),[session,setSession]=useState<InspectionSession|null>(null);
  const [captureMode,setCaptureMode]=useState<'phone'|'upload'>('phone'),[uploadBusy,setUploadBusy]=useState(false);
  const [inspectionType,setInspectionType]=useState<'move-in'|'move-out'>(initialType);
@@ -68,10 +71,19 @@ export default function LiveWorkspace({sessionId,phone=false,initialRoomId='',ne
  const offer=useCallback(async()=>{if(!stream.current||negotiating.current)return;negotiating.current=true;setConnectionPhase('Establishing video');try{const {pc,sendDescription}=makePeer(crypto.randomUUID());stream.current.getTracks().forEach(t=>pc.addTrack(t,stream.current!));channel.current=pc.createDataChannel('detections');await pc.setLocalDescription(await pc.createOffer());await sendDescription('offer');}finally{negotiating.current=false}},[makePeer]);
  useEffect(()=>{const element=video.current;if(!element)return;const playing=()=>{if(!phone&&videoReceived.current){setConnected(true);setConnectionPhase('Connected');diagnose('Remote video playing')}};element.addEventListener('playing',playing);return()=>element.removeEventListener('playing',playing)},[phone,diagnose]);
  useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;stopDetection.current?.();peer.current?.close();stream.current?.getTracks().forEach(t=>t.stop());if(recorder.current?.state==='recording'){recorder.current.onstop=null;recorder.current.stop();}}},[]);
+ useEffect(()=>{if(!savedId)return;
+  stopDetection.current?.();stopDetection.current=null;
+  channel.current?.close();channel.current=null;peer.current?.close();peer.current=null;
+  stream.current?.getTracks().forEach(track=>track.stop());stream.current=null;
+  if(video.current)video.current.srcObject=null;
+  setConnected(false);setCamera(false);setRecording(false);setQr('');setPairUrl('');
+  if(phone){sessionStorage.removeItem(`dwelld-live-phone-${id}`);sessionStorage.removeItem(`dwelld-live-phone-${id}-claim`);}
+ },[savedId,id,phone]);
  useEffect(()=>{if(!phone&&!id)api.rooms().then(x=>{setRooms(x.rooms);setRoomId(initialRoomId||(newRoom?'':x.rooms[0]?.id||''))}).catch(e=>setError(e.message));},[phone,id,initialRoomId,newRoom]);
  useEffect(()=>{if(id&&!phone&&!baseline){const b=sessionStorage.getItem(`dwelld-baseline-${id}`);if(b)setBaseline(b);}},[id,phone,baseline]);
  useEffect(()=>{
   if(!id)return;
+  let active=true;const controller=new AbortController();
   const key=`dwelld-live-${phone?'phone':'desktop'}-${id}`;
   const restore=sessionStorage.getItem(key);
   if(restore){try{setCredentials(JSON.parse(restore));return}catch{sessionStorage.removeItem(key)}}
@@ -82,12 +94,13 @@ export default function LiveWorkspace({sessionId,phone=false,initialRoomId='',ne
   // Persist claim inputs before sending so a network retry does not claim a second device.
   const claimKey=key+'-claim';let claim={pairingToken,phoneToken,deviceId};try{const previous=sessionStorage.getItem(claimKey);if(previous)claim=JSON.parse(previous)}catch{}
   sessionStorage.setItem(claimKey,JSON.stringify(claim));
-  fetch(`/api/live/${id}/pair`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(claim)}).then(async r=>{const data=await r.json();if(!r.ok)throw new Error(data.error||'Pairing expired. Scan a new code.');const c={token:claim.phoneToken,iceServers:data.iceServers||fallbackIce};sessionStorage.setItem(key,JSON.stringify(c));history.replaceState(null,'',location.pathname);setCredentials(c);setSession(data.session);setConnectionPhase('Camera permission required');diagnose('Phone paired');}).catch(e=>setError(e.message));
+  fetch(`/api/live/${id}/pair`,{signal:controller.signal,method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(claim)}).then(async r=>{const data=await r.json();if(!active)return;if(!r.ok)throw new Error(data.error||'Pairing expired. Scan a new code.');const c={token:claim.phoneToken,iceServers:data.iceServers||fallbackIce};sessionStorage.setItem(key,JSON.stringify(c));history.replaceState(null,'',location.pathname);setCredentials(c);setSession(data.session);setConnectionPhase('Camera permission required');diagnose('Phone paired');}).catch(e=>{if(active)setError(e.message)});
+  return()=>{active=false;controller.abort()};
  },[id,phone,diagnose]);
  useEffect(()=>{if(!id||!credentials?.pairingToken||phone)return;const url=`${location.origin}/connect/${id}#token=${credentials.pairingToken}`;setPairUrl(url);if(location.protocol!=='https:')setError('This local address cannot pair a phone camera securely. Open the deployed HTTPS site on your laptop and create the inspection there.');QRCode.toDataURL(url,{width:280,margin:2,color:{dark:'#304539',light:'#ffffff'}}).then(setQr);},[id,credentials,phone]);
  useEffect(()=>{
-  if(!id||!credentials)return;let active=true,cursor='',running=false,initialPoll=true;const processed=processedSignals.current;
-  const poll=async()=>{if(running||!active)return;running=true;try{const data=await liveRequest<LiveState>(id,credentials.token,`?after=${cursor}`);if(!active)return;setPollError('');setSession(data.session);setInventory(data.objects);setFindings(data.findings);if(initialPoll){initialPoll=false;if(!phone&&!data.session.nativeCapture&&data.session.paired&&!peer.current&&data.session.status!=='saved'){setConnectionPhase('Reconnecting');await signal('restart',{});}}if(data.session.status==='saved'&&data.session.inspectionId)setSavedId(data.session.inspectionId);
+  if(!id||!credentials||savedId)return;const controller=new AbortController();let active=true,cursor='',running=false,initialPoll=true;const processed=processedSignals.current;
+  const poll=async()=>{if(running||!active)return;running=true;try{const data=await liveRequest<LiveState>(id,credentials.token,`?after=${cursor}`,{signal:controller.signal});if(!active)return;setPollError('');setSession(data.session);setInventory(data.objects);setFindings(data.findings);if(initialPoll){initialPoll=false;if(!phone&&!data.session.nativeCapture&&data.session.paired&&!peer.current&&data.session.status!=='saved'){setConnectionPhase('Reconnecting');await signal('restart',{});}}if(data.session.status==='saved'&&data.session.inspectionId){setSavedId(data.session.inspectionId);return;}
    // A reopened desktop answers only the latest offer, never each historical negotiation.
    const latestOffer=!phone?[...data.signals].reverse().find(s=>s.type==='offer'):undefined;
    for(const s of data.signals){cursor=s.id;if(processed.has(s.id))continue;
@@ -100,13 +113,13 @@ export default function LiveWorkspace({sessionId,phone=false,initialRoomId='',ne
    }
    if(phone&&data.session.stopRequested&&!stopping.current&&recorder.current?.state==='recording')void stopRef.current();
   }catch(e){if(active)setPollError(e instanceof Error?e.message:'Connection interrupted. Retrying…')}finally{running=false}};
-  void poll();const interval=setInterval(()=>void poll(),1500);return()=>{active=false;clearInterval(interval)};
- },[id,credentials,phone,makePeer,signal,offer,diagnose]);
+  void poll();const interval=setInterval(()=>void poll(),1500);return()=>{active=false;controller.abort();clearInterval(interval)};
+ },[id,credentials,phone,makePeer,signal,offer,diagnose,savedId]);
  useEffect(()=>{
-  if(phone||!id||!credentials||!session?.nativeCapture)return;let active=true,cursor=0,running=false;
-  const pull=async()=>{if(running||!active)return;running=true;try{const data=await liveRequest<{chunks:StreamChunk[];elements:NonNullable<InspectionSession['nativeLive']>['elements'];saved:boolean}>(id,credentials.token,`/stream?after=${cursor}`);if(!active)return;if(data.chunks.length){cursor=data.chunks[data.chunks.length-1].seq;setRoomStream(prev=>[...prev,...data.chunks].slice(-400));}if(data.elements?.length)setStreamElements(data.elements);}catch{}finally{running=false}};
-  void pull();const timer=setInterval(()=>void pull(),1000);return()=>{active=false;clearInterval(timer)};
- },[phone,id,credentials,session?.nativeCapture]);
+  if(phone||!id||!credentials||!session?.nativeCapture||savedId)return;const controller=new AbortController();let active=true,cursor=0,running=false;
+  const pull=async()=>{if(running||!active)return;running=true;try{const data=await liveRequest<{chunks:StreamChunk[];elements:NonNullable<InspectionSession['nativeLive']>['elements'];saved:boolean}>(id,credentials.token,`/stream?after=${cursor}`,{signal:controller.signal});if(!active)return;if(data.chunks.length){cursor=data.chunks[data.chunks.length-1].seq;setRoomStream(prev=>[...prev,...data.chunks].slice(-400));}if(data.elements?.length)setStreamElements(data.elements);}catch{}finally{running=false}};
+  void pull();const timer=setInterval(()=>void pull(),1000);return()=>{active=false;controller.abort();clearInterval(timer)};
+ },[phone,id,credentials,session?.nativeCapture,savedId]);
  useEffect(()=>{if(!recording&&!busy)return;const warn=(e:BeforeUnloadEvent)=>{e.preventDefault();e.returnValue='';};window.addEventListener('beforeunload',warn);return()=>window.removeEventListener('beforeunload',warn)},[recording,busy]);
  useEffect(()=>{if(!recording)return;const timer=setInterval(()=>{const value=Math.floor((performance.now()-started.current)/1000);setElapsed(value);elapsedRef.current=value;if(value>=120)void stopRef.current();},1000);return()=>clearInterval(timer)},[recording]);
  useEffect(()=>()=>{if(evidence)URL.revokeObjectURL(evidence.url)},[evidence]);
@@ -168,9 +181,9 @@ export default function LiveWorkspace({sessionId,phone=false,initialRoomId='',ne
   <div className="live-columns"><section className="live-stage-panel"><div className="live-stage-heading"><span>{manual?'MARK A SOURCE FRAME':evidence?'PRESERVED EVIDENCE':savedId?'YOUR INSPECTION':uploading?'RECORDED WALKTHROUGH':'THE ROOM, IN VIEW'}</span><div>{recording&&<span className="recording-dot"/>}{!uploading&&<time>{Math.floor(elapsed/60)}:{String(elapsed%60).padStart(2,'0')}</time>}</div></div>
    {uploadWaiting&&<div className="notice analysis-notice" role="status"><div><strong>Waiting for the phone to finish sending.</strong><p>The scan has not been marked as failed. Keep Dwelld open on the iPhone; if it shows Retry save, use it to resume the remaining files. Next becomes available after the final save is confirmed.</p></div></div>}
    <div className="feed-anchor">{session?.nativeCapture&&!phone&&!evidence&&<div className="native-live">
-     <LiveDamagePreview sessionId={id} token={credentials?.token||""} findings={findings} preview={session.nativePreview} selectedId={selected} onSelect={setSelected}/>
-     <div className="native-model"><LiveRoomView live={streamElements?{...session.nativeLive,elements:streamElements}:session.nativeLive} stream={roomStream} findings={findings} selected={selected} onSelect={id=>{const f=findings.find(x=>x.id===id);if(f)void viewFinding(f);}}/></div>
-     <div className="native-status">{!savedId&&(session.nativeProgress?.stage==='uploading'||session.nativeProgress?.upload!==undefined)?<PixelLoader label={session.nativeProgress?.upload!==undefined&&session.nativeProgress.upload>0?`Sending your scan from the phone · ${Math.round(session.nativeProgress.upload*100)}%`:'Sending your scan from the phone. Its screen shows the exact progress'} startedAt={busyStarted.current}/>:<p>{savedId?'Your room is saved. Findings keep arriving as the full scan is analysed.':session.nativeProgress?.stage==='scanning'?`Move slowly · ${session.nativeProgress.frames} frames · ${session.nativeProgress.depthFrames} with depth. Damage checks run every few seconds.`:session.nativeProgress?.stage==='processing'?'The phone is finishing the measured room…':'Tap Start scan on your phone.'}</p>}</div>
+     <LiveDamagePreview key={id} sessionId={id} token={credentials?.token||""} findings={findings} preview={session.nativePreview} selectedId={selected} onSelect={setSelected}/>
+     <div className="native-model"><LiveRoomView key={id} live={streamElements?{...session.nativeLive,elements:streamElements}:session.nativeLive} stream={roomStream} findings={findings} selected={selected} onSelect={id=>{const f=findings.find(x=>x.id===id);if(f)void viewFinding(f);}}/></div>
+     <div className="native-status">{!savedId&&(session.nativeProgress?.stage==='uploading'||session.nativeProgress?.upload!==undefined)?<PixelLoader label={session.nativeProgress?.upload!==undefined&&session.nativeProgress.upload>0?`Sending your scan from the phone · ${Math.round(session.nativeProgress.upload*100)}%`:'Sending your scan from the phone. Its screen shows the exact progress'} startedAt={busyStarted.current}/>:<p>{savedId?'Your room is saved and the phone connection is closed. Select Next to review ongoing analysis.':session.nativeProgress?.stage==='scanning'?`Move slowly · ${session.nativeProgress.frames} frames · ${session.nativeProgress.depthFrames} with depth. Damage checks run every few seconds.`:session.nativeProgress?.stage==='processing'?'The phone is finishing the measured room…':'Tap Start scan on your phone.'}</p>}</div>
     </div>}
     <div style={{display:manual||evidence||session?.nativeCapture?'none':'block'}}><LiveFeed ref={video} objects={objects} findings={findings} selected={selected} onSelect={setSelected} ratio={ratio} onDimensions={setRatio} phone={phone} connected={phone?camera:connected}/></div>
     {(manual||evidence)&&<div className="frozen-frame" onClick={e=>{if(!manual||busy)return;const r=e.currentTarget.getBoundingClientRect();setManual({...manual,point:{x:Math.max(0,Math.min(1,(e.clientX-r.left)/r.width)),y:Math.max(0,Math.min(1,(e.clientY-r.top)/r.height))}})}}><img src={manual?.url||evidence?.url} alt="Preserved source frame"/>{(manual?.point||evidence?.finding.point)&&<span className="damage-pin" style={{left:`${(manual?.point||evidence?.finding.point)!.x*100}%`,top:`${(manual?.point||evidence?.finding.point)!.y*100}%`}}>!</span>}{evidence?.finding.boundingBox&&<span className="frozen-damage-box" style={{left:`${evidence.finding.boundingBox.x*100}%`,top:`${evidence.finding.boundingBox.y*100}%`,width:`${evidence.finding.boundingBox.width*100}%`,height:`${evidence.finding.boundingBox.height*100}%`}}/>}</div>}
