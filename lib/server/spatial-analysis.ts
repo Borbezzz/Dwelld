@@ -5,6 +5,8 @@ export {normalizeSpatialImage} from './spatial-image';
 import {getDb} from './db';
 import {readMedia} from './media';
 import {detectImageObjects} from './yolo';
+import {selectInspectionTargets} from './frame-analysis';
+import {autoReviewInspection} from './verify';
 import {analyzeLiveFrame} from './live-analysis';
 import {indexFindings} from './search';
 import {boxDepthPoints,associateElement,objectIdentityKey,insideElement} from '../spatial/identity';
@@ -35,8 +37,14 @@ export async function analyzeSpatialInspection(inspection:Document,manifest:Spat
      const id=new ObjectId(createHash('sha256').update(key).digest('hex').slice(0,24));
      identities.set(d.objectId,{id,element,position:points[0]||null});if(!element)unresolved++;
     }
-    // At most 3 crops plus surface analysis; additional detections are inventory observations only.
-    const observationId=new ObjectId().toHexString();const analysis=await analyzeLiveFrame(normalized.image,{sessionId:String(inspection._id),observationId,timestampSeconds:frame.timestamp,objects:detections.slice(0,3),includeSurfaces:true});
+    // Up to four damage checks: one of each furniture kind first, then spare slots by box size.
+    const views=detections.map(d=>({elementId:d.objectId,category:d.label,box:d.boundingBox,area:d.boundingBox.width*d.boundingBox.height}));
+    const ranked=selectInspectionTargets(views,4);
+    const picked=new Set(ranked.map(v=>v.elementId));
+    const byId=new Map(detections.map(d=>[d.objectId,d]));
+    const rest=detections.filter(d=>!picked.has(d.objectId)).sort((a,b)=>b.boundingBox.width*b.boundingBox.height-a.boundingBox.width*a.boundingBox.height);
+    const damageObjects=[...ranked.flatMap(v=>{const d=byId.get(v.elementId);return d?[d]:[];}),...rest].slice(0,4);
+    const observationId=new ObjectId().toHexString();const analysis=await analyzeLiveFrame(normalized.image,{sessionId:String(inspection._id),observationId,timestampSeconds:frame.timestamp,objects:damageObjects,includeSurfaces:true});
     warnings.push(...(analysis.analysisWarnings||[]));
     const base={inspectionId:inspection._id,roomId:inspection.roomId,ownerId:inspection.ownerId,evidenceFrameUrl:analysis.evidenceFrameRef,timestampSeconds:frame.timestamp,createdAt:new Date()};
     const markers:{findingId:string;position:Vec3;label:string;elementId:string|null}[]=[];
@@ -64,7 +72,9 @@ export async function analyzeSpatialInspection(inspection:Document,manifest:Spat
   }
   if(unresolved)warnings.push(`${unresolved} object observations could not be safely associated with a measured element; these may contain repeated views of the same item. Review before counting unique inventory.`);
   if(!frames.length)warnings.push('No camera frames were captured; only measured geometry is available.');
-  await db.collection('inspections').updateOne({_id:inspection._id},{$set:{status:success===frames.length&&warnings.length===1?'completed':'partial',analysisWarnings:[...new Set(warnings)],completedAt:new Date(),durationSeconds:manifest.frames.at(-1)?.timestamp||0}});
+  // Verification loop: a second, adversarial look at every AI damage finding; confident ones are auto-approved.
+  const review=await autoReviewInspection(inspection._id).catch(()=>null);
+  await db.collection('inspections').updateOne({_id:inspection._id},{$set:{...(review?{autoReview:review}:{}),status:success===frames.length&&warnings.length===1?'completed':'partial',analysisWarnings:[...new Set(warnings)],completedAt:new Date(),durationSeconds:manifest.frames.at(-1)?.timestamp||0}});
   await indexFindings(inspection.ownerId,inspection._id).catch(()=>{});
  }catch{await db.collection('inspections').updateOne({_id:inspection._id},{$set:{status:'partial',analysisWarnings:[...warnings,'Spatial analysis did not finish. Original capture is preserved.']}});}
 }

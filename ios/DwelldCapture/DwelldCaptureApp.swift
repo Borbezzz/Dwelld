@@ -55,6 +55,26 @@ struct LineLoader: View {
         }.onAppear { sweep = true }
     }
 }
+/// Centre crosshair in the room's mark style: four corner ticks and a ring that pops when you mark.
+struct MarkCrosshair: View {
+    let pulse: Int
+    @State private var pop = false
+    var body: some View {
+        ZStack {
+            Circle().stroke(Color.white.opacity(0.9), lineWidth: 1.5).frame(width: 18, height: 18)
+            Circle().fill(Color(red: 0.77, green: 0.34, blue: 0.25)).frame(width: 6, height: 6)
+            Circle().stroke(Color(red: 0.89, green: 0.6, blue: 0.23), lineWidth: 2).frame(width: 64, height: 64).scaleEffect(pop ? 1.6 : 0.6).opacity(pop ? 0 : 1)
+            ForEach(0..<4, id: \.self) { i in
+                Path { p in p.move(to: CGPoint(x: 0, y: 12)); p.addLine(to: .zero); p.addLine(to: CGPoint(x: 12, y: 0)) }
+                    .stroke(Color.white.opacity(0.9), lineWidth: 1.5).frame(width: 12, height: 12)
+                    .offset(x: -26, y: -26).rotationEffect(.degrees(Double(i) * 90))
+            }
+        }
+        .shadow(color: .black.opacity(0.35), radius: 2)
+        .onChange(of: pulse) { _, _ in pop = false; withAnimation(.easeOut(duration: 0.5)) { pop = true } }
+        .onAppear { pop = true }
+    }
+}
 struct CaptureScreen: View {
     @StateObject private var model = CaptureModel()
     private var title: String {
@@ -62,9 +82,10 @@ struct CaptureScreen: View {
         if model.uploadComplete { return "Saved to your laptop." }
         if model.uploading { return "Sending your room." }
         if model.processing { return "Measuring your room." }
+        if model.relocalizing { return "Find where you left off." }
         if model.scanning { return "Let your room tell its story." }
         if model.ready { return "Ready to send." }
-        return "Ready when you are."
+        return model.continueFrom.isEmpty ? "Ready when you are." : "Continue your room."
     }
     var body: some View {
         ScrollView {
@@ -80,27 +101,84 @@ struct CaptureScreen: View {
                 Rectangle().fill(Dwelld.rule).frame(height: 1)
                 VStack(alignment: .leading, spacing: 8) {
                     Text(title).font(Dwelld.serif(30)).foregroundStyle(Dwelld.ink).fixedSize(horizontal: false, vertical: true)
-                    Text(model.pairedSession.isEmpty ? "Start an inspection on the website, scan its QR code with your iPhone camera, then tap Open Dwelld Capture." : "Move slowly. Keep the details in view. Your laptop shows the room building as you go.")
+                    Text(model.pairedSession.isEmpty ? "Start an inspection on the website, scan its QR code with your iPhone camera, then tap Open Dwelld Capture." : (model.relocalizing || (!model.continueFrom.isEmpty && !model.scanning && !model.ready && !model.uploadComplete)) ? "Stand where you scanned before and point at something you already captured. Once the phone recognises it, scan the new part." : "Move slowly. Keep the details in view. Your laptop shows the room building as you go.")
                         .font(.system(size: 13)).foregroundStyle(Dwelld.muted).fixedSize(horizontal: false, vertical: true)
                 }
                 if model.pairing { LineLoader(label: "Connecting securely") }
                 ZStack(alignment: .topLeading) {
-                    RoomView(model: model).frame(height: 300)
+                    RoomView(model: model).id(model.captureViewID).frame(height: 300)
                     if !model.scanning && (model.ready || model.processing || model.uploadComplete) {
                         Dwelld.well.overlay(Text(model.processing ? "Finishing capture…" : (model.uploadComplete ? "Inspection saved" : "Capture ready")).font(Dwelld.serif(20)).foregroundStyle(Dwelld.ink))
+                    }
+                    if model.scanning {
+                        TimelineView(.animation(minimumInterval: 1.0 / 30)) { _ in
+                            GeometryReader { geometry in
+                                ForEach(model.liveFindings) { finding in
+                                    if let point = model.projectedDamage(finding, viewport: geometry.size) {
+                                        VStack(spacing: 3) {
+                                            Text(finding.label).font(.system(size: 10, weight: .medium)).padding(4).background(Dwelld.paper.opacity(0.95)).foregroundStyle(Dwelld.ink)
+                                            Image(systemName: "exclamationmark.circle.fill").foregroundStyle(Color.orange).background(Circle().fill(.white)).font(.system(size: 22))
+                                        }.position(point)
+                                    }
+                                }
+                            }
+                        }.allowsHitTesting(false)
+                        MarkCrosshair(pulse: model.markPulse).frame(maxWidth: .infinity, maxHeight: .infinity).allowsHitTesting(false)
+                        VStack {
+                            Spacer()
+                            Button { model.markDamage() } label: {
+                                Label(model.markCount > 0 ? "Mark damage · \(model.markCount)" : "Mark damage", systemImage: "scope")
+                                    .font(.system(size: 14, weight: .medium)).padding(.horizontal, 18).frame(height: 44)
+                                    .background(Capsule().fill(Dwelld.paper.opacity(0.94))).foregroundStyle(Dwelld.ink)
+                            }.accessibilityHint("Marks what is under the crosshair without stopping the scan")
+                        }.frame(maxWidth: .infinity).padding(.bottom, 14)
+                    }
+                    if model.relocalizing {
+                        VStack(spacing: 10) {
+                            ProgressView().tint(.white)
+                            Text("Point at a part you already scanned").font(Dwelld.serif(17)).foregroundStyle(.white)
+                            Text(model.tracking).font(.system(size: 11)).foregroundStyle(.white.opacity(0.85))
+                        }.padding(16).background(Color.black.opacity(0.45)).clipShape(RoundedRectangle(cornerRadius: 3))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity).allowsHitTesting(false)
                     }
                     if model.scanning {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(model.tracking).font(.system(size: 11, weight: .medium))
                             Text("\(model.frameCount) frames · \(model.depthCount) with depth").font(.system(size: 11).monospacedDigit())
+                            if model.sentDuringScan > 0 { Text("\(model.sentDuringScan) files already on your laptop").font(.system(size: 11).monospacedDigit()) }
                         }.foregroundStyle(Dwelld.ink).padding(10).background(Dwelld.paper.opacity(0.92)).clipShape(RoundedRectangle(cornerRadius: 3)).padding(12)
                     }
                 }.background(Dwelld.well).clipShape(RoundedRectangle(cornerRadius: 2))
+                if model.scanning || model.processing || model.ready {
+                    Text(model.damageCheckStatus).font(.system(size: 11)).foregroundStyle(Dwelld.muted)
+                }
+                if let image = model.damageEvidence {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Damage spotted").font(Dwelld.serif(18)).foregroundStyle(Dwelld.ink)
+                        Image(uiImage: image).resizable().aspectRatio(contentMode: .fit)
+                            .overlay {
+                                GeometryReader { geometry in
+                                    ForEach(model.damageEvidenceFindings) { finding in
+                                        if let box = finding.boundingBox {
+                                            Rectangle().stroke(Color.orange, lineWidth: 2)
+                                                .frame(width: geometry.size.width * box.width, height: geometry.size.height * box.height)
+                                                .position(x: geometry.size.width * (box.x + box.width / 2), y: geometry.size.height * (box.y + box.height / 2))
+                                        }
+                                    }
+                                }
+                            }
+                        Text(model.damageEvidenceFindings.map { $0.label }.joined(separator: " · ")).font(.system(size: 12)).foregroundStyle(Dwelld.ink)
+                        Text("Source photo · suggestions update after cross-checking. Scanning continues.").font(.system(size: 10)).foregroundStyle(Dwelld.muted)
+                    }
+                }
+                if model.scanning { Text(model.videoStatus).font(.system(size: 11)).foregroundStyle(Dwelld.muted) }
                 if model.processing { LineLoader(label: "Building your measured room") }
                 if model.uploading { LineLoader(label: "Sending to your laptop", progress: model.uploadProgress) }
                 VStack(spacing: 10) {
-                    if !model.ready && !model.uploadComplete {
-                        Button(model.scanning ? "Finish & save" : "Start scan") { if model.scanning { model.stop() } else { model.start() } }
+                    if model.relocalizing {
+                        Button("Stop looking") { model.cancelRelocalizing() }.buttonStyle(DwelldButtonStyle(filled: false))
+                    } else if !model.ready && !model.uploadComplete {
+                        Button(model.scanning ? "Finish & save" : (model.continueFrom.isEmpty ? "Start scan" : "Continue scan")) { if model.scanning { model.stop() } else { model.start() } }
                             .buttonStyle(DwelldButtonStyle())
                             .disabled(model.pairedSession.isEmpty || model.pairing || model.uploading || model.processing)
                     }

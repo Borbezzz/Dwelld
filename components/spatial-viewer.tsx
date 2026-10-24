@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import DotField from "./dot-field";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { SpatialManifest, SpatialMarker, Vec3 } from "@/lib/spatial/types";
@@ -10,27 +11,31 @@ type Props = {
   onPick?: (point: Vec3, elementId: string | null) => void;
   selectedElementId?: string | null; hoveredElementId?: string | null;
   onSelectElement?: (id: string | null) => void; onHoverElement?: (id: string | null) => void;
-  damagedElementIds?: string[]; compact?: boolean; className?: string;
+  damagedElementIds?: string[]; elementTones?: Record<string, "check" | "damage">; compact?: boolean; className?: string;
 };
-const INK = 0x2f3a2c, ACTIVE = 0xe39a3b, DAMAGE = 0xc4573f;
+// Selection is blue so it never reads as a status. Amber = needs a look, red = damage confirmed.
+const INK = 0x2f3a2c, ACTIVE = 0x3f8fd2, CHECK = 0xe39a3b, DAMAGE = 0xc4573f;
 
 /**
  * One 3D space: the Gaussian splat (when present) with the measured furniture boxes inside it.
  * Hover a box to outline it, click it to select it. Walls and floors are context, never listed.
  */
-export default function SpatialViewer({ manifest, markers, assetUrl, onPick, selectedElementId, hoveredElementId, onSelectElement, onHoverElement, damagedElementIds = [], compact = false, className = "" }: Props) {
+export default function SpatialViewer({ manifest, markers, assetUrl, onPick, selectedElementId, hoveredElementId, onSelectElement, onHoverElement, damagedElementIds = [], elementTones = {}, compact = false, className = "" }: Props) {
   const root = useRef<HTMLDivElement>(null);
   const splat = manifest.assets.find(a => a.kind === "splat");
   const aligned = !!splat && (!!splat.registration || splat.reconstructionMethod === "lidar-initialized");
-  const [mode, setMode] = useState<"room" | "geometry">(compact ? "geometry" : splat ? "room" : "geometry");
-  const [error, setError] = useState(""), [loading, setLoading] = useState(false);
+  const [mode, setMode] = useState<"room" | "geometry">(splat ? "room" : "geometry");
+  const [error, setError] = useState(""), [loading, setLoading] = useState(!!splat);
   const [tip, setTip] = useState<{ text: string; x: number; y: number } | null>(null);
   const callbacks = useRef({ onPick, onSelectElement, onHoverElement }); callbacks.current = { onPick, onSelectElement, onHoverElement };
-  const state = useRef({ selected: selectedElementId ?? null, hovered: hoveredElementId ?? null, localHover: null as string | null, damaged: new Set(damagedElementIds) });
-  state.current.selected = selectedElementId ?? null; state.current.hovered = hoveredElementId ?? null; state.current.damaged = new Set(damagedElementIds);
-  const scene = useRef<{ highlight: () => void; focus: (id: string | null) => void } | null>(null);
+  const tones = { ...Object.fromEntries(damagedElementIds.map(id => [id, "check" as const])), ...elementTones };
+  const state = useRef({ selected: selectedElementId ?? null, hovered: hoveredElementId ?? null, localHover: null as string | null, tones });
+  state.current.selected = selectedElementId ?? null; state.current.hovered = hoveredElementId ?? null; state.current.tones = tones;
+  const scene = useRef<{ highlight: () => void; focus: (id: string | null) => void; markers: (list: SpatialMarker[]) => void } | null>(null);
+  const markersRef = useRef(markers); markersRef.current = markers;
+  useEffect(() => { scene.current?.markers(markers); }, [markers]);
   const splatUrl = splat ? assetUrl(splat.name) : "";
-  const damagedKey = damagedElementIds.join(",");
+  const damagedKey = JSON.stringify(tones);
 
   useEffect(() => { scene.current?.highlight(); }, [selectedElementId, hoveredElementId, damagedKey]);
   useEffect(() => { scene.current?.focus(selectedElementId ?? null); }, [selectedElementId]);
@@ -39,6 +44,7 @@ export default function SpatialViewer({ manifest, markers, assetUrl, onPick, sel
     const element = root.current; if (!element) return;
     setError(""); setTip(null);
     const useSplat = mode === "room" && !!splatUrl;
+    setLoading(useSplat);
     const showBoxes = !useSplat || aligned;
     const names = furnitureNames(manifest.elements.filter(isFurniture));
     // ---- Overlay: furniture boxes, markers and (geometry mode only) faint room structure.
@@ -63,12 +69,18 @@ export default function SpatialViewer({ manifest, markers, assetUrl, onPick, sel
         plane.applyMatrix4(matrix); plane.userData.elementId = e.id; group.add(plane); structure.push(plane);
       } else geometry.dispose();
     }
-    if (showBoxes) for (const m of markers) {
-      const marker = new THREE.Mesh(new THREE.SphereGeometry(.05, 16, 16), new THREE.MeshBasicMaterial({ color: m.reviewStatus === "confirmed" ? 0x2f7d4d : m.reviewStatus === "rejected" ? 0x8a8a84 : DAMAGE, depthTest: !useSplat }));
-      marker.position.fromArray(m.position); marker.renderOrder = 12; group.add(marker);
-      const ring = new THREE.Mesh(new THREE.RingGeometry(.07, .085, 32), new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, transparent: true, opacity: .9, depthTest: !useSplat }));
-      ring.position.copy(marker.position); ring.renderOrder = 11; ring.userData.billboard = true; group.add(ring);
-    }
+    // Markers live in their own group so adding or moving one never rebuilds the room or resets the camera.
+    const pins = new THREE.Group(); pins.visible = showBoxes; group.add(pins);
+    const placeMarkers = (list: SpatialMarker[]) => {
+      pins.children.slice().forEach(o => { pins.remove(o); if (o instanceof THREE.Mesh) { o.geometry.dispose(); (o.material as THREE.Material).dispose(); } });
+      for (const m of list) {
+        const marker = new THREE.Mesh(new THREE.SphereGeometry(.05, 16, 16), new THREE.MeshBasicMaterial({ color: m.reviewStatus === "confirmed" ? DAMAGE : m.reviewStatus === "rejected" ? 0x8a8a84 : CHECK, depthTest: !useSplat }));
+        marker.position.fromArray(m.position); marker.renderOrder = 12; pins.add(marker);
+        const ring = new THREE.Mesh(new THREE.RingGeometry(.07, .085, 32), new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, transparent: true, opacity: .9, depthTest: !useSplat }));
+        ring.position.copy(marker.position); ring.renderOrder = 11; ring.userData.billboard = true; pins.add(ring);
+      }
+    };
+    placeMarkers(markersRef.current);
     const center = bounds.isEmpty() ? new THREE.Vector3() : bounds.getCenter(new THREE.Vector3());
     const radius = bounds.isEmpty() ? 3 : Math.max(2, bounds.getSize(new THREE.Vector3()).length() * .7);
     const start = center.clone().add(new THREE.Vector3(radius * .85, radius * .8, radius * .95));
@@ -78,15 +90,22 @@ export default function SpatialViewer({ manifest, markers, assetUrl, onPick, sel
     let canvas: HTMLCanvasElement | undefined;
     let dead = false, focusFrame = 0;
     const highlight = () => {
-      const { selected, hovered, localHover, damaged } = state.current;
+      const { selected, hovered, localHover, tones } = state.current;
       for (const [id, item] of items) {
-        const active = id === selected || id === hovered || id === localHover;
+        const active = id === selected || id === hovered || id === localHover, tone = tones[id];
+        const toneColor = tone === "damage" ? DAMAGE : tone === "check" ? CHECK : useSplat ? 0xffffff : INK;
         const lineMaterial = item.edges.material as THREE.LineBasicMaterial, fillMaterial = item.fill.material as THREE.MeshBasicMaterial;
-        lineMaterial.color.set(active ? ACTIVE : damaged.has(id) ? DAMAGE : useSplat ? 0xffffff : INK);
-        lineMaterial.opacity = active ? 1 : damaged.has(id) ? .95 : useSplat ? .55 : .75;
-        fillMaterial.color.set(damaged.has(id) && !active ? DAMAGE : ACTIVE);
-        fillMaterial.opacity = active ? (id === selected ? .22 : .14) : damaged.has(id) ? .08 : 0;
+        lineMaterial.color.set(active ? ACTIVE : toneColor);
+        lineMaterial.opacity = active ? 1 : tone ? .95 : useSplat ? .55 : .75;
+        fillMaterial.color.set(active ? ACTIVE : toneColor);
+        fillMaterial.opacity = active ? (id === selected ? .24 : .16) : tone === "damage" ? .16 : tone ? .1 : 0;
       }
+      // Hovering a row in the list labels the same piece in the room.
+      const external = !localHover && (hovered || null);
+      if (external && camera && canvas) {
+        const at = items.get(external)?.center.clone().project(camera), rect = canvas.getBoundingClientRect(), host = element.getBoundingClientRect();
+        if (at && at.z < 1) setTip({ text: names.get(external) || "Furniture", x: (at.x + 1) / 2 * rect.width + rect.left - host.left, y: (1 - at.y) / 2 * rect.height + rect.top - host.top }); else setTip(null);
+      } else if (!localHover) setTip(null);
       render();
     };
     const focus = (id: string | null) => {
@@ -97,7 +116,7 @@ export default function SpatialViewer({ manifest, markers, assetUrl, onPick, sel
       const step = () => { if (dead || !controls) return; const t = Math.min(1, (performance.now() - began) / 450), k = t * (2 - t); controls.target.lerpVectors(from, goal, k); controls.update(); render(); if (t < 1) focusFrame = requestAnimationFrame(step); };
       step();
     };
-    scene.current = { highlight, focus };
+    scene.current = { highlight, focus, markers: list => { placeMarkers(list); render(); } };
     // ---- Pointer: hover outlines, click selects, double-click places a marker.
     const ray = new THREE.Raycaster();
     const hitAt = (event: MouseEvent, targets: THREE.Object3D[]) => { if (!canvas || !camera) return undefined; const rect = canvas.getBoundingClientRect(); ray.setFromCamera(new THREE.Vector2((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1), camera); return ray.intersectObjects(targets, false)[0]; };
@@ -126,7 +145,7 @@ export default function SpatialViewer({ manifest, markers, assetUrl, onPick, sel
     const dispose = () => { group.traverse(o => { if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments) { o.geometry.dispose(); (o.material as THREE.Material).dispose(); } }); };
 
     if (useSplat) {
-      let viewer: import("@mkkellogg/gaussian-splats-3d").Viewer | undefined;
+      let viewer: import("@mkkellogg/gaussian-splats-3d").Viewer | undefined, visibility: IntersectionObserver | undefined;
       // Furniture outlines are drawn after the splat so they stay visible inside it.
       const overlay = new THREE.Scene(), top = new THREE.Scene(); top.add(group);
       setLoading(true);
@@ -144,9 +163,11 @@ export default function SpatialViewer({ manifest, markers, assetUrl, onPick, sel
         render = () => viewer?.forceRenderNextFrame();
         if (controls) { controls.autoRotate = compact && !reduced; controls.autoRotateSpeed = .35; }
         attach(); viewer.start(); highlight(); setLoading(false);
+        // The dashboard preview spins on its own: only render it while it is on screen.
+        if (compact) { const v = viewer; visibility = new IntersectionObserver(([entry]) => { if (dead) return; const loop = v as unknown as { stop: () => void; selfDrivenModeRunning: boolean }; if (!entry.isIntersecting) loop.stop(); else if (!loop.selfDrivenModeRunning) v.start(); }); visibility.observe(element); }
         if (state.current.selected) focus(state.current.selected);
       }).catch(() => { if (!dead) { setLoading(false); setError("The 3D room could not be loaded. Switch to geometry to keep reviewing."); } });
-      return () => { dead = true; cancelAnimationFrame(focusFrame); cancelAnimationFrame(moveFrame); detach(); scene.current = null; void viewer?.dispose(); dispose(); element.replaceChildren(); };
+      return () => { dead = true; visibility?.disconnect(); cancelAnimationFrame(focusFrame); cancelAnimationFrame(moveFrame); detach(); scene.current = null; void viewer?.dispose(); dispose(); element.replaceChildren(); };
     }
 
     const three = new THREE.Scene(); three.background = new THREE.Color("#f1f0ea"); three.add(group);
@@ -165,11 +186,11 @@ export default function SpatialViewer({ manifest, markers, assetUrl, onPick, sel
     if (state.current.selected) focus(state.current.selected);
     return () => { dead = true; cancelAnimationFrame(focusFrame); cancelAnimationFrame(moveFrame); detach(); scene.current = null; resize.disconnect(); renderer.setAnimationLoop(null); orbit.dispose(); dispose(); three.traverse(o => { if (o instanceof THREE.Mesh) { o.geometry.dispose(); (o.material as THREE.Material).dispose(); } }); renderer.dispose(); element.replaceChildren(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [manifest, markers, mode, splatUrl, compact, aligned]);
+  }, [manifest, mode, splatUrl, compact, aligned]);
 
   return <div className={`room-scene ${compact ? "room-scene-compact" : ""} ${className}`}>
     <div ref={root} className="room-scene-canvas" aria-label="3D room: hover furniture to outline it, click to select" />
-    {loading && <div className="room-scene-loading"><span className="skeleton" /><p>Loading your room in 3D…</p></div>}
+    {loading && <div className="room-scene-loading is-live"><DotField /><p>Loading your room in 3D…</p></div>}
     {tip && <span className="room-scene-tip" style={{ left: tip.x, top: tip.y }}>{tip.text}</span>}
     {!compact && splat && <div className="room-scene-modes" role="group" aria-label="3D view"><button type="button" aria-pressed={mode === "room"} onClick={() => setMode("room")}>Room</button><button type="button" aria-pressed={mode === "geometry"} onClick={() => setMode("geometry")}>Geometry</button></div>}
     {!compact && mode === "room" && splat && !aligned && <p className="room-scene-note">This reconstruction has no calibration, so furniture outlines are shown in Geometry view only.</p>}

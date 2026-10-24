@@ -1,3 +1,5 @@
+import { LiveTracker, cropSignature } from "./live-tracker";
+import { videoSampleTimes } from "../video-sampling";
 import type { DetectionFrame } from "@/lib/types";
 
 /** Wait for decoding/seeking with cleanup on errors, cancellation, or a stalled browser decoder. */
@@ -43,8 +45,9 @@ export async function detectVideoFrames(file: File, onProgress: (message: string
     if (!context) throw new Error("Your browser could not prepare the video frames.");
     onProgress("Loading object detector…");
     const { detectObjects } = await import("./detector");
-    const timestamps = [...new Set([0.15, 0.5, 0.85].map(fraction => Math.floor(duration * fraction * 1000) / 1000))];
+    const timestamps = videoSampleTimes(duration);
     const frames: DetectionFrame[] = [];
+    const tracker = new LiveTracker();
     for (const [index, timestampSeconds] of timestamps.entries()) {
       signal?.throwIfAborted();
       onProgress(index === 0 ? `Preparing detector and frame 1 of ${timestamps.length} · first use downloads ~24 MB` : `Finding objects · frame ${index + 1} of ${timestamps.length}`);
@@ -52,11 +55,12 @@ export async function detectVideoFrames(file: File, onProgress: (message: string
         await waitForVideo(video, "seeked", () => { video.currentTime = timestampSeconds; }, signal);
       }
       context.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const detections = await detectObjects(canvas);
+      const detected = await detectObjects(canvas);
+      const detections = tracker.update(detected, detected.map(d => cropSignature(canvas, d.boundingBox)), timestampSeconds);
       signal?.throwIfAborted();
       // Keep empty frames: Gemini can still inspect walls, floors and other surfaces.
       frames.push({ timestampSeconds, detections: detections.slice(0, 20).map((detection, detectionIndex) => ({
-        ...detection, objectId: `frame-${index + 1}-object-${detectionIndex + 1}`,
+        ...detection,
       })) });
     }
     return frames;

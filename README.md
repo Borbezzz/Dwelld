@@ -11,6 +11,7 @@ This README reflects the source as of **24 October 2026**. Some older `docs/` fi
 ## Contents
 
 - [Features and limitations](#features-and-limitations)
+- [Requirements met](#requirements-met)
 - [3D loading and performance](#3d-loading-and-performance)
 - [System architecture](#system-architecture)
 - [Repository layout](#repository-layout)
@@ -41,11 +42,53 @@ This README reflects the source as of **24 October 2026**. Some older `docs/` fi
 | Retrieval | Atlas text, semantic, and hybrid search; source-cited answers about saved records. |
 | Export | Structured JSON and browser print/save-to-PDF reports. |
 
+```mermaid
+flowchart LR
+    Account["Sign in"] --> Room["Create a room"]
+    Room --> Choice{"Capture"}
+    Choice -->|video| Video["Upload a walkthrough"]
+    Choice -->|iPhone| Scan["Pair and scan"]
+    Video --> Review["Confirm or dismiss findings"]
+    Scan --> Review
+    Scan --> Spatial["3D room and markers"]
+    Review --> Search["Search and ask"]
+    Review --> Compare["Compare two scans"]
+    Review --> Report["Export a report"]
+```
+
 AI observations require review. A missing detection or completed analysis does not establish absence of damage. A confirmed finding records a user's review decision; it does not determine liability, structural safety, or repair cost. Independent RoomPlan scans have independent origins and are not automatically registered.
 
 The repository retains browser WebRTC capture/signalling infrastructure, but the **current public QR pages open the native LiDAR companion only**. They no longer expose the earlier browser-phone recording fallback. Uploaded video remains a separate web capture option.
 
+## Requirements met
+
+Encode London 2026, MongoDB bounty: an app that solves a real problem with **MongoDB Atlas as its foundational data store**. Extra points come from Atlas Search, Atlas Vector Search, Hybrid Search, Automated Embedding, Atlas Stream Processing and Voyage AI. The copied brief is in [docs/BOUNTY-REQUIREMENTS.md](docs/BOUNTY-REQUIREMENTS.md).
+
+Dwelld meets that bar. Atlas is the only database. Rooms, inspections, findings, live sessions and accounts live there, and the original video, photos, depth and splats are stored in GridFS. A saved video inspection writes those records, then prepares the finding text and vectors so the same documents can be searched.
+
+| Atlas feature | Met | Where it is used |
+| --- | --- | --- |
+| Foundational data store | Yes | `MONGODB_URI`. Rooms, inspections, findings, sessions and auth. Media in GridFS. |
+| Atlas Search | Yes | `$search` on `findings_search`: fuzzy match on label, description and damage type. |
+| Atlas Vector Search | Yes | `$vectorSearch` on `findings_vector` (Gemini, 768 dimensions) and `findings_image` (Voyage photo vectors, 1024 dimensions). |
+| Hybrid Search | Yes | One `$rankFusion` stage over keyword, meaning and photo results. On a cluster below MongoDB 8.0 the same fusion runs in the app, and the search page says so. |
+| Automated Embedding | Yes | `findings_auto` embeds `searchText` with Voyage `voyage-4` when a finding is written and when a query is run. |
+| Voyage AI | Yes | `voyage-4` through Automated Embedding, `voyage-multimodal-3.5` for evidence photos, and `rerank-3` after fusion. Photo search and rerank need `VOYAGE_API_KEY`. |
+| Atlas Stream Processing | No | Not used. |
+
+The damage check itself stores evidence in Atlas. Atlas Search, Vector Search, hybrid search, Automated Embedding and Voyage run when those saved findings are prepared and someone searches or asks about them. Search returns an error until the indexes are queryable. There is no regex substitute. The submission still needs the repository link and a 3-minute demo that shows the app and MongoDB in use.
+
 ## 3D loading and performance
+
+```mermaid
+flowchart LR
+    Dash["Dashboard"] --> Batch["Find a capture, three inspections at a time"]
+    Batch --> Light["Measured geometry, no splat download"]
+    Page["Spatial page"] --> Both["Capture and inspection load together"]
+    Both --> Choice{"View"}
+    Choice -->|splat| Ply["Authenticated GridFS byte ranges"]
+    Choice -->|geometry| Mesh["RoomPlan surfaces in Three.js"]
+```
 
 The dashboard now checks possible captures in parallel batches of three, rather than waiting for each inspection in turn. Its small room preview starts with lightweight measured geometry, so it does **not** need to download and decode the larger Gaussian PLY just to show a room. Open an inspection's spatial page to see the full reconstruction or switch to geometry. That page also requests the capture and inspection details in parallel.
 
@@ -57,33 +100,49 @@ The web application is a **Next.js App Router application** with React client in
 
 ```mermaid
 flowchart TD
-    Web[React / Next.js web client]
-    Phone[SwiftUI / RoomPlan / ARKit companion]
-    BrowserModel[Browser YOLO11n / ONNX WASM]
-    API[Next.js Node.js route handlers]
-    Auth[Better Auth / ownership checks]
-    Processing[FFmpeg / Sharp / ONNX Runtime Node]
-    AI[Google Gen AI]
-    DB[(MongoDB Atlas records / auth / live state)]
-    Media[(GridFS media)]
-    Search[Atlas Search / Vector Search]
-    GPU[Optional offline CUDA / COLMAP / gsplat]
+    Web["Web app: review, search, 3D room"]
+    Phone["iPhone app: RoomPlan and LiDAR"]
+    Yolo["Browser YOLO, video uploads only"]
+    API["Next.js API: sign-in, uploads, review"]
 
-    Web --> BrowserModel
+    subgraph checks [Three ways a room is checked]
+        Video["Uploaded video: FFmpeg, Gemini, crack model"]
+        Paired["Paired scan: Gemini and crack model on each photo"]
+        Direct["Direct import: server YOLO, then Gemini and crack model"]
+    end
+
+    Gemini["Gemini: damage, compare, embed, answer"]
+    DB[("MongoDB Atlas: records, accounts, live session")]
+    Media[("GridFS: video, photos, splats")]
+    Search["Atlas text and vector search"]
+    GPU["Optional CUDA machine: COLMAP and gsplat"]
+
+    Web --> Yolo --> API
     Web --> API
-    Phone -->|Assets, manifest, progress, preview| API
-    API --> Auth
-    Auth --> DB
-    API --> Processing
-    Processing --> AI
-    API --> AI
+    Phone -->|photos, manifest, progress| API
     API --> DB
     API --> Media
+    API --> Video
+    API --> Paired
+    API --> Direct
+    Video --> Gemini
+    Paired --> Gemini
+    Direct --> Gemini
+    API -->|questions and comparisons| Gemini
     API --> Search
     Search --> DB
-    Phone -->|Export original capture folder| GPU
-    GPU -->|Import PLY and registration through web| API
+    Phone -.->|export the capture folder| GPU
+    GPU -.->|import a trained PLY| API
 ```
+
+How to read it:
+
+- An uploaded video is sampled every second in the browser, up to 121 frames. YOLO names the furniture. The server extracts those same seconds with FFmpeg. Gemini checks each photo for damage, and the crack model adds its own candidates.
+- A paired iPhone scan sends the measured room and photos during the walk. Gemini and the crack model inspect each photo, then a second Gemini pass checks the suggestions. Two database leases keep that work to two photos at a time.
+- A capture manifest saved without the live session is the path that runs YOLO on the server. It samples the first, middle, and last frame, then Gemini and the crack model.
+- Gemini also compares two inspections, embeds findings, and answers questions about saved records. Atlas Search queries those records. The dotted line is a manual export to a separate computer, not a service the app calls. QR pairing opens the iPhone app; retained browser WebRTC is not how a scan is uploaded.
+
+Chairs, sofas and beds use the same damage rules as tables, cabinets and doors. Cushion creases, fabric weave and bedding are left out. A direct import checks up to four detected objects, one kind first. A not-damage verdict at 60 percent verifier confidence or more is dismissed and can be undone. Clear damage still auto-approves at 85 percent.
 
 ### Layers and responsibilities
 
@@ -94,8 +153,8 @@ flowchart TD
 | API | Next.js route handlers, Node.js | Authorization, validation, uploads, analysis orchestration, persistence. |
 | Authentication | Better Auth + MongoDB adapter | Password accounts and cookie sessions. |
 | Storage | MongoDB driver 7, Atlas, GridFS | Structured records and private original/evidence bytes. |
-| Browser inference | YOLO11n, ONNX Runtime Web | Local object detection using CPU/WASM. |
-| Server processing | FFmpeg, Sharp, ONNX Runtime Node | Frame extraction, normalization/crops, native-frame YOLO and specialized crack inference. |
+| Browser inference | YOLO11n, ONNX Runtime Web | Object detection for an uploaded video, in the browser, on CPU/WASM. |
+| Server processing | FFmpeg, Sharp, ONNX Runtime Node | Video frame extraction, image crops, server YOLO for a direct capture import, and the crack model on every photo check. |
 | Generative AI | `@google/genai` | Damage observations, supplemental furniture, comparison, embeddings, answers. |
 | Spatial display | Three.js, GaussianSplats3D | Measured room geometry, splats, spatial annotations. |
 | Native app | SwiftUI, RoomPlan, ARKit, Metal | LiDAR capture, calibrated evidence, depth-based Gaussian preview, upload. |
@@ -108,7 +167,24 @@ Versions above describe dependency families in `package.json`; `package-lock.jso
 
 `app/api/` contains HTTP orchestration. Reusable services live in `lib/server/`, while browser inference, uploads, tracking, and signalling live in `lib/client/`. Shared contracts are in `lib/types.ts`, `lib/live/`, and `lib/spatial/`.
 
-Video creation persists an inspection and returns its ID before running analysis with Next.js `after()`. Native manifest submission also schedules analysis with `after()`. This is function-lifetime background work, **not a durable job queue**: process termination can leave work unfinished. Comparison generation runs within the request, protected by a database lease per owner/room.
+```mermaid
+flowchart TD
+    Client["Browser or iPhone"] --> Route["Route in app/api"]
+    Route --> Gate{"Caller"}
+    Gate -->|account cookie| Owner["The room or inspection must belong to them"]
+    Gate -->|paired phone| Capability["A session capability, not an account login"]
+    Owner --> Handler["Validate, then read or write"]
+    Capability --> Handler
+    Handler --> Store[("MongoDB records and GridFS files")]
+    Handler -->|video saved, or a scan manifest saved| Later["Analysis continues after the response"]
+    Handler -->|compare, search, or ask| Now["Gemini runs inside this request"]
+    Later --> Gemini["Gemini"]
+    Later --> Onnx["Crack model, and server YOLO on a direct import"]
+    Later --> Store
+    Now --> Store
+```
+
+A video inspection and a saved scan return their id first, then keep analysing inside that function. Process termination can leave that work unfinished. There is no separate job queue. Comparison, search, and Ask run inside the request that started them. Comparison takes a database lease so one owner and room run one comparison at a time.
 
 ## Repository layout
 
@@ -205,6 +281,8 @@ Keep secrets in ignored environment files or deployment configuration. Gemini/Mo
 | `BETTER_AUTH_SECRET` | Required | Random secret of at least 32 characters. |
 | `BETTER_AUTH_URL` | Configure per environment | Exact origin, including local port; example uses `http://localhost:3001`. |
 | `GEMINI_API_KEY` | AI features | Server-side generation and embedding credential. |
+| `VOYAGE_API_KEY` | Photo search, rerank | Voyage AI by MongoDB model API key (Atlas UI → AI Models). Used against `https://ai.mongodb.com/v1` (`VOYAGE_BASE_URL` to change). Automated Embedding needs no key here. |
+| `ATLAS_AUTO_EMBED_MODEL` | Optional | Model for the `findings_auto` autoEmbed index, default `voyage-4`. |
 | `GEMINI_MODEL` | Optional override | Generation model; source/example default is `gemini-4-argon`. Verify access in your project; a configured identifier does not establish availability. |
 | `TURN_URLS` | Optional WebRTC path | Comma-separated `turn:`/`turns:` endpoints. |
 | `TURN_SHARED_SECRET` | Optional WebRTC path | TURN REST HMAC secret for a compatible provider. |
@@ -217,47 +295,57 @@ The embedding model and 768 dimensions are defined in `lib/server/search.ts`, no
 ### Uploaded video
 
 ```mermaid
-sequenceDiagram
-    participant B as Browser
-    participant A as Next.js API
-    participant M as MongoDB / GridFS
-    participant G as Gemini
-    B->>B: Decode and sample video
-    B->>B: Run YOLO at three timestamps
-    B->>A: Initialize, upload sequential parts, complete
-    A->>M: Assemble validated original video
-    B->>A: Submit media reference and detection frames
-    A->>M: Save processing inspection
-    A-->>B: Inspection ID
-    Note over A,G: Analysis runs within the function lifetime
-    A->>A: FFmpeg extracts original-resolution frames
-    A->>G: Object crops, furniture fallback, surfaces
-    A->>A: Specialized crack inference
-    A->>M: Evidence, findings, embeddings, warnings, status
-    B->>A: Reopen/poll and review
+flowchart TD
+    Sample["Browser samples every second, up to 121 frames"] --> Yolo["Browser YOLO names furniture"]
+    Yolo --> Upload["Chunked upload of the original video"]
+    Upload --> Saved["Inspection id returns immediately"]
+    Saved --> Extract["FFmpeg extracts those same seconds"]
+    Extract --> Batch["Two workers, six photos per Gemini call"]
+    Batch --> Damage["Gemini: damage on every photo in the batch"]
+    Batch --> Extra["Gemini: extra furniture YOLO cannot name, first photo only"]
+    Batch --> Crack["Crack model on each photo"]
+    Damage --> Store["Findings saved as pending"]
+    Extra --> Store
+    Crack --> Store
+    Store --> Second["A second Gemini look can auto-confirm"]
+    Second --> Embed["Embed findings for search"]
+    Embed --> Review["You confirm, dismiss, or add a mark"]
 ```
 
-1. The browser samples unique timestamps at 15%, 50%, and 85% of duration. Server validation accepts one to three frames and up to 20 detections per frame.
+1. The browser samples at one-second intervals, including the beginning and end (up to 121 images for a two-minute video). Nearby object observations use the live tracker to reduce repeated inventory entries.
 2. YOLO applies 640×640 letterboxing and class-aware non-maximum suppression, then maps boxes to normalized source coordinates. Browser detections are validated; this path does not independently rerun server YOLO against the uploaded recording.
-3. FFmpeg extracts matching original-resolution PNGs. Identical frames are deduplicated by hash.
-4. Gemini inspects detected-object crops in bounded batches. Crop-local damage coordinates map into the original frame. Damage links to specific object IDs rather than labels alone.
-5. This path also asks Gemini for up to four supplemental objects per frame from wardrobe, bookshelf, desk, chest of drawers, sideboard, and nightstand. Invalid/overlapping proposals are discarded and provenance remains distinct from YOLO.
-6. Whole-frame checks inspect room surfaces. A specialized crack model adds separately attributed candidate boxes.
-7. Findings and evidence are saved with review status `pending`. Embeddings are indexed in a bounded batch; failed indexing can be resumed separately.
+3. The server independently selects one-second timestamps, including for older clients that submitted only three frames. FFmpeg extracts original-resolution PNGs using accurate input seeking. Byte-identical photos are deduplicated by hash.
+4. Gemini checks every selected photo for damage on all visible furniture, fixtures and room surfaces. Requests contain up to six timestamped photos, with at most two batches in flight. Missing, duplicated or invented response timestamps fail validation. Each box belongs to its exact source photo.
+5. A specialized crack model adds separately attributed candidate boxes. YOLO supplies the main video inventory. One supplementary furniture check per batch preserves Gemini-assisted observations for categories YOLO does not support.
+6. Findings and evidence are saved with review status `pending`; a bounded second look can auto-confirm findings. Embeddings are indexed in a bounded batch; failed indexing can be resumed separately.
 
-The working analysis budget is approximately 240 seconds within a route declaring `maxDuration=300`. Gemini damage calls have 45-second timeouts; selected transient errors receive one bounded retry if time remains. Incomplete checks preserve successful work as `partial` with explicit warnings. Fatal orchestration failures record `failed`.
+The working analysis budget is approximately 240 seconds within a route declaring `maxDuration=300`. Batch requests have 60-second timeouts. Unchecked batches or failed services produce explicit warnings and `partial` status; a partial inspection is not evidence that unassessed views are undamaged.
 
 Supported YOLO room classes are chair, couch, potted plant, bed, dining table, toilet, TV, laptop, microwave, oven, toaster, sink, refrigerator, clock, and vase. It is not open-vocabulary inventory. Repeated video views do not establish stable physical identity.
 
 ### Native LiDAR capture
 
+```mermaid
+flowchart TD
+    Scan["Phone scans with RoomPlan and ARKit"] --> Preview["On-device LiDAR splat preview"]
+    Scan --> Photos["About one evidence photo per second"]
+    Photos --> Live["Two leased workers"]
+    Live --> Check["Gemini and the crack model"]
+    Check --> Laptop["Laptop shows candidates during the scan"]
+    Scan --> Manifest["Final manifest upload"]
+    Manifest --> Rest["Photos not checked yet, in batches of six"]
+    Rest --> Check
+    Check --> Markers["Markers placed in the measured room"]
+    Manifest -.-> Direct["No live session: first, middle, and last frame, plus server YOLO"]
+```
+
 The companion can scan locally before sign-in. Direct upload uses a web-account cookie acquired through its embedded browser and requires an owned room. Paired upload instead uses a scoped phone capability from a laptop session.
 
 1. RoomPlan captures element UUIDs, dimensions, transforms, and a local USDZ. ARKit captures RGB frames, intrinsics, camera poses, and depth/confidence when available, at up to roughly 2 Hz and 240 frames over a scan bounded to 120 seconds.
 2. The compact path builds an **untrained LiDAR-initialized Gaussian preview** from measured high-confidence depth. Samples deduplicate into 2.5 cm world voxels with a 150,000-splat cap. An on-device Metal preview renders up to 40,000 accumulated samples.
-3. Compact upload sends the preview PLY, up to 24 resized JPEGs, corresponding depth/confidence assets, and a manifest. Up to four assets upload concurrently, each with sequential chunks; completed references persist for retry.
+3. Paired compact upload sends the preview PLY, roughly one resized RGB evidence photo per second plus up to sixteen extra coverage views, sparse depth/confidence assets, and a manifest. Up to four assets upload concurrently, each with sequential chunks; completed references persist for retry.
 4. The backend validates the manifest and asset ownership. Paired assets must also belong to the session. Reposting the same saved manifest is idempotent; replacing it with a different scan is rejected.
-5. Server analysis samples first/middle/last manifest frames and runs server-side YOLO. The shared live-image service checks up to three object crops plus surfaces/cracks per frame. Other detected objects remain inventory observations without individual damage checks.
+5. Paired native analysis inspects whole photos even before RoomPlan recognizes furniture, publishes candidates before verification, and checks them with Gemini plus the specialist crack model. Two database-leased live workers prioritize recent queued views. Saving reuses completed live checks and analyses remaining photos in batches of six, with explicit warnings for failed/unassessed photos. The older standalone spatial-import service still samples first/middle/last frames.
 6. High-confidence depth projects evidence into world coordinates. Compatible RoomPlan elements can group object observations within the scan; unresolved identity stays explicit. Marker creation preserves existing user edits.
 
 World coordinates are ARKit right-handed, Y-up, in metres; matrices are column-major. Depth is little-endian float32 metres and confidence is uint8 0–2. Camera intrinsics must match encoded image dimensions. Stored registration does not itself prove good alignment.
@@ -268,6 +356,23 @@ The Gaussian preview may contain gaps, blur, drift, and colour seams. Without us
 
 ### Pairing and retained live infrastructure
 
+```mermaid
+sequenceDiagram
+    participant Laptop
+    participant API
+    participant Phone
+    Laptop->>API: Create a session for an owned room
+    API-->>Laptop: QR link with a pairing token
+    Phone->>API: Redeem the token
+    API-->>Phone: Phone capability for this session only
+    loop During the scan
+        Phone->>API: Progress, preview, and evidence photos
+        API-->>Laptop: Room preview and new findings
+    end
+    Phone->>API: Final manifest
+    API-->>Laptop: Saved inspection
+```
+
 `POST /api/live` checks the owner's room and creates a two-hour session with separate desktop and pairing capabilities. Pairing expires after ten minutes. MongoDB stores capability hashes; atomic claiming prevents a second phone from redeeming the pairing.
 
 QR links use `/connect/[sessionId]` with the pairing token in the URL fragment. That page and legacy `/scan/[sessionId]` open `dwelld://pair`. The native companion sends refreshed JPEG previews and measured capture progress about every two seconds; this is not a native WebRTC stream.
@@ -276,7 +381,7 @@ QR links use `/connect/[sessionId]` with the pairing token in the URL fragment. 
 
 The retained browser implementation uses direct WebRTC video/data, HTTP-polled MongoDB signalling, role-scoped bearer capabilities, idempotent event IDs, and negotiation generations. Phone sends offers; desktop sends answers. STUN is configured by default; restrictive networks may require compatible TURN credentials. Native previews do not depend on this relay path.
 
-Live image analysis accepts at most three objects and a 3 MiB image, allows one AI request per session at a time, and applies a 15-second cooldown. Manual evidence has an independent lease and does not call Gemini. Browser-recording finalization waits for analysis/manual leases, requires saved original footage, and uses stable IDs for repeated finish requests. Native capture finalizes through its spatial-manifest endpoint instead.
+Live image analysis accepts at most four objects and a 3 MiB image, allows one AI request per session at a time, and applies a 15-second cooldown. Manual evidence has an independent lease and does not call Gemini. Browser-recording finalization waits for analysis/manual leases, requires saved original footage, and uses stable IDs for repeated finish requests. Native capture finalizes through its spatial-manifest endpoint instead.
 
 ## Persistence and media
 
@@ -316,6 +421,15 @@ Inspection states are `queued`, `processing`, `completed`, `partial`, and `faile
 
 ### Upload and retention
 
+```mermaid
+flowchart LR
+    Start["Start an upload, at most 100 MiB"] --> Parts["Ordered parts, at most 2 MiB each"]
+    Parts --> Check["SHA-256, identical retries are safe"]
+    Check --> Lock["One finalization lock"]
+    Lock --> Grid["Stream into GridFS"]
+    Grid --> Ref["Private gridfs id"]
+```
+
 Media references use `gridfs:<ObjectId>`. Uploads accept files up to **100 MiB**, split into sequential HTTP parts of at most **2 MiB**. Parts are insert-only, SHA-256 checked, and idempotent for identical retries. Finalization acquires a recoverable lock and streams validated parts into GridFS. GridFS uses 255 KiB storage chunks independently of upload-part size.
 
 Upload descriptors/parts expire after 24 hours using TTL indexes. Signalling has TTL cleanup. Session expiry does not delete completed inspections. Original media/evidence have no general automatic retention or deletion workflow; expiring temporary records does not garbage-collect completed GridFS files.
@@ -323,6 +437,17 @@ Upload descriptors/parts expire after 24 hours using TTL indexes. Signalling has
 Media routes authorize access before streaming, use `private, no-store`, and support single HTTP byte ranges for playback. Saved inspection/report evidence requires an account session; live media requires the appropriate capability and session association. Earlier external Blob assets are not automatically migrated or deleted. **MongoDB/GridFS is the active storage architecture.**
 
 ## Authentication and authorization
+
+```mermaid
+flowchart TD
+    Sign["Email and password"] --> Cookie["HttpOnly session cookie"]
+    Cookie --> API["Account routes"]
+    API --> Own{"Owner matches?"}
+    Own -->|yes| Data["Rooms, inspections, and files"]
+    Own -->|no| Deny["Request refused"]
+    Phone["Paired phone"] --> Cap["Capability for one live session"]
+    Cap --> Live["That scan only, not the whole account"]
+```
 
 Better Auth stores accounts/sessions in the same database. Passwords must contain 12–128 characters. Sessions expire after seven days and update after one day; authentication rate limiting uses database storage. Session cookies are HttpOnly.
 
@@ -342,21 +467,50 @@ Optionally add `--room-id <legacy-room-id>`. Only after auditing intended owners
 
 ## Search and questions about records
 
-| Mode | Implementation |
-| --- | --- |
-| `text` | Atlas `findings_search`, fuzzy label/description matching with owner/room filters. |
-| `semantic` | Atlas `findings_vector`, 768-dimensional cosine vectors with owner/room prefilters and embedding-model checks. |
-| `hybrid` | Both lists combined with reciprocal rank fusion, `k=60`. |
+All search runs inside MongoDB Atlas on the `findings` collection. Open **/search** (the "Search" link in the header) to watch it work: index status, each pipeline's own ranking, the fused result and a map of vector space.
 
-Embeddings use `gemini-embedding-001`, L2 normalization, `RETRIEVAL_DOCUMENT` for findings and `RETRIEVAL_QUERY` for queries. Indexing handles up to 50 findings per invocation. The search UI's **Index my findings** action resumes missing embeddings through `POST /api/search`.
+```mermaid
+flowchart TD
+    Finding["Saved finding: label, damage type, description, evidence photo"] --> Text["searchText field"]
+    Finding --> Crop["Evidence photo cropped to the damage"]
+    Text --> Auto[("findings_auto: Automated Embedding, Atlas embeds with Voyage voyage-4")]
+    Text --> Lex[("findings_search: Atlas Search, fuzzy full-text")]
+    Text --> Gem[("findings_vector: Gemini embedding fallback, 768-d")]
+    Crop --> VoyMM["Voyage voyage-multimodal-3.5"] --> Img[("findings_image: photo vectors, 1024-d")]
+    Query["Your words"] --> Fusion["$rankFusion: native reciprocal rank fusion"]
+    Lex --> Fusion
+    Auto --> Fusion
+    Img --> Fusion
+    Fusion --> Rerank["Voyage rerank-3"] --> Hits["Ranked findings with per-pipeline ranks"]
+```
 
-Search checks required indexes are queryable and returns an explicit error when unavailable; there is no silent regex substitute for semantic search. Atlas propagation after embedding writes is asynchronous.
+| Mode | Atlas feature | Implementation |
+| --- | --- | --- |
+| `text` | **Atlas Search** | `$search` on `findings_search`: fuzzy match on label, description and damage type, owner and room filters. |
+| `semantic` | **Automated Embedding** (Vector Search) | `$vectorSearch` on `findings_auto` with `query: {text}`. Atlas embeds `searchText` on write and the query at query time with `voyage-4`. Falls back to `findings_vector` (Gemini vectors) while the autoEmbed index is not ready. |
+| `image` | **Vector Search + Voyage AI** | The text query is embedded with `voyage-multimodal-3.5` and matched against photo vectors in `findings_image`. Words find photos even when no description mentions them. |
+| `hybrid` | **Hybrid Search** | One `$rankFusion` stage over all three pipelines (weights keyword 1, meaning 1, photo 0.8) with `scoreDetails`, then **Voyage `rerank-3`**. If the cluster rejects `$rankFusion` (MongoDB below 8.0), the same RRF formula runs in the app and the page says so. |
+
+Setup: create the four indexes with the **Create or update indexes** button on /search (`POST /api/search/setup?action=indexes`) or `node --env-file=.env scripts/setup-search-indexes.cjs`. Then **Prepare my findings** (`POST /api/search/setup?action=prepare`) writes `searchText`, Gemini vectors and, when `VOYAGE_API_KEY` is set, photo vectors. Analyses also prepare new findings automatically. Search refuses to run against an index that isn't queryable; there is no silent regex fallback.
 
 The global Ask Records interface supplies Gemini with up to 12 recent inspection summaries and 12 hybrid-retrieved findings. The API validates citation IDs and links sources back to inspections. If retrieval fails, it explicitly warns that only recent summaries were supplied. Answers are bounded retrieval samples, not exhaustive history or new image analysis.
 
 ## Comparisons and reports
 
 ### Comparison
+
+```mermaid
+flowchart TD
+    Earlier["Earlier scan"] --> Lease["One comparison at a time for this room"]
+    Later["Later scan"] --> Lease
+    Lease --> Evidence["Up to 100 findings and 6 photos each side"]
+    Evidence --> Gemini["Gemini proposes what changed"]
+    Gemini --> You{"Your review"}
+    You -->|confirm a pair| Link["Correspondence saved"]
+    You -->|reject or reset| Off["Link removed, originals kept"]
+    Report["Report"] --> Json["JSON download"]
+    Report --> Pdf["Browser print to PDF"]
+```
 
 The API requires distinct owned inspections of the same room, an earlier baseline, a later current inspection, and `completed`/`partial` status. The intended workflow is move-in/move-out review; validation checks chronology rather than requiring specific type labels.
 
@@ -496,4 +650,6 @@ YOLO-related materials carry AGPL-3.0 terms, including network-use obligations d
 | [Live protocol](docs/live/session-protocol.md) | Capability/signalling/lease details; older unauthenticated/browser-fallback statements are superseded. |
 | [Spatial research](docs/research/lidar-roomplan.md) | Sensor/reconstruction background. |
 | [Verification records](docs/testing) | Individual checks and their limitations. |
+| [Pitch and demo plan](PITCH.md) | Storyline, how each bounty criterion is met, video shot list, deck. |
+| [Bounty requirements](docs/BOUNTY-REQUIREMENTS.md) | Encode London 2026 rules for each track we entered. |
 | [Performance and hackathon audit](docs/hackathon-performance-audit-2026.md) | 3D loading path, remaining benchmarks, partner requirements and demo checklist. |

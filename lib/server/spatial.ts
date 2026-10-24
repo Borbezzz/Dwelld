@@ -23,7 +23,7 @@ export function validateManifest(raw: unknown): SpatialManifest {
   const m = raw as SpatialManifest;
   if (!m || m.version !== 1 || !name(m.sessionId) || m.coordinateSystem !== "arkit-right-handed-y-up-metres" || !Array.isArray(m.elements) || m.elements.length > 1000 || !Array.isArray(m.frames) || m.frames.length > 600 || !Array.isArray(m.assets) || m.assets.length > 1805) throw new Error("Invalid spatial manifest");
   const ids = new Set<string>(), assets = new Set<string>();
-  for (const a of m.assets) { if (!name(a.name) || assets.has(a.name) || !/^gridfs:[a-f0-9]{24}$/.test(a.mediaRef) || !["image", "depth", "confidence", "usdz", "splat"].includes(a.kind)) throw new Error("Invalid spatial asset"); assets.add(a.name); }
+  for (const a of m.assets) { if (!name(a.name) || assets.has(a.name) || !/^gridfs:[a-f0-9]{24}$/.test(a.mediaRef) || !["image", "depth", "confidence", "usdz", "splat", "worldmap"].includes(a.kind)) throw new Error("Invalid spatial asset"); assets.add(a.name); }
   for (const e of m.elements) { if (!name(e.id) || ids.has(e.id) || typeof e.category !== "string" || e.category.length > 100 || !vector(e.dimensions) || e.dimensions.some(n => n < 0) || e.dimensions.filter(n => n > 0).length < 2 || !rigidTransform(e.transform)) throw new Error("Invalid spatial geometry"); ids.add(e.id); }
   for (const f of m.frames) if (!Number.isFinite(f.timestamp) || f.timestamp < 0 || !rigidTransform(f.transform) || !matrix(f.intrinsics, 9) || !Number.isInteger(f.width) || !Number.isInteger(f.height) || f.width < 1 || f.height < 1 || !assets.has(f.image) || (f.depth && !assets.has(f.depth)) || (f.confidence && !assets.has(f.confidence))) throw new Error("Invalid spatial frame");
   return {

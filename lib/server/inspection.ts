@@ -1,8 +1,11 @@
 import {inspectCracks, CRACK_MODEL} from './crack-detector';
 import { readMedia, writeMedia, deleteMedia, parseMediaId } from "./media";
-import { createHash } from "node:crypto";
+import { videoSampleTimes } from "../video-sampling";
+import { createHash, randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
+import { analysisFailure } from "./analysis-failure";
 import { openVideoFrames } from "./video-frames";
-import { inspectObjectDamage, inspectSurfaceDamage, inspectUnsupportedFurniture, validBox, type Box, type DamageObservation } from "./damage";
+import { inspectVideoDamageBatch, inspectObjectDamage, inspectSurfaceDamage, inspectUnsupportedFurniture, validBox, type Box, type DamageObservation } from "./damage";
 export type { Box } from "./damage";
 
 export type ClientDetection = { objectId: string; label: string; boundingBox: Box; classId?: number; confidence?: number };
@@ -20,7 +23,7 @@ export type AnalyzedFinding = {
 const classes: Record<number, string> = { 56: "chair", 57: "couch", 58: "potted plant", 59: "bed", 60: "dining table", 61: "toilet", 62: "tv", 63: "laptop", 68: "microwave", 69: "oven", 70: "toaster", 71: "sink", 72: "refrigerator", 74: "clock", 75: "vase" };
 const labels = new Set(Object.values(classes));
 export function validateClientFrames(value: unknown, durationSeconds = Infinity): ClientFrameDetections[] {
-  if (!Array.isArray(value) || value.length < 1 || value.length > 3) throw new Error("Provide between one and three analyzed video frames");
+  if (!Array.isArray(value) || value.length < 1 || value.length > 121) throw new Error("Provide between one and 121 analyzed video frames");
   const times = new Set<number>();
   return value.map((raw: unknown) => {
     if (!raw || typeof raw !== "object") throw new Error("Invalid analyzed frame");
@@ -103,10 +106,37 @@ export async function analyzeDetectedImage(image: Buffer, detections: ClientDete
   return findings;
 }
 
-export async function analyzeVideo(videoUrl: string, mimeType: string, clientFrames: unknown): Promise<{ durationSeconds: number; findings: AnalyzedFinding[]; warnings: string[]; incomplete: boolean }> {
-  const deadlineMs = Date.now() + 240_000;
+export type VideoCheckpoint = { phase:'extracting'|'checking'; durationSeconds:number; totalFrames:number; processedFrames:number; findings:AnalyzedFinding[]; evidenceFrames:{timestampSeconds:number;url:string}[]; analysisRunId:string; warnings:string[] };
+export async function analyzeVideo(videoUrl: string, mimeType: string, clientFrames: unknown, onCheckpoint?: (checkpoint:VideoCheckpoint)=>Promise<void>): Promise<{ durationSeconds: number; findings: AnalyzedFinding[]; warnings: string[]; incomplete: boolean; evidenceFrames: {timestampSeconds: number; url: string}[]; analysisRunId: string }> {
+  const deadlineMs = Date.now() + 200_000; // Leave time for persistence and bounded verification in the 300s function.
   const warnings: string[] = [];
-  if (!process.env.GEMINI_API_KEY) throw new Error("Gemini damage analysis requires GEMINI_API_KEY");
+  const analysisRunId = randomUUID();
+  let blocked: ReturnType<typeof analysisFailure> | null = null;
+  async function check<T>(scope: string, work: () => Promise<T>): Promise<T | null> {
+    if (blocked) return null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (blocked) return null;
+      if (Date.now() > deadlineMs - 65_000) { warnings.push(`${scope}: the analysis time budget was reached. These views remain unassessed.`); return null; }
+      const started = Date.now();
+      try {
+        const value = await work();
+        console.info(JSON.stringify({event:'inspection.check', analysisRunId, scope, attempt:attempt+1, status:'completed', elapsedMs:Date.now()-started}));
+        return value;
+      } catch (error) {
+        const failure = analysisFailure(error);
+        console.error(JSON.stringify({event:'inspection.check', analysisRunId, scope, attempt:attempt+1, status:'failed', code:failure.code, elapsedMs:Date.now()-started}));
+        if (failure.blocksService) {
+          if (!blocked) warnings.push(failure.message);
+          blocked = failure; return null;
+        }
+        if (attempt === 0 && failure.retryable && deadlineMs - Date.now() > 125_000) {
+          await delay(500 + Math.floor(Math.random()*250)); continue;
+        }
+        warnings.push(`${scope}: ${failure.message} These views remain unassessed.`); return null;
+      }
+    }
+    return null;
+  }
   const requested = validateClientFrames(clientFrames);
   const normalizedMimeType = mimeType.split(";")[0].trim().toLowerCase();
   if (!new Set(["video/mp4", "video/webm", "video/quicktime", "video/x-msvideo", "video/mpeg"]).has(normalizedMimeType)) throw new Error("Unsupported video format");
@@ -115,24 +145,77 @@ export async function analyzeVideo(videoUrl: string, mimeType: string, clientFra
   const frames = await openVideoFrames(video);
   const storedFrames: string[] = [];
   try {
-    const selected = validateClientFrames(requested, frames.durationSeconds);
+    const client = validateClientFrames(requested, frames.durationSeconds);
+    const selected = videoSampleTimes(Math.min(frames.durationSeconds, 120)).map(timestampSeconds => ({ timestampSeconds, detections: client.find(f => Math.abs(f.timestampSeconds - timestampSeconds) < .01)?.detections || [] }));
     const findings: AnalyzedFinding[] = [];
+    const evidenceFrames: {timestampSeconds: number; url: string}[] = [];
     const seenFrames = new Set<string>();
-    for (const frame of selected) {
-      const image = await frames.extract(frame.timestampSeconds);
-      const imageHash = createHash("sha256").update(image).digest("hex");
-      if (seenFrames.has(imageHash)) continue;
-      seenFrames.add(imageHash);
-      const key = createHash("sha256").update(`${videoUrl}:${frame.timestampSeconds}`).digest("hex").slice(0, 16);
-      const observations = await analyzeDetectedImage(image, frame.detections, frame.timestampSeconds, key, warnings, deadlineMs);
-      if (observations.length === 0) continue;
-      const stored = await writeMedia(image, `evidence/${crypto.randomUUID()}.png`, "image/png");
-      storedFrames.push(stored);
-      findings.push(...observations.map((item) => ({ ...item, evidenceFrameUrl: stored })));
+    const seenObjects = new Map<string, string>();
+    let cursor = 0, processedFrames = 0;
+    const checkpoint = (phase:VideoCheckpoint['phase']) => onCheckpoint?.({phase,durationSeconds:frames.durationSeconds,totalFrames:selected.length,processedFrames,findings:[...findings],evidenceFrames:[...evidenceFrames],analysisRunId,warnings:[...new Set(warnings)]});
+    await checkpoint('extracting');
+    async function worker() {
+      while (cursor < selected.length) {
+        const batch = selected.slice(cursor, cursor += 6);
+        const extracted: { image: Buffer; timestampSeconds: number; detections: ClientDetection[]; ref: string }[] = [];
+        for (const frame of batch) {
+          if (Date.now() > deadlineMs) { warnings.push(`Evidence extraction stopped at ${frame.timestampSeconds}s because the time budget ran out.`); break; }
+          try {
+            const image = await frames.extract(frame.timestampSeconds);
+            const hash = createHash("sha256").update(image).digest("hex");
+            if (seenFrames.has(hash)) continue;
+            seenFrames.add(hash);
+            const ref = await writeMedia(image, `evidence/${randomUUID()}.png`, "image/png");
+            storedFrames.push(ref); evidenceFrames.push({timestampSeconds:frame.timestampSeconds, url:ref});
+            extracted.push({...frame, image, ref});
+            const key = `video_${Math.round(frame.timestampSeconds * 1000)}`;
+            // Preserve actual detections BEFORE calling any optional AI service.
+            for (const d of frame.detections) {
+              if (seenObjects.has(d.objectId)) continue;
+              const detectionId = `${key}_${d.objectId}`; seenObjects.set(d.objectId, detectionId);
+              findings.push({timestampSeconds:frame.timestampSeconds, evidenceFrameUrl:ref, originalVideoBoundingBox:null, reviewStatus:'unreviewed', localizationStatus:'localized', objectLabel:null, parentDetectionId:null, kind:'object', label:d.label, description:`${d.label} detected by the browser object model.`, boundingBox:d.boundingBox, detectionId, detectionSource:'yolo', classId:d.classId, confidence:d.confidence});
+            }
+          } catch {
+            warnings.push(`Evidence frame at ${frame.timestampSeconds}s could not be saved. This view remains unassessed.`);
+          }
+        }
+        if (!extracted.length) { processedFrames+=batch.length; await checkpoint('checking'); continue; }
+        await checkpoint('checking');
+        const range = `${batch[0].timestampSeconds}s–${batch[batch.length-1].timestampSeconds}s`;
+        // Separate outcomes: a failed damage batch must not discard furniture, YOLO or evidence.
+        const [damage, supplemental] = await Promise.all([
+          check(`Damage check ${range}`, () => inspectVideoDamageBatch(extracted)),
+          check(`Supplementary furniture at ${extracted[0].timestampSeconds}s`, () => inspectUnsupportedFurniture(extracted[0].image, extracted[0].detections.map(d=>d.boundingBox))),
+        ]);
+        for (const frame of extracted) {
+          const key = `video_${Math.round(frame.timestampSeconds * 1000)}`;
+          const base = { timestampSeconds:frame.timestampSeconds, evidenceFrameUrl:frame.ref, originalVideoBoundingBox:null, reviewStatus:'unreviewed' as const, localizationStatus:'localized' as const, objectLabel:null, parentDetectionId:null };
+          if (frame === extracted[0]) (supplemental || []).forEach((d,i)=>findings.push({...base, kind:'object', label:d.label, description:`${d.description} (Gemini-assisted observation; requires review.)`, boundingBox:d.boundingBox, detectionSource:'gemini', detectionId:`${key}_supplemental_${i}`}));
+          (damage?.get(frame.timestampSeconds) || []).forEach((d,i)=>{
+            const box=d.boundingBox;
+            const owner=box?frame.detections.filter(o=>box.x+box.width/2>=o.boundingBox.x&&box.x+box.width/2<=o.boundingBox.x+o.boundingBox.width&&box.y+box.height/2>=o.boundingBox.y&&box.y+box.height/2<=o.boundingBox.y+o.boundingBox.height).sort((a,b)=>a.boundingBox.width*a.boundingBox.height-b.boundingBox.width*b.boundingBox.height)[0]:null;
+            findings.push({...base, kind:'damage', label:d.type, description:d.description, boundingBox:box, localizationStatus:box?'localized':'uncertain', detectionSource:'gemini', detectionId:`${key}_damage_${i}`, parentDetectionId:owner?seenObjects.get(owner.objectId)||null:null, objectLabel:owner?.label||null});
+          });
+          try {
+            const cracks=await inspectCracks(frame.image);
+            cracks.forEach((d,i)=>findings.push({...base, kind:'damage', label:'Potential crack', description:'Specialist crack candidate. Review against the source photo.', boundingBox:d.boundingBox, detectionSource:'crack-model', detectionId:`${key}_crack_${i}`, confidence:d.confidence}));
+          } catch { warnings.push(`Specialist crack check at ${frame.timestampSeconds}s could not finish.`); }
+        }
+        processedFrames+=batch.length;
+        await checkpoint('checking');
+      }
     }
-    return { durationSeconds: frames.durationSeconds, findings, warnings, incomplete: warnings.length > 0 };
+    const workers = await Promise.allSettled([worker(),worker()]);
+    const failure = workers.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+    if (failure) throw failure.reason;
+    if (blocked) warnings.push('AI damage coverage is incomplete. Saved source frames, object detections and specialist crack candidates remain available; unassessed views are not declared undamaged.');
+    findings.sort((a,b)=>a.timestampSeconds-b.timestampSeconds);
+    evidenceFrames.sort((a,b)=>a.timestampSeconds-b.timestampSeconds);
+    return {durationSeconds:frames.durationSeconds, findings, warnings:[...new Set(warnings)], incomplete:warnings.length>0, evidenceFrames, analysisRunId};
   } catch (error) {
-    await Promise.all(storedFrames.map((url) => deleteMedia(url).catch(() => undefined)));
+    // Checkpoint writes may already reference these files, even if a later write fails.
+    // Published media belongs to the inspection and must remain available for review.
+    if (!onCheckpoint) await Promise.all(storedFrames.map(url=>deleteMedia(url).catch(()=>undefined)));
     throw error;
   } finally { await frames.close(); }
 }

@@ -1,4 +1,5 @@
 import { requireUser, requireOwnedInspection } from "@/lib/server/access";
+import { canReadRoom,requireReadableInspection } from "@/lib/server/space-access";
 import { deleteInspection } from "@/lib/server/delete";
 import { errorResponse } from "@/lib/server/api-error";
 import { NextResponse } from "next/server";
@@ -14,23 +15,34 @@ export async function GET(request: Request, { params }: { params: Promise<{ insp
   try {
     const user = await requireUser(request);
     const db = await getDb();
-    const inspection = await db.collection("inspections").findOne({ _id: id, ownerId:user.id });
-    if (!inspection) return NextResponse.json({ error: "Inspection not found" }, { status: 404 });
-    const findings = await db.collection("findings").find({ inspectionId: id }).sort({ createdAt: 1 }).toArray();
+    const inspection = await requireReadableInspection(id,user.id);
+    const requestedRoom=new URL(request.url).searchParams.get("roomId");
+    const targetId=requestedRoom?parseObjectId(requestedRoom):inspection.roomId;
+    if(!targetId)return NextResponse.json({error:"Invalid room"},{status:400});
+    const segment=await db.collection("roomScanSegments").findOne({sourceInspectionId:id,roomId:targetId});
+    if(String(targetId)!==String(inspection.roomId)){
+      const target=await db.collection("rooms").findOne({_id:targetId});
+      if(!segment||!target||!await canReadRoom(target as never,user.id))return NextResponse.json({error:"Room not found"},{status:404});
+    }
+    const findingFilter={inspectionId:id,...(segment?{timestampSeconds:{$gte:segment.startTime,$lt:segment.endTime}}:{})};
+    const findings = await db.collection("findings").find(findingFilter).sort({ createdAt: 1 }).toArray();
     const serializedFindings = findings.map((f) => ({
       id: String(f._id), kind: f.kind, label: f.label, description: f.description,
       timestampSeconds: f.timestampSeconds, evidenceFrameUrl: f.evidenceFrameUrl,
       detectionSource: f.detectionSource === "yolo" || f.detectionSource === "gemini" || f.detectionSource === "crack-model" ? f.detectionSource : undefined,
       boundingBox: f.boundingBox ?? null, point: f.point ?? null, source: f.source ?? "ai", damageType: f.damageType ?? null, reviewStatus: f.reviewStatus, uncertain: !f.boundingBox && !f.point,
-      objectId: f.objectId ? String(f.objectId) : null, objectLabel: f.objectLabel ?? null, spatialElementId: f.spatialElementId ?? null,
+      objectId: f.objectId ? String(f.objectId) : null, objectLabel: f.objectLabel ?? null, spatialElementId: f.spatialElementId ?? null, confidence: typeof f.confidence === "number" ? f.confidence : null, autoApproved: !!f.autoApproved, verification: f.verification ? { verdict: f.verification.verdict, confidence: f.verification.confidence, reason: f.verification.reason } : null,
     }));
     return NextResponse.json({
       inspection: {
-        id: String(inspection._id), roomId: String(inspection.roomId), status: inspection.status, type: inspection.type || "move-in",
+        id: String(inspection._id), roomId: String(targetId), status: inspection.status, type: inspection.type || "move-in",isOwner:inspection.ownerId===user.id,virtual:String(targetId)!==String(inspection.roomId),
         createdAt: new Date(inspection.createdAt).toISOString(),
-        videoUrl: "/api/inspections/" + String(inspection._id) + "/video",
+        videoUrl: typeof inspection.sourceUrl === "string" ? "/api/inspections/" + String(inspection._id) + "/video" : undefined,
         durationSeconds: inspection.durationSeconds ?? null,
         analysisWarnings: inspection.analysisWarnings ?? [],
+        evidenceFrames: segment?(inspection.evidenceFrames??[]).filter((f:{timestampSeconds:number})=>f.timestampSeconds>=segment.startTime&&f.timestampSeconds<segment.endTime):inspection.evidenceFrames??[],
+        analysisRunId: inspection.analysisRunId ?? null,
+        analysisProgress: inspection.analysisProgress ?? null,
         error: inspection.status === "failed" ? "Video analysis failed. Check service configuration and retry with a supported video." : null,
       },
       findings: serializedFindings,
@@ -44,6 +56,9 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
   try {
     const user = await requireUser(request);
     const inspection = await requireOwnedInspection((await params).inspectionId, user.id);
+    const db=await getDb();const segments=await db.collection("roomScanSegments").find({sourceInspectionId:inspection._id},{projection:{roomId:1}}).toArray();
+    if(segments.some(s=>String(s.roomId)!==String(inspection.roomId)))return NextResponse.json({error:"This scan supplies evidence for linked rooms. Remove those room sections first."},{status:409});
+    if(segments.length)await db.collection("roomScanSegments").deleteMany({sourceInspectionId:inspection._id,roomId:inspection.roomId});
     if (inspection.status === "processing" || inspection.status === "queued") {
       const started = new Date(inspection.updatedAt || inspection.createdAt).getTime();
       if (Date.now() - started < 10 * 60_000) return NextResponse.json({ error: "This scan is still being analysed. Try deleting it in a few minutes." }, { status: 409 });

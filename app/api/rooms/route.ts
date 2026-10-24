@@ -3,7 +3,7 @@ import { requireUser } from "@/lib/server/access";
 import { errorResponse } from "@/lib/server/api-error";
 import { ObjectId } from "mongodb";
 import { NextResponse } from "next/server";
-import { getDb, ensureIndexes } from "@/lib/server/db";
+import { getDb, ensureIndexes, parseObjectId } from "@/lib/server/db";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,8 +14,11 @@ export async function GET(request: Request) {
     const user = await requireUser(request);
     const db = await getDb();
     await ensureIndexes(db);
-    const docs = await db.collection("rooms").find({ownerId:user.id}).sort({ createdAt: -1 }).limit(100).toArray();
-    const rooms = docs.map((r) => ({ id: String(r._id), name: r.name, createdAt: new Date(r.createdAt).toISOString() }));
+    const memberships = await db.collection("spaceMembers").find({userId:user.id},{projection:{spaceId:1}}).toArray();
+    const ownedSpaces=await db.collection("spaces").find({ownerId:user.id},{projection:{_id:1}}).toArray();
+    const accessibleIds=[...ownedSpaces.map(s=>s._id),...memberships.map(m=>m.spaceId)];
+    const docs = await db.collection("rooms").find({$or:[{ownerId:user.id},...(accessibleIds.length?[{spaceId:{$in:accessibleIds}}]:[])]}).sort({ createdAt: -1 }).limit(100).toArray();
+    const rooms = docs.map((r) => ({ id: String(r._id), name: r.name, createdAt: new Date(r.createdAt).toISOString(), spaceId: r.spaceId ? String(r.spaceId) : null, isOwner: r.ownerId === user.id }));
     return NextResponse.json({ rooms });
   } catch (error) { return errorResponse(error, "app/api/rooms/route.ts"); }
 }
@@ -23,13 +26,17 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const user = await requireUser(request);
-    const body = await readJsonBody(request) as { name?: unknown };
+    const body = await readJsonBody(request) as { name?: unknown; spaceId?: unknown };
     const name = typeof body.name === "string" ? body.name.trim() : "";
     if (!name || name.length > 80) return NextResponse.json({ error: "Room name must be between 1 and 80 characters" }, { status: 400 });
     const db = await getDb();
     await ensureIndexes(db);
-    const doc = { _id: new ObjectId(), ownerId:user.id, name, createdAt: new Date() };
+    const spaceId = typeof body.spaceId === "string" ? parseObjectId(body.spaceId) : null;
+    if (body.spaceId !== undefined && !spaceId) return NextResponse.json({ error: "Invalid spaceId" }, { status: 400 });
+    const space=spaceId?await db.collection("spaces").findOne({_id:spaceId}):null;
+    if(spaceId&&(!space||!(space.ownerId===user.id||await db.collection("spaceMembers").findOne({spaceId,userId:user.id}))))return NextResponse.json({error:"Space not found"},{status:404});
+    const doc = { _id: new ObjectId(), ownerId:space?.ownerId||user.id, createdBy:user.id, name, ...(spaceId ? { spaceId } : {}), createdAt: new Date() };
     await db.collection("rooms").insertOne(doc);
-    return NextResponse.json({ room: { id: String(doc._id), name: doc.name, createdAt: doc.createdAt.toISOString() } }, { status: 201 });
+    return NextResponse.json({ room: { id: String(doc._id), name: doc.name, createdAt: doc.createdAt.toISOString(), spaceId: spaceId ? String(spaceId) : null } }, { status: 201 });
   } catch (error) { return errorResponse(error, "app/api/rooms/route.ts"); }
 }

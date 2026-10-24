@@ -17,11 +17,14 @@ input,textarea{caret-color:var(--mark-ink)}
 
 /* Speckle: placeholders read as a room still taking shape, not a grey box */
 .reconstruction-canvas,.room-empty,.room-scene-loading,.compare-image-empty,.live-room-empty{background:var(--speckle),var(--mark-well)}
+.room-scene-loading.is-live{background:var(--mark-well)}.room-scene-loading.is-live>p,.room-scene-loading.is-live>a{position:relative;z-index:1;background:rgb(236 235 227/.82);padding:6px 12px;border-radius:2px;backdrop-filter:blur(2px)}
+.dot-field{position:absolute;inset:0;width:100%;height:100%;display:block}
 .live-room-empty{background:transparent}
 
 /* Corner brackets: the selected thing is framed the way furniture is outlined in 3D */
+.spaces-split .landing-room,.spaces-split .landing-room.active{border-top:0}.spaces-split .landing-room-list{border-top:0}
 .landing-room,.room-furniture>li>button{position:relative}
-.landing-room.active::after,.room-furniture>li[data-selected=true]>button::after,.room-furniture>li>button:hover::after{
+.landing-room.active::after,.landing-room:hover::after,.room-furniture>li[data-selected=true]>button::after,.room-furniture>li>button:hover::after{
   content:"";position:absolute;inset:6px -10px;pointer-events:none;color:var(--mark-ink);
   background:
     linear-gradient(currentColor 0 0) left top/10px 1px no-repeat,linear-gradient(currentColor 0 0) left top/1px 10px no-repeat,
@@ -33,6 +36,7 @@ input,textarea{caret-color:var(--mark-ink)}
 .room-furniture>li>button:hover::after{color:var(--mark-sage)}
 .room-furniture>li[data-selected=true]>button::after{color:var(--mark-amber)}
 .landing-room.active{cursor:default}.landing-room:not(.active){cursor:pointer}
+.landing-room:not(.active):hover::after{color:var(--mark-sage)}
 .room-shown{color:var(--mark-ink)}
 @keyframes mark-settle{from{opacity:0;transform:scale(1.035)}to{opacity:1;transform:none}}
 
@@ -49,3 +53,42 @@ input,textarea{caret-color:var(--mark-ink)}
 .reconstruction-heading small{font-size:11px;color:#706b61}
 
 @media(prefers-reduced-motion:reduce){.landing-room.active::after,.room-furniture>li>button::after{animation:none}}
+
+/* Status colours, shared by the 3D room and the list: amber needs a look, red is confirmed damage, blue is your selection. */
+:root{--tone-check:#d18a2a;--tone-damage:#c4573f;--tone-select:#3f8fd2}
+.room-furniture-state.tone-check{color:#9a6418}.room-furniture-state.tone-check::before{background:var(--tone-check);outline-color:rgb(209 138 42/.55)}
+.room-furniture-state.tone-damage{color:#9a3f2c}
+.room-furniture>li[data-selected=true]>button::after{color:var(--tone-select)}
+.room-scene-help{display:flex;gap:18px;flex-wrap:wrap;align-items:center}.tone-key{display:inline-flex;gap:6px;align-items:center}.tone-key i{width:9px;height:9px;border:1.5px solid currentColor;border-radius:1px;display:inline-block}.tone-key .tone-check{color:var(--tone-check)}.tone-key .tone-damage{color:var(--tone-damage);background:rgb(196 87 63/.2)}
+.room-finding-thumb{border:0;padding:0;background:none;cursor:zoom-in;line-height:0;align-self:start}.room-finding-thumb span{display:block;width:64px;height:48px;background:var(--mark-well)}
+.room-finding.is-focused b{color:var(--tone-select)}
+.room-finding-actions button+button{margin-left:0}
+
+/* Footage: the high-resolution truth behind a low-resolution splat */
+.evidence-viewer{margin-top:16px;border:1px solid #dcded3;background:var(--mark-paper);animation:mark-settle .24s cubic-bezier(.16,1,.3,1) both}
+.evidence-viewer>header{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 14px;border-bottom:1px solid #e6e7df}.evidence-viewer>header b{font:400 17px Georgia,serif;margin-right:10px}.evidence-viewer>header span{font-size:11px;color:#6f7766}
+.evidence-tools{display:inline-flex;align-items:center;gap:4px}.evidence-tools button{border:0;background:none;width:30px;height:30px;display:grid;place-items:center;cursor:pointer;color:#3e4a37;border-radius:2px}.evidence-tools button:hover{background:#efeee6}.evidence-tools small{font-size:10px;color:#848c78;font-variant-numeric:tabular-nums}
+.evidence-frame-wrap{position:relative;background:#1b201b;display:grid;place-items:center;max-height:420px;overflow:hidden}.evidence-viewer.is-large .evidence-frame-wrap{max-height:78vh}
+.evidence-annotated{position:relative;line-height:0;max-height:inherit}.evidence-annotated img{display:block;max-width:100%;max-height:420px;width:auto;height:auto}.evidence-viewer.is-large .evidence-annotated img{max-height:78vh}
+.evidence-frame-wrap video{width:100%;height:100%;display:block;max-height:inherit}
+.evidence-box{--c:#ffffffb3;position:absolute;border:1.5px solid var(--c);pointer-events:none}.evidence-box.tone-check{--c:var(--tone-check)}.evidence-box.tone-damage{--c:var(--tone-damage)}.evidence-box.tone-object{--c:#5f9fd6}
+.evidence-box.is-current{border-width:2px;box-shadow:0 0 0 2000px rgb(15 20 16/.28)}
+.evidence-box em{position:absolute;left:-2px;bottom:100%;margin-bottom:4px;font:500 11px/1.3 system-ui,sans-serif;font-style:normal;white-space:nowrap;background:var(--c);color:#fff;padding:3px 7px;border-radius:2px}
+.evidence-pin{position:absolute;width:14px;height:14px;border-radius:50%;transform:translate(-50%,-50%);border:2px solid #fff;background:currentColor}.evidence-pin.tone-check{color:var(--tone-check)}.evidence-pin.tone-damage{color:var(--tone-damage)}
+.evidence-missing{color:#c8cdbd;font-size:12px;padding:40px}
+.evidence-viewer>footer{padding:12px 14px;display:grid;gap:8px}.evidence-viewer>footer p{margin:0;font-size:12px;line-height:1.65;color:#4f5848;max-width:75ch}.evidence-viewer>footer .text-button{justify-self:start;display:inline-flex;gap:6px;align-items:center;font-size:12px}
+@media(prefers-reduced-motion:reduce){.evidence-viewer{animation:none}}
+.room-scene-loading.is-live{align-content:end;padding-bottom:22px}.room-scene-loading.is-live>p{font-size:15px}
+/* Room rows: a trash icon appears on hover or keyboard focus; deleting asks first, in place */
+.spaces-split .landing-room{grid-template-columns:26px minmax(0,1fr) auto auto}
+.room-row-actions{display:inline-flex;align-items:center;gap:8px}
+.room-row-actions>button,.room-row-actions>a{display:inline-flex;align-items:center;justify-content:center;flex:0 0 32px;width:32px;height:32px;padding:0;margin:0;border-radius:50%;line-height:0}
+.landing-room:hover .room-row-actions svg{transform:none}
+.room-row-actions>a:hover{background:#e3e4da}
+.room-row-actions>a:focus-visible,.room-delete:focus-visible{outline:2px solid #59664e;outline-offset:3px}
+.room-delete{border:0;background:none;padding:0;margin:0;color:#9a6a5c;cursor:pointer;opacity:0;transform:translateX(4px);transition:opacity .16s ease,transform .16s ease;line-height:0;border-radius:50%}
+.landing-room:hover .room-delete,.room-delete:focus-visible{opacity:1;transform:none}.room-delete:hover{color:#9a3f2c;background:#f2e7e2}
+@media(hover:none){.room-delete{opacity:.7;transform:none}}
+.room-delete-confirm{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:center;gap:12px 18px;padding:12px 0 2px 42px;animation:mark-settle .2s cubic-bezier(.16,1,.3,1) both}.room-delete-confirm p{margin:0;font-size:12px;color:#4b3a33;flex:1 1 220px}
+.room-danger.under-scene{margin-top:12px;padding:14px 0 0;border-top:0;justify-content:flex-end}
+@media(max-width:900px){.spaces-split .landing-room{grid-template-columns:20px 1fr auto}.spaces-split .landing-room>.room-row-actions{grid-column:3;grid-row:1}.room-delete-confirm{padding-left:32px}}

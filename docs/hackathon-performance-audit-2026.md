@@ -29,7 +29,7 @@ Browser dashboard -> spatial manifest GET -> measured geometry in Three.js or dy
 Implemented in this branch:
 1. Dashboard scans for first useful capture in parallel batches of three rather than a serial network waterfall.
 2. Spatial workspace fetches capture and inspection metadata concurrently.
-3. Compact dashboard viewer starts with measured geometry and avoids downloading/decoding the large PLY. Full inspection viewer still offers room splat and geometry toggle.
+3. Compact dashboard viewer shows the LiDAR splat (the product's signature view), with the animated dot field while it decodes, and stops rendering while scrolled off screen. Full inspection viewer still offers room splat and geometry toggle.
 
 Important next steps, requiring benchmark captures before changing formats:
 - Measure network waterfall (spatial GET TTFB, PLY transfer MB, addSplatScene parse/sort time, first rendered frame, WebGL memory); compare cold/warm and mobile/desktop.
