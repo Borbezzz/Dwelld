@@ -102,11 +102,14 @@ input,textarea{caret-color:var(--mark-ink)}
 .landing .space-create input:focus{border-bottom-color:var(--mark-ink)}
 .landing .space-create .landing-primary{border-radius:0;gap:18px}
 .landing .space-create .landing-primary:disabled{cursor:default}
-.landing-account .space-groups{grid-template-columns:1fr;gap:0;margin-bottom:36px}
-.landing-account .space-group{position:relative;padding:24px 0;border:0;border-bottom:1px solid var(--landing-line);border-radius:0;background:none}
-.space-group-index{display:grid;align-content:center;gap:3px;min-width:38px;align-self:stretch;border-left:1px solid #b7bdad;padding-left:12px;color:var(--landing-muted);font:9px/1.25 var(--record-mono);letter-spacing:.08em}
-.space-group-index>span{font-size:17px;letter-spacing:-.05em;color:var(--mark-ink)}
-.landing-account .space-group h3{font-size:26px}
+.landing-account .space-groups{grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));gap:16px 48px;margin:10px 0 36px}
+.landing-account .space-group{position:relative;padding:24px 0;border:0;border-radius:0;background:none}
+.landing-account .space-group-header{max-width:460px;gap:22px}
+.landing-account .space-create{border-bottom:0}
+.landing-account .space-group-actions .space-action{border-bottom:0}
+.space-group-index{display:grid;align-content:center;gap:3px;min-width:58px;align-self:stretch;border:0;padding:0;color:var(--mark-ink);font:9px/1.25 var(--record-mono);letter-spacing:.14em}
+.space-group-index>span{font-size:40px;line-height:1;letter-spacing:-.08em;color:#98a18d}
+.landing-account .space-group h3{font-size:30px}
 .landing-account .space-group-title p{font:10px/1.5 var(--record-mono);letter-spacing:.03em}
 .landing .space-action{border:0;border-bottom:1px solid #b7bdad;border-radius:0;background:transparent;padding:10px 2px;gap:10px}
 .landing .space-action:hover,.landing .space-action[aria-expanded=true]{color:var(--mark-ink);border-bottom-color:var(--mark-ink);background:transparent}
@@ -117,7 +120,7 @@ input,textarea{caret-color:var(--mark-ink)}
 .landing .space-invite-form .landing-primary,.landing .space-invite-link,.landing .space-sharing-error{border-radius:0}
 .landing .space-invite-link{border:0;border-left:2px solid var(--mark-sage);background:#eceee566}
 .landing .space-access h5 span{border-radius:0;background:transparent;font-family:var(--record-mono)}
-.room-list-heading{display:flex;justify-content:space-between;gap:16px;min-height:43px;border-bottom:1px solid var(--landing-line);font:9px/1.5 var(--record-mono);letter-spacing:.1em;text-transform:uppercase;color:var(--landing-muted);padding:0 0 14px;align-items:center}
+.room-list-heading{display:flex;justify-content:space-between;gap:16px;min-height:43px;border:0;font:9px/1.5 var(--record-mono);letter-spacing:.1em;text-transform:uppercase;color:var(--landing-muted);padding:0 0 14px;align-items:center}
 .landing-account .landing-room-number{font:11px/1.5 var(--record-mono)}
 .landing-account .landing-room.active .landing-room-number{color:var(--mark-ink)}
 .landing-account .landing-room.active .landing-room-number::before{content:'';display:block;width:4px;height:4px;margin-bottom:5px;background:var(--mark-ink);box-shadow:0 0 0 3px #92a48a20}
@@ -125,7 +128,7 @@ input,textarea{caret-color:var(--mark-ink)}
 .landing-account .room-space-picker .room-space-select{min-width:104px;padding:8px 2px 8px 8px;border:0;border-bottom:1px solid #b7bdad;border-radius:0;background:transparent;font-size:11px}
 .landing-account .room-space-menu,.landing-account .room-space-option{border-radius:0}
 .landing-account .room-space-menu{box-shadow:0 8px 20px #252e2210;padding:5px}
-.landing-account .room-reconstruction{background:transparent;min-height:0;border-top:1px solid var(--landing-line)}
+.landing-account .room-reconstruction{background:transparent;min-height:0;border:0}
 .landing-account .reconstruction-heading{padding:0 0 14px;align-items:center;min-height:42px;font-size:11px}
 .reconstruction-index{font:9px var(--record-mono);letter-spacing:.06em;color:var(--landing-muted);margin-right:10px}
 .landing-account .reconstruction-heading small{font-size:10px}
@@ -136,4 +139,4 @@ input,textarea{caret-color:var(--mark-ink)}
 .landing-account .landing-status-failed::before{background:var(--mark-damage);box-shadow:0 0 0 3px #c4573f10}
 .landing-account :is(a,button,summary):focus-visible{outline:1px dashed var(--mark-ink);outline-offset:4px}
 @media(max-width:1100px) and (min-width:901px){.landing-account .spaces-split{gap:32px}.landing-account .spaces-split .landing-room{grid-template-columns:20px minmax(0,1fr) auto;gap:12px}.landing-account .landing-room-count{grid-column:2;grid-row:2;margin-top:-8px}.landing-account .room-row-actions{grid-column:3;grid-row:1 / 3}}
-@media(max-width:600px){.landing-account .record-index{font-size:9px;gap:10px;margin-bottom:10px}.landing .space-create{padding:8px 0 24px}.landing .space-create .landing-primary{justify-self:start}.landing-account .space-group{padding:22px 0}.landing-account .space-group-header{gap:10px}.landing-account .space-group h3{font-size:24px}.landing-account .space-group-actions{gap:8px}.space-group-index{min-width:29px;padding-left:8px}.landing-account .space-group-header .space-action{padding-inline:0}.landing .space-sharing{padding:20px 0 0}.landing-account .reconstruction-heading{flex-wrap:wrap;gap:8px}.landing-account .room-list-heading{font-size:9px}.landing-account .room-space-picker{max-width:105px}.landing-account .room-space-picker .room-space-select{min-width:85px;gap:8px}.landing-account .room-row-actions{gap:3px}.landing-account .spaces-split .landing-room{gap:10px}.landing-account .landing-room h3{font-size:22px}.landing-account .landing-status{font-size:9px;max-width:112px;text-align:left}.landing-account .landing-history-row{gap:12px;grid-template-columns:minmax(0,1fr) auto 18px}}
+@media(max-width:600px){.landing-account .record-index{font-size:9px;gap:10px;margin-bottom:10px}.landing .space-create{padding:8px 0 24px}.landing .space-create .landing-primary{justify-self:start}.landing-account .space-group{padding:22px 0}.landing-account .space-group-header{gap:10px}.landing-account .space-group h3{font-size:24px}.landing-account .space-group-actions{gap:8px}.space-group-index{min-width:43px;padding:0}.space-group-index>span{font-size:32px}.landing-account .space-group-header .space-action{padding-inline:0}.landing .space-sharing{padding:20px 0 0}.landing-account .reconstruction-heading{flex-wrap:wrap;gap:8px}.landing-account .room-list-heading{font-size:9px}.landing-account .room-space-picker{max-width:105px}.landing-account .room-space-picker .room-space-select{min-width:85px;gap:8px}.landing-account .room-row-actions{gap:3px}.landing-account .spaces-split .landing-room{gap:10px}.landing-account .landing-room h3{font-size:22px}.landing-account .landing-status{font-size:9px;max-width:112px;text-align:left}.landing-account .landing-history-row{gap:12px;grid-template-columns:minmax(0,1fr) auto 18px}}

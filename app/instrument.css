@@ -26,9 +26,7 @@
 .room-scene-modes button{padding:9px 13px}
 .room-measure,.live-room-tally{box-shadow:none;border:0;border-top:2px solid #92a48a}
 .spatial-explorer{border:0;border-top:1px solid #d7d2c7;border-bottom:1px solid #d7d2c7;border-radius:0;background:transparent}
-.spatial-saved,.compare-tag,.lab-engine span,.status-pill,.uncertain-tag{border-radius:0;background:transparent}
-.compare-tag{padding:5px 0;margin-right:14px;box-shadow:inset 0 -1px currentColor}
-.compare-tag:is(.tone-new,.tone-known,.tone-unsure,.tone-calm){background:transparent}
+.spatial-saved,.lab-engine span,.status-pill,.uncertain-tag{border-radius:0;background:transparent}
 .finding-card{border:0;border-top:1px solid #d7d2c7;border-radius:0;background:transparent;box-shadow:none}
 .finding-card:hover{border-color:#a9af9e}
 .no-damage,.no-findings{border:0;border-top:1px solid #d7d2c7;border-radius:0;background:transparent}

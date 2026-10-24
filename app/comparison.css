@@ -1,7 +1,12 @@
 .comparison-page .compare-selection{display:grid;grid-template-columns:1fr 1fr auto;gap:20px;align-items:end;margin:4px 0 24px}.comparison-page label{display:grid;gap:8px;font-size:11px;color:#6f7766}.comparison-page .field{margin:0}.comparison-page .compare-selection .button{font-size:12px;padding:0 22px}
 .compare-empty{display:grid;justify-items:start;gap:14px;padding:28px 0}.compare-empty p{font:400 20px Georgia,serif;margin:0}.compare-empty .button{display:inline-flex;align-items:center;font-size:12px;padding:0 18px}
 .compare-summary{display:flex;gap:10px;flex-wrap:wrap;padding:6px 0 20px;font-size:12px;color:#6f7766}
-.compare-tag{display:inline-flex;gap:6px;align-items:center;font-size:11px;padding:5px 10px;border-radius:999px;background:#ecebe3;color:#4c5444}.compare-tag b{font-weight:600}.compare-tag.tone-new{background:#f6e3dc;color:#9a3f2c}.compare-tag.tone-known{background:#efe9d8;color:#7a5f22}.compare-tag.tone-unsure{background:#e7e8e2;color:#5d6457}.compare-tag.tone-calm{background:#e3ece0;color:#3f6a3c}
+/* Open status labels; geometry lives here so route CSS cannot restore pills. */
+.comparison-page .compare-tag{display:inline-flex;gap:8px;align-items:center;font:11px/1.5 var(--instrument-mono,monospace);padding:5px 0;margin:0 20px 0 0;border:0;border-radius:0;background:transparent;box-shadow:none;color:#5d6457}
+.comparison-page .compare-tag::before{content:"";display:block;flex:none;width:5px;height:5px;background:currentColor}
+.comparison-page .compare-tag b{font-weight:500;font-variant-numeric:tabular-nums}
+.comparison-page .compare-tag.tone-new{color:#9a3f2c}.comparison-page .compare-tag.tone-known{color:#7a5f22}.comparison-page .compare-tag.tone-unsure{color:#5d6457}.comparison-page .compare-tag.tone-calm{color:#3f6a3c}
+
 .compare-change{padding:26px 0;border-top:1px solid #dcded3}.compare-change>header{display:flex;justify-content:space-between;gap:12px;align-items:center}.compare-status{font-size:10px;color:#848c78}.compare-explanation{font:400 18px/1.5 Georgia,serif;margin:14px 0 18px;max-width:760px}
 .compare-pair{display:grid;grid-template-columns:1fr 1fr;gap:20px}.compare-evidence{margin:0}.compare-evidence figcaption{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#7b8370;margin-bottom:8px}.compare-evidence p{font-size:12px;line-height:1.6;color:#5f6757;margin:8px 0 0}.compare-evidence b{font-weight:500;color:#2b312b}
 .compare-image{position:relative;line-height:0;background:#e9e9df}.compare-image img{width:100%;height:auto;display:block}.compare-image-empty{display:grid;place-items:center;height:180px;line-height:1.4;font-size:12px;color:#848c78}.compare-image img{max-height:420px;object-fit:contain}
