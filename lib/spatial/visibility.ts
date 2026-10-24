@@ -31,8 +31,21 @@ export function visibilityIntervals(times:number[],endSeconds:number,maxGap=1.5)
  for(const t of sorted){const last=out.at(-1);if(last&&t-last.endSeconds<=maxGap)last.endSeconds=t;else out.push({startSeconds:t,endSeconds:t});}
  return out.map(r=>({...r,endSeconds:Math.min(endSeconds,r.endSeconds+1/30)}));
 }
+/**
+ * How long an object stays in view, from sampled frames. Each sample that sees it stands for the
+ * time around it (half the sampling gap either side), and a single missed sample does not split
+ * the window, so the result covers the whole stretch the object is on screen rather than slivers.
+ */
+export function coveredIntervals(visible:number[],sampled:number[],endSeconds:number):VisibilityInterval[]{
+ const all=[...new Set(sampled.filter(t=>Number.isFinite(t)&&t>=0))].sort((a,b)=>a-b);
+ const gaps=all.slice(1).map((t,i)=>t-all[i]).filter(g=>g>0).sort((a,b)=>a-b);
+ const step=gaps.length?gaps[Math.floor(gaps.length/2)]:1,half=step/2,bridge=Math.max(1.5,step*2.5);
+ const seen=[...new Set(visible.filter(t=>Number.isFinite(t)&&t>=0&&t<=endSeconds))].sort((a,b)=>a-b),out:VisibilityInterval[]=[];
+ for(const t of seen){const last=out.at(-1),start=Math.max(0,t-half),end=Math.min(endSeconds,t+half);if(last&&start-last.endSeconds<=bridge-step)last.endSeconds=end;else out.push({startSeconds:start,endSeconds:end});}
+ return out;
+}
 export function elementVisibility(element:VisibleElement,frames:(VisiblePose&{timestamp:number})[],endSeconds:number){
- return visibilityIntervals(frames.filter(f=>elementInView(element,f)).map(f=>f.timestamp),endSeconds);
+ return coveredIntervals(frames.filter(f=>elementInView(element,f)).map(f=>f.timestamp),frames.map(f=>f.timestamp),endSeconds);
 }
 export function clipVisibility(ranges:VisibilityInterval[],start:number,end:number){
  return ranges.filter(r=>r.endSeconds>start&&r.startSeconds<end).map(r=>({startSeconds:Math.max(start,r.startSeconds)-start,endSeconds:Math.min(end,r.endSeconds)-start}));

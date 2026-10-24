@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import DotField from "./dot-field";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
@@ -16,6 +16,8 @@ type Props = {
   reconstruction?: (ObjectCloud & { caption: string }) | null; reconstructing?: boolean;
   pieceFindings?: { id: string; findingId?: string; label: string; status: string }[];
   onReviewFinding?: (findingId: string, status: "confirmed" | "rejected" | "pending") => void; reviewBusy?: string;
+  /** The recorded walkthrough, shown as a third tab beside Room and Geometry. */
+  video?: ReactNode;
 };
 // Selection is blue so it never reads as a status. Amber = needs a look, red = damage confirmed.
 const INK = 0x2f3a2c, ACTIVE = 0x3f8fd2, CHECK = 0xe39a3b, DAMAGE = 0xc4573f;
@@ -24,11 +26,14 @@ const INK = 0x2f3a2c, ACTIVE = 0x3f8fd2, CHECK = 0xe39a3b, DAMAGE = 0xc4573f;
  * One 3D space: the Gaussian splat (when present) with the measured furniture boxes inside it.
  * Hover a box to outline it, click it to select it. Walls and floors are context, never listed.
  */
-export default function SpatialViewer({ manifest, markers, assetUrl, onPick, selectedElementId, hoveredElementId, onSelectElement, onHoverElement, damagedElementIds = [], elementTones = {}, compact = false, className = "", reconstruction = null, reconstructing = false, pieceFindings = [], onReviewFinding, reviewBusy = "" }: Props) {
+export default function SpatialViewer({ manifest, markers, assetUrl, onPick, selectedElementId, hoveredElementId, onSelectElement, onHoverElement, damagedElementIds = [], elementTones = {}, compact = false, className = "", reconstruction = null, reconstructing = false, pieceFindings = [], onReviewFinding, reviewBusy = "", video }: Props) {
   const root = useRef<HTMLDivElement>(null);
   const splat = manifest.assets.find(a => a.kind === "splat");
   const aligned = !!splat && (!!splat.registration || splat.reconstructionMethod === "lidar-initialized");
   const [mode, setMode] = useState<"room" | "geometry">(splat ? "room" : "geometry");
+  // The 3D scene stays mounted behind the video tab, so switching back is instant.
+  const [showVideo, setShowVideo] = useState(false);
+  const videoTab = !compact && !!video && showVideo;
   const [error, setError] = useState(""), [loading, setLoading] = useState(!!splat);
   const [tip, setTip] = useState<{ text: string; x: number; y: number } | null>(null);
   const callbacks = useRef({ onPick, onSelectElement, onHoverElement }); callbacks.current = { onPick, onSelectElement, onHoverElement };
@@ -215,13 +220,14 @@ export default function SpatialViewer({ manifest, markers, assetUrl, onPick, sel
 
   const selectedPiece = !compact && selectedElementId ? manifest.elements.find(e => e.id === selectedElementId && isFurniture(e)) : undefined;
   const selectedName = selectedPiece ? furnitureNames(manifest.elements.filter(isFurniture)).get(selectedPiece.id) : undefined;
-  return <div className={`room-scene ${compact ? "room-scene-compact" : ""} ${className}`}>
+  return <div className={`room-scene ${compact ? "room-scene-compact" : ""} ${videoTab ? "is-video" : ""} ${className}`}>
     <div ref={root} className="room-scene-canvas" aria-label="3D room: hover furniture to outline it, click to select" />
-    {loading && <div className="room-scene-loading is-live"><DotField /><p>Loading your room in 3D…</p></div>}
+    {loading && !videoTab && <div className="room-scene-loading is-live"><DotField /><p>Loading your room in 3D…</p></div>}
     {tip && <span className="room-scene-tip" style={{ left: tip.x, top: tip.y }}>{tip.text}</span>}
-    {!compact && splat && <div className="room-scene-modes" role="group" aria-label="3D view"><button type="button" aria-pressed={mode === "room"} onClick={() => setMode("room")}>Room</button><button type="button" aria-pressed={mode === "geometry"} onClick={() => setMode("geometry")}>Geometry</button></div>}
-    {selectedPiece && <aside className="room-measure" aria-label="Selected furniture measurements"><b>{selectedName || "Furniture"}</b>{reconstruction ? <dl><dt>Width</dt><dd>{reconstruction.measurements.width.toFixed(2)} m</dd><dt>Height</dt><dd>{reconstruction.measurements.height.toFixed(2)} m</dd><dt>Depth</dt><dd>{reconstruction.measurements.depth.toFixed(2)} m</dd></dl> : <dl><dt>Width</dt><dd>{selectedPiece.dimensions[0].toFixed(2)} m</dd><dt>Height</dt><dd>{selectedPiece.dimensions[1].toFixed(2)} m</dd><dt>Depth</dt><dd>{selectedPiece.dimensions[2].toFixed(2)} m</dd></dl>}<p>{reconstructing ? "Rebuilding this piece from the inspection photos…" : reconstruction?.caption || "Measured from this scan. Shown because this piece is selected."}</p>{onReviewFinding && pieceFindings.slice(0, 3).map(finding => <div key={finding.id} className="room-measure-review"><span>{finding.label}</span>{finding.findingId && finding.status === "pending" ? <span><button type="button" disabled={reviewBusy === finding.findingId} onClick={() => onReviewFinding(finding.findingId!, "confirmed")}>Confirm</button><button type="button" disabled={reviewBusy === finding.findingId} onClick={() => onReviewFinding(finding.findingId!, "rejected")}>Dismiss</button></span> : finding.findingId ? <button type="button" disabled={reviewBusy === finding.findingId} onClick={() => onReviewFinding(finding.findingId!, "pending")}>{finding.status === "confirmed" ? "Confirmed" : "Dismissed"} · Undo</button> : <span>{finding.status}</span>}</div>)}</aside>}
-    {!compact && mode === "room" && splat && !aligned && <p className="room-scene-note">This reconstruction has no calibration, so furniture outlines are shown in Geometry view only.</p>}
-    {error && <p className="room-scene-note" role="alert">{error}</p>}
+    {!compact && (splat || video) && <div className="room-scene-modes" role="group" aria-label="Room view">{splat && <button type="button" aria-pressed={!videoTab && mode === "room"} onClick={() => { setMode("room"); setShowVideo(false); }}>Room</button>}<button type="button" aria-pressed={!videoTab && mode === "geometry"} onClick={() => { setMode("geometry"); setShowVideo(false); }}>Geometry</button>{video && <button type="button" aria-pressed={videoTab} onClick={() => setShowVideo(true)}>Video</button>}</div>}
+    {videoTab && <div className="room-scene-video">{video}</div>}
+    {selectedPiece && !videoTab && <aside className="room-measure" aria-label="Selected furniture measurements"><b>{selectedName || "Furniture"}</b>{reconstruction ? <dl><dt>Width</dt><dd>{reconstruction.measurements.width.toFixed(2)} m</dd><dt>Height</dt><dd>{reconstruction.measurements.height.toFixed(2)} m</dd><dt>Depth</dt><dd>{reconstruction.measurements.depth.toFixed(2)} m</dd></dl> : <dl><dt>Width</dt><dd>{selectedPiece.dimensions[0].toFixed(2)} m</dd><dt>Height</dt><dd>{selectedPiece.dimensions[1].toFixed(2)} m</dd><dt>Depth</dt><dd>{selectedPiece.dimensions[2].toFixed(2)} m</dd></dl>}<p>{reconstructing ? "Rebuilding this piece from the inspection photos…" : reconstruction?.caption || "Measured from this scan. Shown because this piece is selected."}</p>{onReviewFinding && pieceFindings.slice(0, 3).map(finding => <div key={finding.id} className="room-measure-review"><span>{finding.label}</span>{finding.findingId && finding.status === "pending" ? <span><button type="button" disabled={reviewBusy === finding.findingId} onClick={() => onReviewFinding(finding.findingId!, "confirmed")}>Confirm</button><button type="button" disabled={reviewBusy === finding.findingId} onClick={() => onReviewFinding(finding.findingId!, "rejected")}>Dismiss</button></span> : finding.findingId ? <button type="button" disabled={reviewBusy === finding.findingId} onClick={() => onReviewFinding(finding.findingId!, "pending")}>{finding.status === "confirmed" ? "Confirmed" : "Dismissed"} · Undo</button> : <span>{finding.status}</span>}</div>)}</aside>}
+    {!compact && !videoTab && mode === "room" && splat && !aligned && <p className="room-scene-note">This reconstruction has no calibration, so furniture outlines are shown in Geometry view only.</p>}
+    {error && !videoTab && <p className="room-scene-note" role="alert">{error}</p>}
   </div>;
 }

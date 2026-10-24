@@ -16,7 +16,7 @@ test('a frame without loaded pixels does not show boxes from the new camera pose
 
 test('native sensor playback rotates the image and its boxes clockwise while labels stay upright',()=>{
  const Loaded=load('components/evidence-timeline.tsx',{source:'/private/source.jpg',width:1600,height:1200}).default;
- const html=renderToStaticMarkup(React.createElement(Loaded,{portraitSensorFrames:true,frames:[{image:'source.jpg',timestamp:1,width:1600,height:1200}],findings:[{id:'table',kind:'object',label:'Table',timestampSeconds:1,boundingBox:{x:.2,y:.1,width:.3,height:.4}}],assetUrl:name=>'/private/'+name,onSelect:()=>{}}));
+ const html=renderToStaticMarkup(React.createElement(Loaded,{portraitSensorFrames:true,frames:[{image:'source.jpg',timestamp:1,width:1600,height:1200}],findings:[{id:'table',kind:'damage',label:'Table',timestampSeconds:1,boundingBox:{x:.2,y:.1,width:.3,height:.4}}],assetUrl:name=>'/private/'+name,onSelect:()=>{}}));
  assert(html.includes('aspect-ratio:0.75'));
  assert(html.includes('rotate(90deg)'));
  assert(html.includes('left:50%;top:20%;width:40%;height:30%'));

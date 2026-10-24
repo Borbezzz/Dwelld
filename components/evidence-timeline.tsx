@@ -32,9 +32,9 @@ export default function EvidenceTimeline({ frames, findings, selectedId, assetUr
   // Correct only their presentation; images already oriented by EXIF must not rotate twice.
   const rotate = portraitSensorFrames && frame.width > frame.height && !(loaded && loadedImage.width < loadedImage.height);
   const ratio = rotate ? frame.height / frame.width : loaded ? loadedImage.width / loadedImage.height : frame.width / frame.height;
-  const visible = loaded ? findingsForSourceFrame(portraitSensorFrames ? findings.filter(f=>f.source!=="manual") : findings, frame.timestamp) : [];
+  const visible = loaded ? findingsForSourceFrame(findings.filter(f => f.kind === "damage" && (!portraitSensorFrames || f.source !== "manual")), frame.timestamp) : [];
   return <section className="walkthrough-player" aria-label="Inspection frames">
-    <div className="walkthrough-stage" style={{ aspectRatio: ratio }}>
+    <div className="walkthrough-stage" style={{ aspectRatio: ratio, width: `min(100%, calc(var(--stage-max-height, 100000px) * ${ratio}))` }}>
       <img src={source} style={rotate ? {position:"absolute",left:"50%",top:"50%",width:`${frame.width / frame.height * 100}%`,height:`${frame.height / frame.width * 100}%`,maxWidth:"none",transform:"translate(-50%, -50%) rotate(90deg)"} : undefined} onLoad={event => {const image=event.currentTarget;setLoadedImage({source:image.getAttribute("src")||"",width:image.naturalWidth,height:image.naturalHeight})}} alt={`Room at ${clock(frame.timestamp)}`} />
       <div className="walkthrough-marks" aria-label="Findings at this moment">{visible.map(finding => {
         const box = finding.boundingBox ? rotate ? portraitEvidenceBox(finding.boundingBox) : finding.boundingBox : null, point = finding.point ? rotate ? portraitEvidencePoint(finding.point) : finding.point : null; if (!box && !point) return null;

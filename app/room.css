@@ -8,6 +8,9 @@
 .room-scene-note{position:absolute;z-index:3;left:14px;right:14px;bottom:12px;margin:0;font-size:11px;line-height:1.5;color:#fffdf8;text-shadow:0 1px 3px #000a}
 .room-measure{position:absolute;z-index:3;top:14px;right:14px;width:min(220px,70%);background:#fffdf8ee;color:#2b312b;padding:12px 14px;border-radius:4px;box-shadow:0 4px 18px #0002}.room-measure b{display:block;font-size:13px;font-weight:500}.room-measure dl{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;margin:8px 0 0}.room-measure dt,.room-measure dd{font-size:11px;margin:0}.room-measure dd{text-align:right;font-variant-numeric:tabular-nums}.room-measure p{font-size:10px;line-height:1.45;color:#6f7766;margin:8px 0 0}.room-measure-review{display:flex;justify-content:space-between;gap:8px;align-items:center;margin-top:8px;font-size:11px}.room-measure-review button{border:0;background:transparent;color:#3e4a37;font-size:11px;cursor:pointer;padding:0 0 0 8px}
 .room-video-dock{margin-top:14px}
+/* Video tab: the walkthrough takes the stage; the 3D canvas stays mounted underneath so switching back is instant. */
+.room-scene.is-video{background:#f4f2ec;height:auto!important;min-height:420px;overflow:visible}.room-scene.is-video .room-scene-canvas{visibility:hidden}
+.room-scene-video{position:relative;z-index:2;padding:58px 0 4px;--stage-max-height:58vh}.room-scene-video .native-playback-heading{padding:0 18px 12px}.room-scene-video .walkthrough-stage{margin:0 auto}
 .room-scene-help{font-size:10px;color:#818775;margin:10px 0 0}
 
 /* Room page */
