@@ -19,7 +19,7 @@ export function scopeFor(category: string): Scope | null {
 }
 const NAMES: Record<string, string> = { table: "Table", cabinet: "Cabinet", door: "Door", wall: "Wall", chair: "Chair", sofa: "Sofa", bed: "Bed" };
 
-import { project, projectPoint, sub, dot, axes, origin, type V3 } from "./projection";
+import { project, projectPoint, sub, dot, axes, origin, hitElement, type V3 } from "./projection";
 export { projectPoint };
 /** Where a furniture piece sits in this photo, if it is clearly in view. */
 export function elementInView(e: RoomElement, pose: FramePose): ElementView | null {
@@ -64,22 +64,6 @@ export function selectInspectionTargets(views: ElementView[], limit = 4): Elemen
     if (picked.length === limit) break;
   }
   return picked;
-}
-/** Cast the image point into the room and return where it meets the element's box (slab test). */
-function hitElement(px: number, py: number, pose: FramePose, e: RoomElement): { point: V3; t: number } | null {
-  const t = pose.transform, k = pose.intrinsics, [cx, cy, cz] = axes(t), o = origin(t);
-  const local: V3 = [(px * pose.width - k[6]) / k[0], -(py * pose.height - k[7]) / k[4], -1];
-  const dir = [0, 1, 2].map(i => cx[i] * local[0] + cy[i] * local[1] + cz[i] * local[2]) as V3;
-  const [ex, ey, ez] = axes(e.transform), rel = sub(o, origin(e.transform)), h = e.dimensions.map(v => Math.max(v, .03) / 2);
-  let near = -Infinity, far = Infinity;
-  for (const [i, a] of [ex, ey, ez].entries()) {
-    const ro = dot(rel, a), rd = dot(dir, a);
-    if (Math.abs(rd) < 1e-6) { if (Math.abs(ro) > h[i]) return null; continue; }
-    let t0 = (-h[i] - ro) / rd, t1 = (h[i] - ro) / rd; if (t0 > t1) [t0, t1] = [t1, t0];
-    near = Math.max(near, t0); far = Math.min(far, t1); if (near > far) return null;
-  }
-  const hit = near > .1 ? near : far > .1 ? far : null; if (hit === null) return null;
-  return { point: [0, 1, 2].map(i => o[i] + dir[i] * hit) as V3, t: hit };
 }
 const centre = (b: Box): [number, number] => [b.x + b.width / 2, b.y + b.height / 2];
 const iou = (a: Box, b: Box) => { const w = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x)), h = Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y)), i = w * h; return i / (a.width * a.height + b.width * b.height - i || 1); };

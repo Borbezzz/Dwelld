@@ -9,6 +9,11 @@ import { readMedia } from "@/lib/server/media";
 import { describeAtPoint } from "@/lib/server/damage";
 import { projectPoint } from "@/lib/server/projection";
 import type { SpatialManifest } from "@/lib/spatial/types";
+import { after } from "next/server";
+import { writeMedia } from "@/lib/server/media";
+import { placeVideoPoint, type ScanFrame } from "@/lib/server/video-mark";
+import { isFurniture } from "@/lib/spatial/furniture";
+import { sealLater } from "@/lib/server/ledger";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 export const dynamic = "force-dynamic";
@@ -16,11 +21,38 @@ export async function POST(request: Request, { params }: { params: Promise<{ ins
   try {
     const user = await requireUser(request), { inspectionId } = await params;
     const inspection = await requireOwnedInspection(inspectionId, user.id), db = await getDb();
-    const b = await readJsonBody(request);
+    const b = await readJsonBody(request, 1536 * 1024);
     const capture = await db.collection("spatialCaptures").findOne({ inspectionId: inspection._id });
     if (!capture) return NextResponse.json({ error: "Import a real spatial capture first" }, { status: 409 });
-    if (!["add", "move", "delete", "confirm", "reject"].includes(b.action)) return NextResponse.json({ error: "Invalid marker action" }, { status: 400 });
+    if (!["add", "addFromVideo", "move", "delete", "confirm", "reject"].includes(b.action)) return NextResponse.json({ error: "Invalid marker action" }, { status: 400 });
     const now = new Date();
+    if (b.action === "addFromVideo") {
+      // A click on the recorded walkthrough: place it in 3D from the scan's camera pose, keep the exact
+      // video frame as evidence, and let Gemini describe what is at that spot.
+      const p = b.point, v = b.video, note = typeof b.note === "string" ? b.note.trim().slice(0, 500) : "";
+      const ok = (n: unknown, lo = 0, hi = 1) => typeof n === "number" && Number.isFinite(n) && n >= lo && n <= hi;
+      if (!p || !ok(p.x) || !ok(p.y) || !ok(b.scanTime, 0, 86400) || !v || !ok(v.width, 16, 8192) || !ok(v.height, 16, 8192)) return NextResponse.json({ error: "Invalid video mark" }, { status: 400 });
+      const manifest = capture.manifest as SpatialManifest;
+      const placed = placeVideoPoint(manifest.frames as unknown as ScanFrame[], manifest.elements, b.scanTime, { x: p.x, y: p.y }, { width: v.width, height: v.height });
+      if ("error" in placed) return NextResponse.json({ error: placed.error }, { status: 422 });
+      let evidence: Buffer | null = null;
+      if (typeof b.snapshot === "string" && /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(b.snapshot) && b.snapshot.length < 1_400_000) evidence = Buffer.from(b.snapshot.split(",")[1], "base64");
+      // Without a snapshot, fall back to the saved scan photo at that pose, in its own coordinates.
+      const frameRef = manifest.assets.find(a => a.name === placed.frame.image && a.kind === "image")?.mediaRef;
+      const image = evidence ?? (frameRef ? await readMedia(frameRef, 16 * 1024 * 1024) : null);
+      const at = evidence ? { x: p.x, y: p.y } : placed.sensor;
+      const seen = image ? await describeAtPoint(image, at).catch(() => null) : null;
+      if (!seen && !note) return NextResponse.json({ error: "Couldn't describe that spot automatically. Add a short note and save again." }, { status: 422 });
+      const ref = evidence ? await writeMedia(evidence, `video-mark-${Date.now()}.jpg`, "image/jpeg", { ownerId: user.id, inspectionId: String(inspection._id), kind: "manual-mark" }) : frameRef;
+      const element = placed.element, furniture = isFurniture(element);
+      const label = seen?.label || note.slice(0, 80);
+      const finding = { _id: new ObjectId(), ownerId: user.id, inspectionId: inspection._id, roomId: inspection.roomId, kind: "damage", source: "manual", label, damageType: seen?.type || "other", description: [seen?.description, note && `Your note: ${note}`].filter(Boolean).join(" "), evidenceFrameUrl: ref, point: at, boundingBox: seen?.boundingBox ?? null, timestampSeconds: b.scanTime, worldPosition: placed.position, ...(furniture ? { spatialElementId: element.id } : {}), reviewStatus: "confirmed", detectionSource: "manual-video", createdAt: now };
+      await db.collection("findings").insertOne(finding);
+      const marker = { _id: new ObjectId(), findingId: String(finding._id), inspectionId: inspection._id, ownerId: user.id, sessionId: manifest.sessionId, position: placed.position, label, elementId: furniture ? element.id : null, reviewStatus: "confirmed", version: 1, createdAt: now, reviewHistory: [{ action: "add", source: "video", position: placed.position, userId: user.id, at: now }] };
+      await db.collection("spatialMarkers").insertOne(marker);
+      after(() => sealLater(inspection._id));
+      return NextResponse.json({ id: String(marker._id), findingId: String(finding._id), position: placed.position, elementId: marker.elementId, label, poseGapSeconds: placed.poseGapSeconds }, { status: 201 });
+    }
     if (b.action === "add") {
       const note = typeof b.label === "string" ? b.label.trim() : "";
       if (!vector(b.position) || note.length > 500 || (b.elementId != null && !capture.manifest.elements.some((e: { id: string }) => e.id === b.elementId))) return NextResponse.json({ error: "Invalid marker" }, { status: 400 });

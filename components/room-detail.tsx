@@ -2,12 +2,13 @@
 import Link from "next/link";
 import DotField from "./dot-field";
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, ArrowUpRight, Check, X } from "lucide-react";
 import { api } from "@/lib/api";
 import BrandLogo from "./brand-logo";
 import EvidenceViewer, { type EvidenceItem } from "./evidence-viewer";
+import type { VideoMark } from "./walkthrough-player";
 import WalkthroughPlayer from "./walkthrough-player";
 import { useObjectReconstruction } from "./use-object-reconstruction";
 import NativePlayback from "./native-playback";
@@ -30,7 +31,8 @@ export default function RoomDetail({ roomId }: { roomId: string }) {
   const [room, setRoom] = useState<Room | null>(null), [scans, setScans] = useState<Inspection[] | null>(null), [error, setError] = useState("");
   const [current, setCurrent] = useState(""), [capture, setCapture] = useState<Capture | null>(null), [findings, setFindings] = useState<Finding[]>([]), [loadingScan, setLoadingScan] = useState(false);
   const [selected, setSelected] = useState<string | null>(null), [hovered, setHovered] = useState<string | null>(null), [busy, setBusy] = useState("");
-  const [confirming, setConfirming] = useState<"" | "scan" | "room">(""), [deleting, setDeleting] = useState(false);
+  const [confirming, setConfirming] = useState<"" | "scan" | "room">(""), [deleting, setDeleting] = useState(false), [refresh, setRefresh] = useState(0);
+  const keepSelection = useRef(false);
   const router = useRouter();
 
   const loadScans = useCallback(async () => {
@@ -45,13 +47,13 @@ export default function RoomDetail({ roomId }: { roomId: string }) {
   const scan = scans?.find(i => i.id === current);
   useEffect(() => {
     if (!current) { setCapture(null); setFindings([]); return; }
-    let active = true; setLoadingScan(true); setSelected(null);
+    let active = true; setLoadingScan(true); if (!keepSelection.current) setSelected(null); keepSelection.current = false;
     Promise.all([fetch(`/api/inspections/${current}/spatial${scan?.virtual?`?roomId=${encodeURIComponent(roomId)}`:""}`).then(r => r.ok ? r.json() as Promise<Capture> : { capture: null, markers: [] }), api.inspection(current,scan?.virtual?roomId:undefined)])
       .then(([c, d]) => { if (!active) return; setCapture(c); setFindings(d.findings); })
       .catch(e => { if (active) setError(e.message); })
       .finally(() => { if (active) setLoadingScan(false); });
     return () => { active = false; };
-  }, [current, scan?.status]);
+  }, [current, scan?.status, refresh]);
 
   const manifest = capture?.capture?.manifest;
   const furniture = useMemo(() => manifest?.elements.filter(isFurniture) || [], [manifest]);
@@ -94,6 +96,16 @@ export default function RoomDetail({ roomId }: { roomId: string }) {
   const open = [...byElement.values()].flat().concat(elsewhere).filter(d => d.status === "pending").length;
   const confirmed = [...byElement.values()].flat().concat(elsewhere).filter(d => d.status === "confirmed").length;
 
+  /** A mark made on the recorded walkthrough: the server places it in 3D, then the room reloads with the new pin selected. */
+  async function markFromVideo(m: VideoMark) {
+    if (!current) return;
+    const r = await fetch(`/api/inspections/${current}/spatial/markers`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "addFromVideo", scanTime: m.time, point: m.point, video: m.video, snapshot: m.snapshot, note: m.note }) });
+    const b = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(b.error || "Could not save this mark");
+    keepSelection.current = true; setRefresh(n => n + 1);
+    if (b.elementId) setSelected(b.elementId);
+    setFocusFinding(`marker-${b.id}`);
+  }
   async function review(findingId: string, status: "confirmed" | "rejected" | "pending") {
     if (!current) return; setBusy(findingId);
     try { await api.review(current, findingId, status); setFindings(fs => fs.map(f => f.id === findingId ? { ...f, reviewStatus: status, autoApproved: false } : f)); setCapture(c => c ? { ...c, markers: c.markers.map(m => m.findingId === findingId ? { ...m, reviewStatus: status } : m) } : c); }
@@ -141,7 +153,7 @@ export default function RoomDetail({ roomId }: { roomId: string }) {
           : scan && !ready(scan) ? <div className="room-scene"><div className="room-scene-loading is-live"><DotField /><p>{scan.status === "failed" ? "This scan could not be analysed." : "Analysing this scan. Findings appear here when it's done."}</p></div></div>
           : <div className="room-scene"><div className="room-scene-loading"><p>This scan was a video walkthrough, so there is no 3D room. Its findings are listed alongside.</p><Link className="text-button" href={`/inspections/${current}`}>Open video review ↗</Link></div></div>}
         {manifest && <p className="room-scene-help"><span className="tone-key"><i className="tone-check" />Needs a look</span><span className="tone-key"><i className="tone-damage" />Damage confirmed</span><span>Drag to orbit · click furniture to rebuild it from the photos</span></p>}
-        {manifest?.assets.some(a=>a.kind==="video") ? <div className="room-video-dock"><NativePlayback assets={manifest.assets} findings={findings} selectedId={cueId} assetUrl={name => `/api/inspections/${current}/spatial/assets/${encodeURIComponent(name)}`} onSelect={id=>setFocusFinding(id)}/></div> : scan?.videoUrl ? <div className="room-video-dock"><WalkthroughPlayer src={scan.videoUrl} findings={findings} selectedId={cueId} onSelect={id => setFocusFinding(id)} /></div> : manifest?.frames.length ? <div className="room-video-dock"><EvidenceTimeline portraitSensorFrames frames={manifest.frames} findings={findings} selectedId={cueId} assetUrl={name => `/api/inspections/${current}/spatial/assets/${encodeURIComponent(name)}`} onSelect={id => setFocusFinding(id)} /></div> : null}
+        {manifest?.assets.some(a=>a.kind==="video") ? <div className="room-video-dock"><NativePlayback assets={manifest.assets} findings={findings} selectedId={cueId} assetUrl={name => `/api/inspections/${current}/spatial/assets/${encodeURIComponent(name)}`} onSelect={id=>setFocusFinding(id)} onMark={scan?.isOwner !== false ? markFromVideo : undefined}/></div> : scan?.videoUrl ? <div className="room-video-dock"><WalkthroughPlayer src={scan.videoUrl} findings={findings} selectedId={cueId} onSelect={id => setFocusFinding(id)} /></div> : manifest?.frames.length ? <div className="room-video-dock"><EvidenceTimeline portraitSensorFrames frames={manifest.frames} findings={findings} selectedId={cueId} assetUrl={name => `/api/inspections/${current}/spatial/assets/${encodeURIComponent(name)}`} onSelect={id => setFocusFinding(id)} /></div> : null}
         {scans && <div className="room-danger under-scene">{confirming ? <div className="room-confirm" role="group" aria-label="Confirm delete"><p>{confirming === "scan" ? `Delete the ${scan ? purpose(scan).toLowerCase() : ""} scan? Its 3D room, photos and findings are removed for good.` : `Delete ${room?.name || "this room"} and all ${scans.length} ${scans.length === 1 ? "scan" : "scans"}? This can't be undone.`}</p><span><button className="button button-danger" disabled={deleting} onClick={() => void remove(confirming)}>{deleting ? "Deleting…" : confirming === "scan" ? "Delete scan" : "Delete room"}</button><button className="text-button" disabled={deleting} onClick={() => setConfirming("")}>Keep it</button></span></div>
           : <>{current && scan?.isOwner!==false && !scan?.virtual && <button className="text-button" onClick={() => setConfirming("scan")}>Delete this scan</button>}{room?.isOwner!==false && <button className="text-button" onClick={() => setConfirming("room")}>Delete room</button>}</>}</div>}
         {focus && <EvidenceViewer key={`${selected}-${focusFinding}`} title={focus.title} items={focus.items} onClose={() => { setFocusFinding(null); setSelected(null); }} />}
