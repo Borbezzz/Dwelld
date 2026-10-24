@@ -11,6 +11,7 @@ This README reflects the source as of **24 October 2026**. Some older `docs/` fi
 ## Contents
 
 - [Features and limitations](#features-and-limitations)
+- [Requirements met](#requirements-met)
 - [3D loading and performance](#3d-loading-and-performance)
 - [System architecture](#system-architecture)
 - [Repository layout](#repository-layout)
@@ -58,6 +59,24 @@ flowchart LR
 AI observations require review. A missing detection or completed analysis does not establish absence of damage. A confirmed finding records a user's review decision; it does not determine liability, structural safety, or repair cost. Independent RoomPlan scans have independent origins and are not automatically registered.
 
 The repository retains browser WebRTC capture/signalling infrastructure, but the **current public QR pages open the native LiDAR companion only**. They no longer expose the earlier browser-phone recording fallback. Uploaded video remains a separate web capture option.
+
+## Requirements met
+
+Encode London 2026, MongoDB bounty: an app that solves a real problem with **MongoDB Atlas as its foundational data store**. Extra points come from Atlas Search, Atlas Vector Search, Hybrid Search, Automated Embedding, Atlas Stream Processing and Voyage AI. The copied brief is in [docs/BOUNTY-REQUIREMENTS.md](docs/BOUNTY-REQUIREMENTS.md).
+
+Dwelld meets that bar. Atlas is the only database. Rooms, inspections, findings, live sessions and accounts live there, and the original video, photos, depth and splats are stored in GridFS. A saved video inspection writes those records, then prepares the finding text and vectors so the same documents can be searched.
+
+| Atlas feature | Met | Where it is used |
+| --- | --- | --- |
+| Foundational data store | Yes | `MONGODB_URI`. Rooms, inspections, findings, sessions and auth. Media in GridFS. |
+| Atlas Search | Yes | `$search` on `findings_search`: fuzzy match on label, description and damage type. |
+| Atlas Vector Search | Yes | `$vectorSearch` on `findings_vector` (Gemini, 768 dimensions) and `findings_image` (Voyage photo vectors, 1024 dimensions). |
+| Hybrid Search | Yes | One `$rankFusion` stage over keyword, meaning and photo results. On a cluster below MongoDB 8.0 the same fusion runs in the app, and the search page says so. |
+| Automated Embedding | Yes | `findings_auto` embeds `searchText` with Voyage `voyage-4` when a finding is written and when a query is run. |
+| Voyage AI | Yes | `voyage-4` through Automated Embedding, `voyage-multimodal-3.5` for evidence photos, and `rerank-3` after fusion. Photo search and rerank need `VOYAGE_API_KEY`. |
+| Atlas Stream Processing | No | Not used. |
+
+The damage check itself stores evidence in Atlas. Atlas Search, Vector Search, hybrid search, Automated Embedding and Voyage run when those saved findings are prepared and someone searches or asks about them. Search returns an error until the indexes are queryable. There is no regex substitute. The submission still needs the repository link and a 3-minute demo that shows the app and MongoDB in use.
 
 ## 3D loading and performance
 
