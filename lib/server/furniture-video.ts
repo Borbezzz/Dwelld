@@ -22,6 +22,6 @@ export async function analyzeFurnitureVideoFrames<T extends { image: Buffer; tim
     const result:Awaited<ReturnType<typeof analyzeEvidenceFrame>> = frame.pose ? await analyzeEvidenceFrame(frame.image, frame.pose, elements, {
       walls: false, observations: damage, verify: false, specialist: false, furnitureOnly: true, depth: frame.depth,
     }) : {findings:damage.map(o=>({label:o.type,description:o.description,damageType:o.type,boundingBox:o.boundingBox,elementId:null,elementCategory:'unassigned',worldPosition:null,detectionSource:'gemini' as const,reviewStatus:'pending' as const,autoApproved:false})),views:[],dropped:0,warnings:[]};
-    return { frame, result };
+    return { frame, result: {...result,objects:observations.objects?.get(frame.timestampSeconds)||[]} };
   }));
 }

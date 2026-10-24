@@ -127,3 +127,21 @@ test('saved native scans use four workers, preserve all samples, and save determ
  await ready;assert.equal(max,4);assert.equal(stored.length,0);release();await run;
  assert.deepEqual(stored.map(f=>f.timestampSeconds),Array.from({length:30},(_,i)=>i));assert.equal(calls.length,5);assert.equal(updates.at(-1).framesAnalysed,30);assert.equal(updates.at(-1).status,'completed');assert.equal(max,4);
 });
+test('loose items reject unsupported labels and invalid boxes, deduplicate cushion aliases, and keep source timestamps',()=>{
+ const {parseVideoDamageResponse}=load('lib/server/damage.ts');
+ const box={x:.2,y:.3,width:.2,height:.1};
+ const results=parseVideoDamageResponse(JSON.stringify({frames:[{timestampSeconds:1,damage:[],objects:[{label:'pillow',description:'White pillow',boundingBox:box},{label:'cushion',description:'Same item',boundingBox:box},{label:'pillow',description:'Invalid box',boundingBox:{...box,x:2}},{label:'dragon',description:'Unsupported',boundingBox:box}]},{timestampSeconds:2,damage:[],objects:[]},{timestampSeconds:99,damage:[],objects:[{label:'lamp',description:'Wrong source',boundingBox:box}]}]}),[1,2]);
+ assert.deepEqual(results.get(1),[]);assert.equal(results.objects.get(1).length,1);assert.deepEqual(results.objects.get(1)[0].boundingBox,box);assert.deepEqual(results.objects.get(2),[]);assert.equal(results.objects.has(99),false);
+});
+test('repeated camera views never sum into an inflated loose-item inventory',()=>{
+ const {representativeLooseViews}=load('lib/server/loose-inventory.ts');
+ const pillow={label:'pillow',boundingBox:{x:.2,y:.3,width:.2,height:.1}};
+ const a={ref:'photo-a',timestampSeconds:1,objects:[pillow]},b={ref:'photo-b',timestampSeconds:2,objects:[pillow,{...pillow,boundingBox:{...pillow.boundingBox,x:.6}}]},c={ref:'photo-c',timestampSeconds:3,objects:[pillow]};
+ const result=representativeLooseViews([a,b,c]);assert.equal(result.size,1);assert.equal(result.get('pillow').ref,'photo-b');assert.equal(result.get('pillow').objects.length,2);
+});
+test('loose-item boxes travel alongside damage through the same single batch call',async()=>{
+ const box={x:.2,y:.3,width:.2,height:.1};let calls=0;
+ const {analyzeFurnitureVideoFrames}=load('lib/server/furniture-video.ts',{'./damage':{inspectVideoDamageBatch:async()=>{calls++;return Object.assign(new Map([[1,[]],[2,[]]]),{objects:new Map([[1,[{label:'pillow',description:'White pillow',boundingBox:box}]],[2,[]]])});}}});
+ const results=await analyzeFurnitureVideoFrames([{image:await image(),timestampSeconds:1},{image:await image(),timestampSeconds:2}],[]);
+ assert.equal(calls,1);assert.equal(results[0].result.objects[0].label,'pillow');assert.deepEqual(results[1].result.objects,[]);assert.deepEqual(results[0].result.findings,[]);
+});

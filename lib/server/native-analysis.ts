@@ -1,3 +1,4 @@
+import {representativeLooseViews, type LooseView} from "./loose-inventory";
 import { retryAnalysis } from "./analysis-retry";
 import { finishScanReport } from "./scan-report";
 import {elementVisibility} from "../spatial/visibility";
@@ -70,7 +71,7 @@ export async function analyzeLiveEvidenceFrame(sessionId: ObjectId, _name: strin
               const id = `${frame._id}-${result.findings.indexOf(f)}`;
               await db.collection('liveFindings').updateOne({ sessionId, id }, { $setOnInsert: { ...f, id, sessionId, kind: 'damage', source: 'ai', frameName: frame.name, evidenceFrameRef: frame.ref, timestampSeconds: frame.timestampSeconds, pose: frame.pose, createdAt: new Date(), reviewHistory: [] } }, { upsert: true });
             }
-            await frames.updateOne({ _id: frame._id }, { $set: { status: 'done', views: result.views, findings: result.findings.length, observations:result.findings.map(f=>({label:f.label,description:f.description,boundingBox:f.boundingBox,point:null})), warnings: result.warnings, finishedAt: new Date() } });
+            await frames.updateOne({ _id: frame._id }, { $set: { status: 'done', views: result.views, objects:(result.objects||[]).map((o,i)=>({...o,id:`argon-${frame.name}-${i}`,label:`${o.label} · Argon`})), findings: result.findings.length, observations:result.findings.map(f=>({label:f.label,description:f.description,boundingBox:f.boundingBox,point:null})), warnings: result.warnings, finishedAt: new Date() } });
           }
         } catch(error){
           waveFailed=true;
@@ -128,6 +129,7 @@ export async function analyzeNativeInspection(inspection: Document, manifest: Sp
     }
     const liveFrames = sessionId ? (await db.collection("liveFrames").find({ sessionId, status: "done" }).toArray()).map<Document>(f=>({...f,timestampSeconds:f.timestampSeconds+(options.timestampOffset||0)})) : [];
     const liveFindings = sessionId ? await db.collection("liveFindings").find({ sessionId, source: "ai", frameName: { $in: liveFrames.map(f => f.name) } }).toArray() : [];
+    const looseViews:LooseView[]=liveFrames.map(f=>({ref:f.ref,timestampSeconds:f.timestampSeconds,objects:(f.objects||[]).map((o:{label:string})=>({...o,label:o.label.replace(/ · Argon$/,'')}))}));
     const collected: (FrameFinding & { ref: string; timestampSeconds: number; liveId?: string })[] = [];
     // Reuse what the scan already found.
     for (const f of liveFindings) if (f.reviewStatus !== "rejected") {
@@ -159,9 +161,10 @@ export async function analyzeNativeInspection(inspection: Document, manifest: Sp
           const inputs=await Promise.all(images.map(async f=>({...f,pose:f.fr,depth:await depthFor(f.fr).catch(()=>null)})));
           const assessed=await retryAnalysis(()=>analyzeFurnitureVideoFrames(inputs,elements as RoomElement[]),{deadlineMs:deadline,onRetry:async(attempt,message)=>{if(sessionId)await db.collection('liveFrames').updateMany({sessionId,batchId,status:'analyzing'},{$set:{attempt,retryMessage:message}});}});
           for (const { frame: { fr }, result } of assessed) {
+            looseViews.push({ref:imageRef(fr.image)!,timestampSeconds:fr.timestamp,objects:result.objects||[]});
             result.findings.forEach(f => collected.push({ ...f, ref: imageRef(fr.image)!, timestampSeconds: fr.timestamp })); analysed++;
             warnings.push(...result.warnings);
-            if (sessionId) await db.collection('liveFrames').updateOne({sessionId,name:fr.image},{$set:{status:'done',ref:imageRef(fr.image),timestampSeconds:fr.timestamp,finishedAt:new Date(),warnings:result.warnings,views:result.views,findings:result.findings.length,observations:result.findings.map(f=>({label:f.label,description:f.description,boundingBox:f.boundingBox}))}},{upsert:true});
+            if (sessionId) await db.collection('liveFrames').updateOne({sessionId,name:fr.image},{$set:{status:'done',ref:imageRef(fr.image),timestampSeconds:fr.timestamp,finishedAt:new Date(),warnings:result.warnings,views:result.views,objects:(result.objects||[]).map((o,i)=>({...o,id:`argon-${fr.image}-${i}`,label:`${o.label} · Argon`})),findings:result.findings.length,observations:result.findings.map(f=>({label:f.label,description:f.description,boundingBox:f.boundingBox}))}},{upsert:true});
           }
         } catch (error) {
           logAIFailure('saved.batch', error);
@@ -195,6 +198,12 @@ export async function analyzeNativeInspection(inspection: Document, manifest: Sp
       let best: { box: { x: number; y: number; width: number; height: number }; area: number; ref: string; t: number } | null = null;
       for (const fr of manifest.frames) { const ref = imageRef(fr.image); if (!ref) continue; const v = elementInView(e as RoomElement, fr as FramePose); if (v && (!best || v.area > best.area)) best = { box: v.box, area: v.area, ref, t: fr.timestamp }; }
       if (best) await db.collection("findings").insertOne({ ...base, visibilityIntervals:elementVisibility(e,manifest.frames,Math.max(manifest.frames.at(-1)?.timestamp||0,...manifest.assets.filter(a=>a.kind==="video").map(a=>(a.startTimeSeconds||0)+(a.durationSeconds||0)))), kind: "object", label: names.get(e.id) || e.category, description: `Measured ${e.dimensions.map(n => Number(n).toFixed(2)).join(" × ")} m from this scan.`, dimensions: e.dimensions, spatialElementId: e.id, evidenceFrameUrl: best.ref, boundingBox: best.box, timestampSeconds: best.t, source: "ai", detectionSource: "roomplan", reviewStatus: "confirmed", reviewHistory: [], createdAt: new Date() });
+    }
+    // Keep the source view with the most simultaneous instances of each loose-item class.
+    // This is a visible minimum, not an identity claim across moving camera views.
+    const bestLoose=representativeLooseViews(looseViews);
+    for(const [label,view] of bestLoose)for(const [index,item] of view.objects.filter(o=>o.label===label).entries()){
+      await db.collection('findings').updateOne({...base,kind:'object',detectionId:`loose-${label}-${index}-${view.timestampSeconds}`},{$setOnInsert:{...base,kind:'object',label,description:`${item.description||label} Argon observation in this source view; repeated views do not establish additional items.`,boundingBox:item.boundingBox,evidenceFrameUrl:view.ref,timestampSeconds:view.timestampSeconds,source:'ai',detectionSource:'gemini',reviewStatus:'pending',reviewHistory:[],createdAt:new Date()}},{upsert:true});
     }
     await finishScanReport(db,inspection._id,deadline+40_000);
     const approved = collected.filter(f => f.autoApproved).length;

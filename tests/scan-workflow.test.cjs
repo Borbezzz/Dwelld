@@ -38,3 +38,18 @@ test('upload retries retain successful parts and never retry forbidden uploads',
  await uploadChunks(new Blob(['abcdef']),2,async part=>calls.push(part),undefined,2,{completedParts:parts,wait:async()=>{}});assert.deepEqual(calls.sort(),[1,2]);assert.equal(parts.size,3);
  let denied=0;await assert.rejects(uploadChunks(new Blob(['ab']),2,async()=>{denied++;throw Object.assign(Error('Forbidden'),{status:403});},undefined,1,{wait:async()=>{}}));assert.equal(denied,1);
 });
+test('active batches remain visible even with more than 24 newer queued groups',()=>{
+ const pending=Array.from({length:30},(_,i)=>frame('queued',{batchId:`future-${i}`,workerSlot:undefined,timestampSeconds:i+20}));
+ const batches=batchSummaries([frame('analyzing',{batchId:'running'}),...pending]);
+ assert.equal(batches.length,24);assert.equal(batches[0].id,'running');
+});
+test('lane selection prefers current work and never duplicates legacy unslotted batches',()=>{
+ const {batchLanes}=load('lib/live/batches.ts');
+ const batches=batchSummaries([frame('analyzing',{batchId:'active',timestampSeconds:1}),frame('done',{batchId:'newer',timestampSeconds:5}),frame('done',{batchId:'legacy',workerSlot:undefined,timestampSeconds:6})]);
+ const lanes=batchLanes(batches);assert.equal(lanes[0].id,'active');assert.equal(lanes[1].id,'legacy');assert.equal(lanes[2],undefined);assert.equal(lanes[3],undefined);
+});
+test('loose-item batch overlays use the source photo rather than a different frame',()=>{
+ const objects=[{id:'pillow-1',label:'pillow · Argon',boundingBox:{x:.2,y:.3,width:.2,height:.1}}];
+ const batches=batchSummaries([frame('done',{objects}),frame('done',{timestampSeconds:2,objects:[],views:[]})]);
+ assert.deepEqual(batches[0].objects,objects);assert.equal(batches[0].timestampSeconds,1);
+});

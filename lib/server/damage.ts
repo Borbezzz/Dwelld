@@ -242,22 +242,44 @@ export async function inspectVisibleDamage(image: Buffer): Promise<DamageObserva
   return inspect(await sharp(image).png().toBuffer(), FURNITURE_DAMAGE_PROMPT);
 }
 
+export const LOOSE_ITEM_LABELS=['cushion','pillow','blanket','lamp','rug','curtain'] as const;
+export type LooseItemObservation={label:string;description:string;boundingBox:Box};
+/** Independent observations in one source view, never a room-wide object count. */
+export function parseLooseItems(value:unknown):LooseItemObservation[]{
+ if(!Array.isArray(value))return [];
+ const items:LooseItemObservation[]=[];
+ for(const item of value.slice(0,30)){
+  if(!item||typeof item!=='object')continue;
+  const label=typeof item.label==='string'?item.label.toLowerCase().trim():'';
+  const boundingBox=validBox(item.boundingBox);
+  if(!(LOOSE_ITEM_LABELS as readonly string[]).includes(label)||!boundingBox||typeof item.description!=='string')continue;
+  if(items.some(previous=>{
+   if(previous.label!==label&&!(['pillow','cushion'].includes(previous.label)&&['pillow','cushion'].includes(label)))return false;
+   const a=previous.boundingBox,b=boundingBox;
+   const intersection=Math.max(0,Math.min(a.x+a.width,b.x+b.width)-Math.max(a.x,b.x))*Math.max(0,Math.min(a.y+a.height,b.y+b.height)-Math.max(a.y,b.y));
+   return intersection/(a.width*a.height+b.width*b.height-intersection)>.65;
+  }))continue;
+  items.push({label,description:item.description.slice(0,600),boundingBox});
+ }
+ return items;
+}
+
 /** Inspect several timestamped images together without dropping the intervening seconds. */
 export async function inspectVideoDamageBatch(frames: { image: Buffer; timestampSeconds: number }[]) {
   if (!frames.length || frames.length > 6) throw new Error('Expected one to six evidence frames');
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('Gemini damage analysis requires GEMINI_API_KEY');
   const ai = new GoogleGenAI({ apiKey, httpOptions: { timeout: 60_000 } });
-  const contents: ({ text: string } | { inlineData: { data: string; mimeType: string } })[] = [{ text: `${FURNITURE_DAMAGE_PROMPT} These are chronological sampled video frames, approximately one per second. Evaluate them together, then return one entry for EVERY supplied timestamp, including empty damage arrays. Boxes use normalized top-left x,y,width,height in [0,1] relative to that timestamp's image. Never transfer a box between frames. Use null if visible damage cannot be localized. At most 10 observations per frame. Return only the structured observations, not a reasoning transcript.` }];
+  const contents: ({ text: string } | { inlineData: { data: string; mimeType: string } })[] = [{ text: `${FURNITURE_DAMAGE_PROMPT} These are chronological sampled video frames, approximately one per second. Evaluate them together, then return one entry for EVERY supplied timestamp, including empty damage arrays. Boxes use normalized top-left x,y,width,height in [0,1] relative to that timestamp's image. Never transfer a box between frames. Use null if visible damage cannot be localized. At most 10 damage observations per frame. Separately identify clearly visible loose items: cushions, pillows, blankets, lamps, rugs and curtains. Return one objects entry per visible instance with a tight source-specific box; omit uncertain or unlocalizable items. Do not infer hidden items or count repeated appearances across frames as new room objects. Loose-item identification is separate from the basic-furniture damage policy. Return only the structured observations, not a reasoning transcript.` }];
   for (const frame of frames) {
     contents.push({ text: `Photo timestampSeconds=${frame.timestampSeconds}` }, { inlineData: { data: (await sharp(frame.image).resize({ width: 1600, height: 1600, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 80 }).toBuffer()).toString('base64'), mimeType: 'image/jpeg' } });
   }
   const response = await ai.models.generateContent({ model: process.env.GEMINI_MODEL || 'gemini-4-argon', contents, config: { thinkingConfig: {thinkingLevel:'MEDIUM' as import('@google/genai').ThinkingLevel}, responseMimeType: 'application/json', responseSchema: {
     type: 'OBJECT', properties: { frames: { type: 'ARRAY', items: { type: 'OBJECT', properties: {
-      timestampSeconds: { type: 'NUMBER' }, damage: { type: 'ARRAY', items: { type: 'OBJECT', properties: {
+      timestampSeconds: { type: 'NUMBER' }, objects: {type:'ARRAY',items:{type:'OBJECT',properties:{label:{type:'STRING',enum:[...LOOSE_ITEM_LABELS]},description:{type:'STRING'},boundingBox:{type:'OBJECT',properties:{x:{type:'NUMBER'},y:{type:'NUMBER'},width:{type:'NUMBER'},height:{type:'NUMBER'}},required:['x','y','width','height']}},required:['label','description','boundingBox']}}, damage: { type: 'ARRAY', items: { type: 'OBJECT', properties: {
         type: { type: 'STRING', enum: [...DAMAGE_TYPES] }, description: { type: 'STRING' }, boundingBox: { type: 'OBJECT', nullable: true, properties: { x: { type: 'NUMBER' }, y: { type: 'NUMBER' }, width: { type: 'NUMBER' }, height: { type: 'NUMBER' } }, required: ['x', 'y', 'width', 'height'] },
       }, required: ['type', 'description', 'boundingBox'] } },
-    }, required: ['timestampSeconds', 'damage'] } } }, required: ['frames'],
+    }, required: ['timestampSeconds', 'damage','objects'] } } }, required: ['frames'],
   } } });
   console.info(JSON.stringify({ event: 'furniture.video', frames: frames.length, promptTokens: response.usageMetadata?.promptTokenCount, outputTokens: response.usageMetadata?.candidatesTokenCount, reasoningTokens: response.usageMetadata?.thoughtsTokenCount, totalTokens: response.usageMetadata?.totalTokenCount }));
   return parseVideoDamageResponse(response.text || '', frames.map(f => f.timestampSeconds));
@@ -265,12 +287,13 @@ export async function inspectVideoDamageBatch(frames: { image: Buffer; timestamp
 export function parseVideoDamageResponse(text: string, expected: number[]) {
   const parsed = JSON.parse(text);
   if (!Array.isArray(parsed.frames)) throw new Error('Video analysis did not return any evidence frames');
-  const result = new Map<number, DamageObservation[]>();
+  const result = Object.assign(new Map<number, DamageObservation[]>(),{objects:new Map<number,LooseItemObservation[]>()});
   for (const frame of parsed.frames) {
     // Match each answer to the photo it describes, allowing for timestamps echoed back as text or rounded.
     const t = Number(frame?.timestampSeconds), match = expected.find(e => Math.abs(e - t) < .05);
     if (match === undefined || result.has(match) || !Array.isArray(frame.damage)) continue;
     result.set(match, parseDamageResponse(JSON.stringify({ damage: frame.damage })));
+    result.objects.set(match,parseLooseItems(frame.objects));
   }
   if (!result.size) throw new Error('Video analysis did not return any matching evidence frame');
   return result;

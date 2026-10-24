@@ -130,7 +130,7 @@ function LiveWorkspaceInner({sessionId,phone=false,initialRoomId='',newRoom=fals
  },[id,phone,diagnose]);
  useEffect(()=>{if(!id||!credentials?.pairingToken||phone)return;const url=`${location.origin}/connect/${id}#token=${credentials.pairingToken}`;setPairUrl(url);if(location.protocol!=='https:')setError('This local address cannot pair a phone camera securely. Open the deployed HTTPS site on your laptop and create the inspection there.');QRCode.toDataURL(url,{width:280,margin:2,color:{dark:'#304539',light:'#ffffff'}}).then(setQr);},[id,credentials,phone]);
  useEffect(()=>{
-  if(!id||!credentials||(savedId&&['ready','failed','partial'].includes(session?.workflow?.searchStatus||'')&&['ready','failed'].includes(session?.workflow?.reportStatus||'')))return;const controller=new AbortController();let active=true,cursor='',running=false,initialPoll=true;const processed=processedSignals.current;
+  if(!id||!credentials||(savedId&&!session?.analysisProgress?.checking&&!session?.analysisProgress?.queued&&['ready','failed','partial'].includes(session?.workflow?.searchStatus||'')&&['ready','failed'].includes(session?.workflow?.reportStatus||'')))return;const controller=new AbortController();let active=true,cursor='',running=false,initialPoll=true;const processed=processedSignals.current;
   const poll=async()=>{if(running||!active)return;running=true;try{const data=await liveRequest<LiveState>(id,credentials.token,`?after=${cursor}`,{signal:controller.signal});if(!active)return;setPollError('');setSession(data.session);setInventory(data.objects);setFindings(data.findings);if(initialPoll){initialPoll=false;if(!phone&&data.session.paired&&!peer.current&&data.session.status!=='saved'){setConnectionPhase('Reconnecting');await signal('restart',{});}}if(data.session.status==='saved'&&data.session.inspectionId){setSavedId(data.session.inspectionId);return;}
    // A reopened desktop answers only the latest offer, never each historical negotiation.
    const latestOffer=!phone?[...data.signals].reverse().find(s=>s.type==='offer'):undefined;
@@ -145,7 +145,7 @@ function LiveWorkspaceInner({sessionId,phone=false,initialRoomId='',newRoom=fals
    if(phone&&data.session.stopRequested&&!stopping.current&&recorder.current?.state==='recording')void stopRef.current();
   }catch(e){if(active)setPollError(e instanceof Error?e.message:'Connection interrupted. Retrying…')}finally{running=false}};
   void poll();const interval=setInterval(()=>void poll(),1500);return()=>{active=false;controller.abort();clearInterval(interval)};
- },[id,credentials,phone,makePeer,signal,offer,diagnose,savedId,session?.workflow?.searchStatus,session?.workflow?.reportStatus]);
+ },[id,credentials,phone,makePeer,signal,offer,diagnose,savedId,session?.workflow?.searchStatus,session?.workflow?.reportStatus,session?.analysisProgress?.checking,session?.analysisProgress?.queued]);
  useEffect(()=>{
   if(phone||!id||!credentials||!session?.nativeCapture||savedId)return;const controller=new AbortController();let active=true,cursor=0,running=false;
   const pull=async()=>{if(running||!active)return;running=true;try{const data=await liveRequest<{chunks:StreamChunk[];elements:NonNullable<InspectionSession['nativeLive']>['elements'];saved:boolean}>(id,credentials.token,`/stream?after=${cursor}`,{signal:controller.signal});if(!active)return;if(data.chunks.length){cursor=data.chunks[data.chunks.length-1].seq;setRoomStream(prev=>[...prev,...data.chunks].slice(-400));}if(data.elements?.length)setStreamElements(data.elements);}catch{}finally{running=false}};

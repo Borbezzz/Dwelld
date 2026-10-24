@@ -19,7 +19,7 @@ export type AnalyzedFinding = {
 };
 
 // COCO furniture/fixture classes supported by the browser YOLO model.
-const classes: Record<number, string> = { 56: "chair", 57: "couch", 58: "potted plant", 59: "bed", 60: "dining table", 61: "toilet", 62: "tv", 63: "laptop", 68: "microwave", 69: "oven", 70: "toaster", 71: "sink", 72: "refrigerator", 74: "clock", 75: "vase" };
+const classes: Record<number, string> = { 24: "backpack", 26: "handbag", 28: "suitcase", 39: "bottle", 40: "wine glass", 41: "cup", 45: "bowl", 56: "chair", 57: "couch", 58: "potted plant", 59: "bed", 60: "dining table", 61: "toilet", 62: "tv", 63: "laptop", 64: "mouse", 65: "remote", 66: "keyboard", 67: "cell phone", 68: "microwave", 69: "oven", 70: "toaster", 71: "sink", 72: "refrigerator", 73: "book", 74: "clock", 75: "vase", 77: "teddy bear" };
 const labels = new Set(Object.values(classes));
 export function validateClientFrames(value: unknown, durationSeconds = Infinity): ClientFrameDetections[] {
   if (!Array.isArray(value) || value.length < 1 || value.length > 121) throw new Error("Provide between one and 121 analyzed video frames");
@@ -188,6 +188,7 @@ export async function analyzeVideo(videoUrl: string, mimeType: string, clientFra
           const key = `video_${Math.round(frame.timestampSeconds * 1000)}`;
           const base = { timestampSeconds:frame.timestampSeconds, evidenceFrameUrl:frame.ref, originalVideoBoundingBox:null, reviewStatus:'unreviewed' as const, localizationStatus:'localized' as const, objectLabel:null, parentDetectionId:null };
           if (frame === extracted[0]) (supplemental || []).forEach((d,i)=>findings.push({...base, kind:'object', label:d.label, description:`${d.description} (Gemini-assisted observation; requires review.)`, boundingBox:d.boundingBox, detectionSource:'gemini', detectionId:`${key}_supplemental_${i}`}));
+          (damage?.objects?.get(frame.timestampSeconds)||[]).forEach((d,i)=>findings.push({...base,kind:'object',label:d.label,description:`${d.description} (Argon source-view observation; repeated views may show the same item.)`,boundingBox:d.boundingBox,detectionSource:'gemini',detectionId:`${key}_loose_${i}`}));
           (damage?.get(frame.timestampSeconds) || []).forEach((d,i)=>{
             const box=d.boundingBox;
             const owner=box?frame.detections.filter(o=>box.x+box.width/2>=o.boundingBox.x&&box.x+box.width/2<=o.boundingBox.x+o.boundingBox.width&&box.y+box.height/2>=o.boundingBox.y&&box.y+box.height/2<=o.boundingBox.y+o.boundingBox.height).sort((a,b)=>a.boundingBox.width*a.boundingBox.height-b.boundingBox.width*b.boundingBox.height)[0]:null;

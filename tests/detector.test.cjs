@@ -26,3 +26,9 @@ test('YOLO reverses portrait padding and clips source bounds',()=>{
  const out=decodeDetections(tensor(rows),[1,84,1],360,640);
  assert.deepEqual(out[0].boundingBox,{x:0,y:0,width:1,height:1});
 });
+test('loose COCO objects are decoded with their real class IDs without inventing a pillow class',()=>{
+ const rows=[{box:[100,100,60,60],classId:41,score:.9},{box:[300,300,60,60],classId:65,score:.85},{box:[500,500,60,60],classId:73,score:.8}];
+ const results=decodeDetections(tensor(rows),[1,84,3],640,640);
+ assert.deepEqual(results.map(d=>[d.classId,d.label]),[[41,'cup'],[65,'remote'],[73,'book']]);
+ assert(!Object.values(ROOM_CLASSES).includes('pillow'));assert(!Object.values(ROOM_CLASSES).includes('cushion'));
+});

@@ -1,6 +1,7 @@
 "use client";
 import Link from "next/link";
 import DotField from "./dot-field";
+import PixelLoader from "./pixel-loader";
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -16,7 +17,7 @@ import NativePlayback from "./native-playback";
 import EvidenceTimeline from "./evidence-timeline";
 import type { Finding, Inspection, Room } from "@/lib/types";
 import type { SpatialManifest, SpatialMarker } from "@/lib/spatial/types";
-import { furnitureNames, isFurniture, isFurnitureLabel } from "@/lib/spatial/furniture";
+import { furnitureNames, isFurniture } from "@/lib/spatial/furniture";
 const SpatialViewer = dynamic(() => import("./spatial-viewer"), { ssr: false, loading: () => <div className="room-scene"><div className="room-scene-loading is-live"><DotField /><p>Loading your room in 3D…</p></div></div> });
 
 type Capture = { capture: { manifest: SpatialManifest } | null; markers: SpatialMarker[] };
@@ -46,7 +47,21 @@ export default function RoomDetail({ roomId }: { roomId: string }) {
   // Keep polling while a scan is still being analysed.
   useEffect(() => { if (!scans?.some(i => i.status === "processing" || i.status === "queued")) return; const t = setInterval(() => { void loadScans().catch(() => {}); }, 6000); return () => clearInterval(t); }, [scans, loadScans]);
 
-  useEffect(()=>{if(record?.scanReportStatus!=="processing")return;const timer=setInterval(()=>setRefresh(v=>v+1),4000);return()=>clearInterval(timer);},[record?.scanReportStatus]);
+  useEffect(()=>{
+    if(!current || record?.id!==current || (record.status!=="processing"&&record.status!=="queued"&&record.scanReportStatus!=="processing"))return;
+    let active=true,running=false;
+    const timer=setInterval(()=>{if(running)return;running=true;
+      void api.inspection(current).then(async data=>{
+        if(!active)return;
+        if(data.inspection.status!=="processing"&&data.inspection.status!=="queued"&&record.status!==data.inspection.status){
+          const response=await fetch(`/api/inspections/${current}/spatial`);
+          if(response.ok){const c=await response.json();if(active)setCapture(c);}
+        }
+        if(active){setRecord(data.inspection);setFindings(data.findings);}
+      }).catch(()=>{}).finally(()=>{running=false;});
+    },4000);
+    return()=>{active=false;clearInterval(timer);};
+  },[current,record?.id,record?.status,record?.scanReportStatus]);
   const scan = scans?.find(i => i.id === current);
   useEffect(() => {
     if (!current) { setCapture(null); setFindings([]); return; }
@@ -56,7 +71,7 @@ export default function RoomDetail({ roomId }: { roomId: string }) {
       .catch(e => { if (active) setError(e.message); })
       .finally(() => { if (active) setLoadingScan(false); });
     return () => { active = false; };
-  }, [current, scan?.status, refresh]);
+  }, [current, refresh]);
 
   const manifest = capture?.capture?.manifest;
   const furniture = useMemo(() => manifest?.elements.filter(isFurniture) || [], [manifest]);
@@ -92,7 +107,7 @@ export default function RoomDetail({ roomId }: { roomId: string }) {
     const items = [...damage, ...views]; return items.length ? { title: names.get(selected) || "Furniture", items } : null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected, focusFinding, byElement, elsewhere, findings, names]);
-  const looseFurniture = useMemo(() => manifest ? [] : findings.filter(f => f.kind === "object" && isFurnitureLabel(f.label)), [findings, manifest]);
+  const looseFurniture = useMemo(() => findings.filter(f => f.kind === "object" && (!manifest || !f.spatialElementId)), [findings, manifest]);
   const focusedFindingId = capture?.markers.find(m=>`marker-${m.id}`===focusFinding)?.findingId || focusFinding;
   const cueId = focusedFindingId || (selected ? findings.find(f => f.spatialElementId === selected && f.kind === "damage" && f.reviewStatus !== "rejected" && f.timestampSeconds != null)?.id || findings.find(f => f.spatialElementId === selected && f.timestampSeconds != null)?.id : undefined);
   const { cloud, reconstructing } = useObjectReconstruction(current, selected);
@@ -169,21 +184,22 @@ export default function RoomDetail({ roomId }: { roomId: string }) {
       <aside className="room-detail-panel" aria-label="What was found">
         <div className="room-summary">
           {loadingScan || !scans ? <><span className="skeleton" style={{ display: "block", height: 18, width: "80%" }} /><span className="skeleton" style={{ display: "block", height: 18, width: "60%", marginTop: 10 }} /></> :
-            <p>{manifest ? `${furniture.length} ${furniture.length === 1 ? "piece" : "pieces"} of furniture measured` : `${looseFurniture.length} furniture ${looseFurniture.length === 1 ? "item" : "items"} seen`}. {open ? `${open} ${open === 1 ? "thing needs" : "things need"} your review` : "Nothing waiting for review"}{confirmed ? `, ${confirmed} confirmed` : ""}.</p>}
+            <p>{manifest ? `${furniture.length} ${furniture.length === 1 ? "piece" : "pieces"} of furniture measured` : `${looseFurniture.length} ${looseFurniture.length === 1 ? "item" : "items"} seen`}. {open ? `${open} ${open === 1 ? "thing needs" : "things need"} your review` : "Furniture condition pending review"}{confirmed ? `, ${confirmed} confirmed` : ""}.</p>}
         </div>
+        {record?.id===current&&(record.scanReportStatus==="processing"||record.status==="processing"||record.status==="queued")&&<PixelLoader label={record.scanReportStatus==="processing"?"Argon is generating the room report…":"Argon is checking source frames…"}/>}
         {record?.id===current&&record.scanReport&&<section className="scan-report"><p className="eyebrow">ARGON ROOM REPORT</p><p>{record.scanReport.summary}</p><details><summary>Inventory &amp; coverage</summary><ul>{record.scanReport.inventory.map((item,index)=><li key={index}><b>{item.count??'Count uncertain'} {item.label}</b> — {item.description}</li>)}</ul>{record.scanReport.limitations.map((text,index)=><p key={index}>{text}</p>)}</details></section>}
         {record?.id===current&&record.reportComparison&&<section className="scan-report"><h3>Check-out flags</h3>{record.reportComparison.flags.length?<ul>{record.reportComparison.flags.map(flag=><li key={flag.id}><b>{flag.category==='missing_or_changed'?'Potential missing or changed items':flag.category==='potentially_new'?'Potential new damage':'Needs a closer look'}</b><p>{flag.explanation}</p></li>)}</ul>:<p>No potential changes flagged in comparable views.</p>}<Link href={`/rooms/${roomId}/compare?baseline=${record.reportComparison.baselineInspectionId}&current=${current}`}>Review comparison ↗</Link></section>}
         {manifest && <ol className="room-furniture" onMouseLeave={() => setHovered(null)}>
-          {furniture.map(e => { const list = byElement.get(e.id) || [], active = list.filter(d => d.status !== "rejected").length; return <li key={e.id} data-selected={selected === e.id} data-hovered={hovered === e.id}>
+          {furniture.map(e => { const list = byElement.get(e.id) || []; return <li key={e.id} data-selected={selected === e.id} data-hovered={hovered === e.id}>
             <button type="button" data-tone={tones[e.id] || ""} onMouseEnter={() => setHovered(e.id)} onFocus={() => setHovered(e.id)} onClick={() => { setSelected(s => s === e.id ? null : e.id); setFocusFinding(null); }} aria-expanded={selected === e.id}>
               <span className="room-furniture-name"><b>{names.get(e.id)}</b>{selected === e.id && <small>{(cloud?.elementId === e.id ? [cloud.measurements.width, cloud.measurements.height, cloud.measurements.depth] : e.dimensions).map(n => n.toFixed(2)).join(" × ")} m · width × height × depth</small>}</span>
-              <span className={`room-furniture-state ${tones[e.id] ? `has-damage tone-${tones[e.id]}` : ""}`}>{tones[e.id] === "damage" ? `${list.filter(d => d.status === "confirmed").length} confirmed` : active ? `${active} to check` : "No issues noted"}</span>
+              <span className={`room-furniture-state has-damage tone-${tones[e.id] === "damage" ? "damage" : "check"}`}>{tones[e.id] === "damage" ? "Damage found" : "Pending review"}</span>
             </button>
             {selected === e.id && <div className="room-furniture-detail">{list.length ? <ul>{list.map(renderDamage)}</ul> : <p>Nothing was flagged on this piece. That only covers what the scan could see.</p>}</div>}
           </li>; })}
           {!furniture.length && !loadingScan && <li className="room-furniture-empty">No furniture was measured in this scan.</li>}
         </ol>}
-        {!manifest && looseFurniture.length > 0 && <ol className="room-furniture">{looseFurniture.map(f => <li key={f.id} data-selected={focusFinding === f.id}><button type="button" onClick={() => setFocusFinding(f.id)}><span className="room-furniture-name"><b>{f.label}</b><small>Seen at {Math.floor(f.timestampSeconds || 0)}s</small></span></button></li>)}</ol>}
+        {looseFurniture.length > 0 && <ol className="room-furniture">{looseFurniture.map(f => <li key={f.id} data-selected={focusFinding === f.id}><button type="button" onClick={() => setFocusFinding(f.id)}><span className="room-furniture-name"><b>{f.label}</b><small>Seen at {Math.floor(f.timestampSeconds || 0)}s · {f.detectionSource==="yolo"?"YOLO":"Argon"}</small></span><span className="room-furniture-state has-damage tone-check">Pending review</span></button></li>)}</ol>}
         {elsewhere.length > 0 && <section className="room-elsewhere"><h3>Elsewhere in the room</h3><ul>{elsewhere.map(renderDamage)}</ul></section>}
         {current && scan && ready(scan) && <div className="room-detail-links"><Link href={`/inspections/${current}/report`}>Export report ↗</Link><Link href={`/inspections/${current}/spatial`}>Edit markers ↗</Link></div>}
         <p className="inventory-note">AI suggestions need your review. A scan that notes nothing does not prove there is no damage.</p>

@@ -6,7 +6,7 @@ export type Detection = { objectId: string; label: string; classId: number; conf
 export const MODEL_NAME = "YOLO11n COCO80";
 const SIZE = 640;
 // Names and indices are the original COCO classes; unsupported furniture is not relabelled.
-export const ROOM_CLASSES: Record<number, string> = { 56: "chair", 57: "couch", 58: "potted plant", 59: "bed", 60: "dining table", 61: "toilet", 62: "tv", 63: "laptop", 68: "microwave", 69: "oven", 70: "toaster", 71: "sink", 72: "refrigerator", 74: "clock", 75: "vase" };
+export const ROOM_CLASSES: Record<number, string> = { 24: "backpack", 26: "handbag", 28: "suitcase", 39: "bottle", 40: "wine glass", 41: "cup", 45: "bowl", 56: "chair", 57: "couch", 58: "potted plant", 59: "bed", 60: "dining table", 61: "toilet", 62: "tv", 63: "laptop", 64: "mouse", 65: "remote", 66: "keyboard", 67: "cell phone", 68: "microwave", 69: "oven", 70: "toaster", 71: "sink", 72: "refrigerator", 73: "book", 74: "clock", 75: "vase", 77: "teddy bear" };
 function iou(a: Detection["boundingBox"], b: Detection["boundingBox"]) {
   const intersection = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x)) * Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y));
   return intersection / (a.width * a.height + b.width * b.height - intersection);
