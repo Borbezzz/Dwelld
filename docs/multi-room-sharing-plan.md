@@ -1,19 +1,18 @@
-# Multi-room spaces and shared inspections
+# Multi-room Spaces and shared inspections
 
-## Product flow
-A **Space** is one property (for example, "Flat 12"). It owns several rooms, each retaining its own scans, coordinate origin, evidence, and existing move-in/move-out comparison. Existing single rooms stay valid with `spaceId: null`. The first safe backend slice adds `/api/spaces`, optional `spaceId` when creating a room, and `PATCH /api/rooms/:id` to attach/detach an existing owned room.
+Dwelld groups a property under a **Space**, with separate room records, check-in and check-out inspections, and invitations.
 
-## Next UI slice
-Dashboard -> property list -> room list, with room name editable. For a native scan, suggest "Room 1", "Room 2" and so on; allow rename. Treat an ARKit/RoomPlan doorway as a *candidate boundary* when its doorway plane is crossed by a stable tracked camera trajectory and enough samples exist on both sides. Prompt "New room?" and allow merge/undo. Do not infer adjacency based solely on seeing a door; a door may be a wardrobe or exterior entrance. Persist room-to-room edges and alignment metadata. Multi-room splitting needs native tests, saved per-room spatial manifests/segmentation, and a clear scan-origin strategy. Never cut a PLY blob at arbitrary offsets.
+## Implemented on this feature branch
+- Create a Space, open its own overview page, add or assign rooms, and retain existing ungrouped rooms.
+- Invite a tenant or landlord by email-bound, seven-day, one-use URL. Copy it to the intended recipient; no automatic outgoing email is configured.
+- The invited person signs in using that email, accepts the invitation and sees shared spaces/rooms on their dashboard. The owner can remove members or revoke pending links.
+- Members can start their own video or paired LiDAR inspections of shared rooms, review their own findings, and see the other party's stored scans, source video, spatial assets, reports and comparisons.
+- Members can compare two finished scans of one shared room regardless of which participant created them. Comparison reviews retain reviewer identity and history. Destructive inspection edits remain reserved for the scan creator.
+- Space owner retains project administration, and deleting a room is blocked if it contains a different member's inspections. After revocation, people cannot read the other party's private evidence, although they retain access to their own scan records.
+- Measured door planes plus timestamped ARKit camera trajectories generate likely doorway crossings. The scan creator can confirm, reject, and rename those proposed room boundaries in the spatial workspace. Geometry and media remain unmodified.
 
-## Sharing architecture, before exposing UI
-Sharing is **not enabled by this slice**. The existing system authorizes evidence, media and all mutations using `ownerId`. A safe invitation must instead introduce explicit `spaceMembers` with owner, landlord and tenant roles, a scoped invite token stored hashed and expiring, accept/revoke/audit endpoints, and a central read/write permission helper applied to rooms, inspections, findings, live sessions, comparisons, reports, private media and search. Ownership is retained for billing/deletion. No public bearer media URLs.
+## Still requiring native/device integration and validation
+A confirmed suggested doorway is saved as a section of the existing scan. It does **not** yet cut a global Gaussian PLY into independently aligned room splats or automatically create a new live RoomPlan capture/session at the doorway. To give a second room its own move-in/move-out scan today, create that room in the Space and capture it with its own scan. Fully continuous multi-room native capture requires implementing RoomPlan multiroom structure coordination and verifying on actual LiDAR hardware, alongside per-room evidence partitioning and shared-media deletion/reference counting. No claim of those steps being complete is made.
 
-Recommend explicit permissions: owners manage membership; members can create their own check-in/check-out inspection for rooms in the Space, see shared scans and evidence, and review their own findings. A signed-off snapshot should be immutable with timestamp, actor, evidence references and revision history; disagreements remain separate observations, never silent edits to the other party's evidence. Sharing is optional and requires explicit consent.
-
-## Rollout and verification
-1. Create a Space and add an existing and a new room; confirm old ungrouped room works unchanged.
-2. Check wrong-account space assignment returns 404; invalid IDs return 400; ensure room/list serialization is consistent.
-3. Implement dashboard grouping, then multi-room detection on a LiDAR device with doorway boundary confirmation and room-specific capture uploads.
-4. Build membership/invitation and audit every auth/media route as one feature before enabling any landlord-facing controls.
-5. Test tenant and landlord access, revocation (including media and cached client data), account isolation, conflicting check-in/out claims, and ownership/deletion paths.
+## Security and acceptance checks
+Verify a landlord can accept only an invitation addressed to their signed-in email; revocation immediately blocks read of the other participant's room/inspection/video/asset/report; scan creators retain their own evidence; non-members cannot read a space. Run concurrent invite acceptance, scan and comparison mutations, media-range playback, and the existing single-room regression suite. `npm ci && npm run lint && npm test && npm run build`; run the iOS target with Xcode on LiDAR hardware. Vercel preview and a source review are not substitutes for a real-device test.
