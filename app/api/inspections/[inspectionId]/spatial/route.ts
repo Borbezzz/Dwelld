@@ -1,3 +1,4 @@
+import { sealLater } from "@/lib/server/ledger";
 import {readJsonBody,readTextBody} from "@/lib/server/request-body";
 import { NextResponse, after } from "next/server";
 import { analyzeSpatialInspection } from "@/lib/server/spatial-analysis";
@@ -48,6 +49,7 @@ export async function POST(request: Request, { params }: Context) {
     if (existing && JSON.stringify(existing.manifest) === JSON.stringify(manifest)) return NextResponse.json({saved:true,alreadySaved:true});
     if (existing) return NextResponse.json({ error: "This inspection already has a capture. Use a new inspection for a different scan." }, { status: 409 });
     await db.collection("spatialCaptures").insertOne({ inspectionId: inspection._id, roomId: inspection.roomId, ownerId: user.id, manifest, createdAt: new Date() });
+    after(() => sealLater(inspection._id));
     if (inspection.captureSource === "native-lidar") {
       await db.collection("inspections").updateOne({ _id: inspection._id }, { $set: { status: "processing", analysisWarnings: ["Measured capture saved; image damage analysis is running."] } });
       after(() => analyzeSpatialInspection(inspection, manifest));

@@ -9,7 +9,7 @@ Exact bounty rules: [`docs/BOUNTY-REQUIREMENTS.md`](docs/BOUNTY-REQUIREMENTS.md)
 
 ## 1. The person (fill in before recording)
 
-**[Friend's name]** rented a room in a university dorm. When he moved out, the university said he had damaged **[the desk / wardrobe door / wall, fill in]** and charged him **£[amount]**. The damage was already there when he moved in. He had no proof, so he paid.
+**Charlie** rented a room in a university dorm. When he moved out, the university said he had damaged **[the desk / wardrobe door / wall, fill in]** and charged him **£[amount]**. The damage was already there when he moved in. He had no proof, so he paid.
 
 Use his real first name in the video and the live demo. The Gemini judges score "a specific person you can name" at 25%. If he agrees, show one photo of the actual item, or quote one line from the charge email.
 
@@ -34,7 +34,7 @@ The positioning matters: we are **not** claiming fully automatic damage detectio
 | Criterion (weight) | What we show | Where in code |
 | --- | --- | --- |
 | **Working live demo (50%)**: real inputs, under 3 min, Argon used effectively, **real verification loop** | A live LiDAR scan of a real room on stage. Argon checks each evidence photo as it arrives. **Two verification loops with concrete pass/fail signals:** (1) a second, adversarial Argon pass (`thinking_level: medium`) tries to reject every finding; ≥0.85 confidence auto-approves, "not damage" ≥0.6 drops it. (2) A deterministic edge + LiDAR-depth test accepts or rejects every crack: a depth step of 1.2 cm or more, or a brightness step across the line, means it's an object edge. | `lib/server/frame-analysis.ts`, `lib/server/verify.ts`, `lib/server/crack-check.ts` |
-| **Problem and usefulness (25%)**: named person, could become a product | [Friend's name]'s dorm charge. Product path: renters and students first, then letting agents and universities who run thousands of check-ins and check-outs. | — |
+| **Problem and usefulness (25%)**: named person, could become a product | Charlie's dorm charge. Product path: renters and students first, then letting agents and universities who run thousands of check-ins and check-outs. | — |
 | **Needs Argon (15%)** | See "Why Gemini 4 Argon" below. **People stay in control:** nothing is final until a person confirms it. Rejections are visible, not hidden. No action leaves the app without the user. | `components/room-detail.tsx` (review), `app/api/inspections/[id]/findings` |
 | **Clarity (10%)**: user and product clear in 3 min, no slides | The live demo uses the product only, with no slides. (The deck in §7 is for the recorded video's opening and closing only.) | — |
 
@@ -82,13 +82,17 @@ Setup on the deployed app: set `VOYAGE_API_KEY` in Vercel, open `/search`, click
 
 | Criterion | What we show |
 | --- | --- |
-| **Real-world usefulness** | [Friend's name]'s deposit. Renters, students and the people who check them in and out. |
+| **Real-world usefulness** | Charlie's deposit. Renters, students and the people who check them in and out. |
 | **How well it reads the world**, incl. messy inputs | Real LiDAR + RGB from an iPhone. Motion-aware frame picking (the steadier of each pair of frames). Depth-confidence filtering (LiDAR confidence 2 only, 0.2–6 m). Coverage warnings ("photos and LiDAR geometry do not cover every surface"). The crack check rejects board edges and door gaps using depth. Duplicate findings are merged by 3D position. A scan can be **resumed later** by relocalizing with ARKit into the same coordinates. |
 | **Technical execution** | End to end: phone scan → live 3D on the laptop → Gemini + YOLO + geometry checks → Atlas → search → move-out comparison → report. |
 | **Responsibility: privacy** | Full-resolution originals **stay on the phone**. Only sampled evidence photos and a compact point cloud are uploaded. Dwelld is meant for **empty rooms** at move-in and move-out (say this out loud). Every record and media file is owner-scoped and served `private, no-store`. Room scans aren't public. We don't detect or blur faces; the empty-room rule is the safeguard, and we say so. |
 | **Responsibility: honesty about uncertainty** | Every AI finding starts **amber (needs a look)** until a person confirms it, unless the verifier is at least 85% sure (the threshold is configurable). The verifier's verdict and confidence are stored and shown. Rejected crack candidates are reported, not silently dropped. Search shows which index answered and when a fallback was used. The comparison states that "unseen areas cannot establish absence". A missing detection is never presented as "no damage". |
 
 **Models and data sources note (paste into the submission):** Gemini 4 Argon (detection, verification, describe-at-point, comparison, Q&A). gemini-embedding-001. Voyage voyage-4 (via Atlas Automated Embedding), voyage-multimodal-3.5 and rerank-3. YOLO11n (Ultralytics, AGPL-3.0, ONNX in the browser) for object detection on uploaded walkthrough videos. A YOLOv8n-seg crack model (`public/models/CRACK-MODEL.md`) as a crack candidate source, screened by our edge + depth check. Apple RoomPlan (furniture and wall geometry) and ARKit (LiDAR depth, camera poses, world-map relocalization). **Data:** only the user's own phone captures (RGB, LiDAR depth, camera poses). No third-party or open datasets.
+
+### Proving when: the evidence seal
+
+The question every judge will ask is "how do I know this was taken at move-in?" Dwelld seals every saved scan. The server fingerprints each evidence file with SHA-256 and chains the seal to the previous one, so any edit or backdating breaks the chain. Each seal is signed with an Ed25519 key that anyone can check. The report shows "Verified" after re-hashing every file live. For the demo, open a report, point at the seal, and click **Verify again**. For Q&A: it proves nothing changed after sealing, and sharing the room with the landlord at move-in shows when the evidence existed.
 
 ## 4. Technology used
 
@@ -104,7 +108,7 @@ Record the screen at 1080p with a phone overhead or over the shoulder for the sc
 
 | Time | Picture | Voice-over (approximate) | Criteria it covers |
 | --- | --- | --- | --- |
-| 0:00–0:12 | Title card (deck slide 1), then [Friend's name]'s photo or the charge email, blurred where needed | "[Name] paid £[amount] for a scratch that was already there when he moved in. He had no proof." | Named person, problem |
+| 0:00–0:12 | Title card (deck slide 1), then Charlie's photo or the charge email, blurred where needed | "[Name] paid £[amount] for a scratch that was already there when he moved in. He had no proof." | Named person, problem |
 | 0:12–0:20 | Slide 2: "Scan once. Pin every mark. Prove it later." | "Dwelld turns a two-minute phone scan into evidence." | Clarity |
 | 0:20–0:50 | Split screen: phone scanning (over the shoulder) and the laptop room building live in 3D, furniture boxes appearing | "The iPhone's LiDAR measures the room. RoomPlan finds the desk, the wardrobe and the door. The laptop builds it live." | Live demo, real inputs |
 | 0:50–1:15 | Amber candidates appear. Click one: evidence photo with box, then the verifier verdict. Show a rejected "crack" on the whiteboard edge with its reason. | "Gemini 4 Argon checks every photo. A second Argon pass argues against each finding, and a depth check throws out fake cracks, like the edge of this whiteboard." | Verification loop, honesty |
@@ -123,7 +127,7 @@ Record the screen at 1080p with a phone overhead or over the shoulder for the sc
 
 ## 6. Pre-recording checklist
 
-- [ ] Fill in [Friend's name], the item and the amount everywhere in this file.
+- [ ] Fill in Charlie, the item and the amount everywhere in this file.
 - [ ] `VOYAGE_API_KEY` set in Vercel (Atlas → AI Models → create a model API key), then redeploy.
 - [ ] `/search` → **Create or update indexes** → all four READY → **Prepare my findings** until 0 remaining.
 - [ ] Check the panel says "$rankFusion supported". If it doesn't, the page says the app-side fallback is in use; mention it honestly.
@@ -137,7 +141,7 @@ Record the screen at 1080p with a phone overhead or over the shoulder for the sc
 Four slides, in the website's style: warm paper `#f8f8f3`, ink `#202723`, sage `#dae7da`, terracotta `#c8755b`, serif headings.
 
 1. **Title:** "dwelld." in large serif. Subtitle: "Your room remembers." A full-bleed still of the LiDAR splat of the real room, darkened, with one terracotta pin on a scuff.
-2. **The problem:** a photo of [Friend's name]'s item (or the charge email, cropped) on the left. On the right, one line in large serif: "£[amount] for damage that was already there." Small caption: "No location. No timestamp. No proof."
+2. **The problem:** a photo of Charlie's item (or the charge email, cropped) on the left. On the right, one line in large serif: "£[amount] for damage that was already there." Small caption: "No location. No timestamp. No proof."
 3. **How it works:** a four-step horizontal flow with thin rules and icons. *Scan* (iPhone LiDAR + RoomPlan) → *Check* (Gemini 4 Argon + verifier + depth check) → *Remember* (MongoDB Atlas: Search, Automated Embedding, Voyage photo vectors, $rankFusion) → *Prove* (move-in vs move-out comparison). Partner logos in a quiet row underneath.
 4. **Close:** "Every claim checkable: who saw it, where, when, and how sure." A small line with the repo URL and the team names.
 

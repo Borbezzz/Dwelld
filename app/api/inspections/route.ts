@@ -1,3 +1,4 @@
+import { sealLater } from "@/lib/server/ledger";
 import {readJsonBody} from "@/lib/server/request-body";
 import { canReadRoom } from "@/lib/server/space-access";
 import { requireUser } from "@/lib/server/access";
@@ -83,6 +84,8 @@ export async function POST(request: Request) {
     };
     await inspections.insertOne(inspectionDoc);
 
+    // Seal the original recording before anything else touches it.
+    after(() => sealLater(inspectionId));
     after(() => runVideoInspection(db, inspectionId, user.id, roomId, videoUrl, mimeType, detectionFrames));
     return NextResponse.json({
       inspection: { id: String(inspectionId), roomId: String(roomId), status: "processing", createdAt: createdAt.toISOString(), videoUrl: "/api/inspections/" + String(inspectionId) + "/video" },

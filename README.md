@@ -282,6 +282,7 @@ Keep secrets in ignored environment files or deployment configuration. Gemini/Mo
 | `BETTER_AUTH_URL` | Configure per environment | Exact origin, including local port; example uses `http://localhost:3001`. |
 | `GEMINI_API_KEY` | AI features | Server-side generation and embedding credential. |
 | `VOYAGE_API_KEY` | Photo search, rerank | Voyage AI by MongoDB model API key (Atlas UI → AI Models). Used against `https://ai.mongodb.com/v1` (`VOYAGE_BASE_URL` to change). Automated Embedding needs no key here. |
+| `LEDGER_SECRET` | Optional | Secret for the evidence seal's Ed25519 signing key (32+ characters). Defaults to `BETTER_AUTH_SECRET`; changing it means new seals use a new key. |
 | `ATLAS_AUTO_EMBED_MODEL` | Optional | Model for the `findings_auto` autoEmbed index, default `voyage-4`. |
 | `GEMINI_MODEL` | Optional override | Generation model; source/example default is `gemini-4-argon`. Verify access in your project; a configured identifier does not establish availability. |
 | `TURN_URLS` | Optional WebRTC path | Comma-separated `turn:`/`turns:` endpoints. |
@@ -494,6 +495,12 @@ flowchart TD
 Setup: create the four indexes with the **Create or update indexes** button on /search (`POST /api/search/setup?action=indexes`) or `node --env-file=.env scripts/setup-search-indexes.cjs`. Then **Prepare my findings** (`POST /api/search/setup?action=prepare`) writes `searchText`, Gemini vectors and, when `VOYAGE_API_KEY` is set, photo vectors. Analyses also prepare new findings automatically. Search refuses to run against an index that isn't queryable; there is no silent regex fallback.
 
 The global Ask Records interface supplies Gemini with up to 12 recent inspection summaries and 12 hybrid-retrieved findings. The API validates citation IDs and links sources back to inspections. If retrieval fails, it explicitly warns that only recent summaries were supplied. Answers are bounded retrieval samples, not exhaustive history or new image analysis.
+
+## Evidence seal (tamper-evident ledger)
+
+When a scan or video is saved, the server takes a SHA-256 fingerprint of every evidence file in GridFS (photos, depth maps, the 3D splat, the recording and marked photos). It appends a seal to the `evidenceLedger` collection. Each seal is the SHA-256 of `dwelld-seal-v1`, its position, the inspection and room IDs, the server time, the combined file fingerprint and **the previous seal**, so the entries form a chain. Editing a photo, backdating an inspection or deleting an entry breaks every seal after it. Seals are signed with Ed25519. The key is derived from `LEDGER_SECRET` (falls back to `BETTER_AUTH_SECRET`), and the public key is published at `GET /api/ledger/key`.
+
+`GET /api/inspections/{id}/seal` re-hashes the stored files and checks the signature and the whole chain. Anyone the room is shared with (for example the landlord) can run it, and the report shows the result. `POST` seals an older inspection that predates sealing. Limit: the chain proves nothing changed after sealing, but whoever runs the server could rebuild the whole chain. Sharing the record with the landlord at move-in, or publishing the latest seal somewhere public, closes that gap. Core logic and tests: `lib/server/ledger-core.ts`, `tests/ledger.test.cjs`.
 
 ## Comparisons and reports
 
