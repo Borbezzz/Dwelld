@@ -106,7 +106,8 @@ export async function analyzeDetectedImage(image: Buffer, detections: ClientDete
   return findings;
 }
 
-export async function analyzeVideo(videoUrl: string, mimeType: string, clientFrames: unknown): Promise<{ durationSeconds: number; findings: AnalyzedFinding[]; warnings: string[]; incomplete: boolean; evidenceFrames: {timestampSeconds: number; url: string}[]; analysisRunId: string }> {
+export type VideoCheckpoint = { phase:'extracting'|'checking'; durationSeconds:number; totalFrames:number; processedFrames:number; findings:AnalyzedFinding[]; evidenceFrames:{timestampSeconds:number;url:string}[]; analysisRunId:string; warnings:string[] };
+export async function analyzeVideo(videoUrl: string, mimeType: string, clientFrames: unknown, onCheckpoint?: (checkpoint:VideoCheckpoint)=>Promise<void>): Promise<{ durationSeconds: number; findings: AnalyzedFinding[]; warnings: string[]; incomplete: boolean; evidenceFrames: {timestampSeconds: number; url: string}[]; analysisRunId: string }> {
   const deadlineMs = Date.now() + 200_000; // Leave time for persistence and bounded verification in the 300s function.
   const warnings: string[] = [];
   const analysisRunId = randomUUID();
@@ -150,7 +151,9 @@ export async function analyzeVideo(videoUrl: string, mimeType: string, clientFra
     const evidenceFrames: {timestampSeconds: number; url: string}[] = [];
     const seenFrames = new Set<string>();
     const seenObjects = new Map<string, string>();
-    let cursor = 0;
+    let cursor = 0, processedFrames = 0;
+    const checkpoint = (phase:VideoCheckpoint['phase']) => onCheckpoint?.({phase,durationSeconds:frames.durationSeconds,totalFrames:selected.length,processedFrames,findings:[...findings],evidenceFrames:[...evidenceFrames],analysisRunId,warnings:[...new Set(warnings)]});
+    await checkpoint('extracting');
     async function worker() {
       while (cursor < selected.length) {
         const batch = selected.slice(cursor, cursor += 6);
@@ -176,7 +179,8 @@ export async function analyzeVideo(videoUrl: string, mimeType: string, clientFra
             warnings.push(`Evidence frame at ${frame.timestampSeconds}s could not be saved. This view remains unassessed.`);
           }
         }
-        if (!extracted.length) continue;
+        if (!extracted.length) { processedFrames+=batch.length; await checkpoint('checking'); continue; }
+        await checkpoint('checking');
         const range = `${batch[0].timestampSeconds}s–${batch[batch.length-1].timestampSeconds}s`;
         // Separate outcomes: a failed damage batch must not discard furniture, YOLO or evidence.
         const [damage, supplemental] = await Promise.all([
@@ -197,15 +201,21 @@ export async function analyzeVideo(videoUrl: string, mimeType: string, clientFra
             cracks.forEach((d,i)=>findings.push({...base, kind:'damage', label:'Potential crack', description:'Specialist crack candidate. Review against the source photo.', boundingBox:d.boundingBox, detectionSource:'crack-model', detectionId:`${key}_crack_${i}`, confidence:d.confidence}));
           } catch { warnings.push(`Specialist crack check at ${frame.timestampSeconds}s could not finish.`); }
         }
+        processedFrames+=batch.length;
+        await checkpoint('checking');
       }
     }
-    await Promise.all([worker(),worker()]);
+    const workers = await Promise.allSettled([worker(),worker()]);
+    const failure = workers.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+    if (failure) throw failure.reason;
     if (blocked) warnings.push('AI damage coverage is incomplete. Saved source frames, object detections and specialist crack candidates remain available; unassessed views are not declared undamaged.');
     findings.sort((a,b)=>a.timestampSeconds-b.timestampSeconds);
     evidenceFrames.sort((a,b)=>a.timestampSeconds-b.timestampSeconds);
     return {durationSeconds:frames.durationSeconds, findings, warnings:[...new Set(warnings)], incomplete:warnings.length>0, evidenceFrames, analysisRunId};
   } catch (error) {
-    await Promise.all(storedFrames.map(url=>deleteMedia(url).catch(()=>undefined)));
+    // Checkpoint writes may already reference these files, even if a later write fails.
+    // Published media belongs to the inspection and must remain available for review.
+    if (!onCheckpoint) await Promise.all(storedFrames.map(url=>deleteMedia(url).catch(()=>undefined)));
     throw error;
   } finally { await frames.close(); }
 }

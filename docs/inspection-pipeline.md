@@ -58,3 +58,19 @@ Regression checks cover failed damage batches preserving evidence/objects and in
 furniture/crack results, blocked-service circuit breaking, transient recovery, sanitized
 classification, timestamp coverage and parser validation. Full live analysis additionally
 requires valid provider billing/credentials and a signed-in owner of a saved video.
+
+## Incremental review and source playback
+
+Video analysis now serializes checkpoints after source extraction and after each completed
+batch. Findings are inserted once with stable IDs, without overwriting human review decisions.
+The record exposes actual frame counts and a verification phase while analysis continues.
+Published source media remains available if a later checkpoint fails. Processing still uses
+bounded `after()` execution; checkpoints do not make the job a durable queue.
+
+Video review uses one original-video player. Timestamp markers seek and pause at the assessed
+moment; hovering or focusing a mark shows its description. Boxes are visible only within
+0.4 seconds of their source timestamp, rather than pretending to track objects across frames.
+Native live observations select their exact source photo in the primary camera pane, with a
+return-to-live control. Saved captures expose a prominent next/review action independently
+of whether optional analysis has finished. Transient laptop polling failures preserve progress,
+retry automatically, and distinguish a quiet phone upload from a failed scan.

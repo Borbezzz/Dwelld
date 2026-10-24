@@ -102,14 +102,14 @@ test('billing caps and invalid keys are permanent blocks, distinct from transien
   assert.equal(analysisFailure({status:503}).retryable,true);
 });
 function videoWithServices(damage, furniture=async()=>[], cracks=async()=>[]) {
-  const saved=[];
+  const saved=[],deleted=[];
   const mod=load('lib/server/inspection.ts',{
     './damage':{validBox:b=>b,inspectVideoDamageBatch:damage,inspectUnsupportedFurniture:furniture},
     './crack-detector':{inspectCracks:cracks,CRACK_MODEL:'test'},
-    './media':{parseMediaId:()=>true,readMedia:async()=>Buffer.from('video'),writeMedia:async()=>{const ref=`gridfs:evidence-${saved.length}`;saved.push(ref);return ref;},deleteMedia:async()=>{}},
+    './media':{parseMediaId:()=>true,readMedia:async()=>Buffer.from('video'),writeMedia:async()=>{const ref=`gridfs:evidence-${saved.length}`;saved.push(ref);return ref;},deleteMedia:async ref=>{deleted.push(ref)}},
     './video-frames':{openVideoFrames:async()=>({durationSeconds:15,extract:async t=>Buffer.from(`frame-${t}`),close:async()=>{}})},
   });
-  return {...mod,saved};
+  return {...mod,saved,deleted};
 }
 test('failed damage batches retain every evidence image, real objects, independent furniture and crack candidates',async()=>{
   const furniture={label:'desk',description:'Visible desk',boundingBox:observation.boundingBox};
@@ -137,4 +137,18 @@ test('temporary batch outage retries once and successful recovery is fully asses
   });
   const result=await service.analyzeVideo('gridfs:video','video/mp4',[{timestampSeconds:0,detections:[]}]);
   assert.equal(attempts,4);assert.equal(result.incomplete,false);assert.equal(result.evidenceFrames.length,videoSampleTimes(15).length);
+});
+test('video evidence and actual detections reach a checkpoint before damage generation starts',async()=>{
+ let firstPublished=false;
+ const service=videoWithServices(async frames=>{assert(firstPublished);return new Map(frames.map(f=>[f.timestampSeconds,[]]));});
+ const result=await service.analyzeVideo('gridfs:video','video/mp4',[{timestampSeconds:0,detections:[{objectId:'chair1',label:'chair',boundingBox:observation.boundingBox}]}],async point=>{
+  if(point.evidenceFrames.length&&point.findings.some(f=>f.kind==='object'))firstPublished=true;
+ });
+ assert(firstPublished);assert.equal(result.incomplete,false);
+});
+
+test('checkpoint failure keeps already published evidence readable',async()=>{
+ const service=videoWithServices(async()=>new Map());
+ await assert.rejects(service.analyzeVideo('gridfs:video','video/mp4',[{timestampSeconds:0,detections:[]}],async point=>{if(point.evidenceFrames.length)throw new Error('checkpoint unavailable')}),/checkpoint unavailable/);
+ assert(service.saved.length>0);assert.deepEqual(service.deleted,[]);
 });

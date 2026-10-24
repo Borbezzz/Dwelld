@@ -28,11 +28,12 @@ export async function GET(request: Request, { params }: { params: Promise<{ insp
       inspection: {
         id: String(inspection._id), roomId: String(inspection.roomId), status: inspection.status, type: inspection.type || "move-in",
         createdAt: new Date(inspection.createdAt).toISOString(),
-        videoUrl: "/api/inspections/" + String(inspection._id) + "/video",
+        videoUrl: typeof inspection.sourceUrl === "string" ? "/api/inspections/" + String(inspection._id) + "/video" : undefined,
         durationSeconds: inspection.durationSeconds ?? null,
         analysisWarnings: inspection.analysisWarnings ?? [],
         evidenceFrames: inspection.evidenceFrames ?? [],
         analysisRunId: inspection.analysisRunId ?? null,
+        analysisProgress: inspection.analysisProgress ?? null,
         error: inspection.status === "failed" ? "Video analysis failed. Check service configuration and retry with a supported video." : null,
       },
       findings: serializedFindings,
