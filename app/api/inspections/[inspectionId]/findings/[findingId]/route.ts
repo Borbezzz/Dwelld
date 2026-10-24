@@ -38,7 +38,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ in
     return NextResponse.json({ finding: {
       id: String(updated._id), kind: updated.kind, label: updated.label, description: updated.description,
       timestampSeconds: updated.timestampSeconds, evidenceFrameUrl: updated.evidenceFrameUrl,
-      detectionSource: updated.detectionSource === "yolo" || updated.detectionSource === "gemini" || updated.detectionSource === "crack-model" ? updated.detectionSource : undefined,
+      detectionSource: updated.detectionSource === "yolo" || updated.detectionSource === "gemini" || updated.detectionSource === "crack-model" || updated.detectionSource === "roomplan" ? updated.detectionSource : undefined,
       boundingBox: updated.boundingBox ?? null, point: updated.point ?? null, source: updated.source ?? "ai", damageType: updated.damageType ?? null, reviewStatus: updated.reviewStatus,
       uncertain: !updated.boundingBox && !updated.point, objectId: updated.objectId ? String(updated.objectId) : null,
       objectLabel: updated.objectLabel ?? null,

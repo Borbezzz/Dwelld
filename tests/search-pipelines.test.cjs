@@ -33,6 +33,7 @@ test('displayed pipelines hide the owner and shorten vectors',()=>{
 });
 test('search text carries label, damage type and description',()=>{
  assert.equal(P.searchText({label:'Desk',damageType:'scratch',description:'Long scratch on top',kind:'damage'}),'Desk. scratch. Long scratch on top. damage');
+ assert.equal(P.searchText({label:'Desk',kind:'object',dimensions:[1.2,.75,.6]}),'Desk. measured 1.20 × 0.75 × 0.60 m. furniture or fixture');
 });
 test('vector map keeps neighbours together and places the query beside its match',()=>{
  const v=(...x)=>{const n=Math.hypot(...x);return x.map(y=>y/n);};

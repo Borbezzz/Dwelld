@@ -8,6 +8,7 @@ import { ArrowLeft, ArrowUpRight, Check, X } from "lucide-react";
 import { api } from "@/lib/api";
 import BrandLogo from "./brand-logo";
 import EvidenceViewer, { type EvidenceItem } from "./evidence-viewer";
+import WalkthroughPlayer from "./walkthrough-player";
 import type { Finding, Inspection, Room } from "@/lib/types";
 import type { SpatialManifest, SpatialMarker } from "@/lib/spatial/types";
 import { furnitureNames, isFurniture, isFurnitureLabel } from "@/lib/spatial/furniture";
@@ -84,6 +85,7 @@ export default function RoomDetail({ roomId }: { roomId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected, focusFinding, byElement, elsewhere, findings, names]);
   const looseFurniture = useMemo(() => manifest ? [] : findings.filter(f => f.kind === "object" && isFurnitureLabel(f.label)), [findings, manifest]);
+  const cueId = focusFinding || (selected ? findings.find(f => f.spatialElementId === selected && f.kind === "damage" && f.reviewStatus !== "rejected" && f.timestampSeconds != null)?.id || findings.find(f => f.spatialElementId === selected && f.timestampSeconds != null)?.id : undefined);
   const open = [...byElement.values()].flat().concat(elsewhere).filter(d => d.status === "pending").length;
   const confirmed = [...byElement.values()].flat().concat(elsewhere).filter(d => d.status === "confirmed").length;
 
@@ -133,10 +135,11 @@ export default function RoomDetail({ roomId }: { roomId: string }) {
           : manifest ? <SpatialViewer manifest={manifest} markers={capture?.markers || []} assetUrl={name => `/api/inspections/${current}/spatial/assets/${encodeURIComponent(name)}`} selectedElementId={selected} hoveredElementId={hovered} onSelectElement={id => { setSelected(id); setFocusFinding(null); }} onHoverElement={setHovered} elementTones={tones} />
           : scan && !ready(scan) ? <div className="room-scene"><div className="room-scene-loading is-live"><DotField /><p>{scan.status === "failed" ? "This scan could not be analysed." : "Analysing this scan. Findings appear here when it's done."}</p></div></div>
           : <div className="room-scene"><div className="room-scene-loading"><p>This scan was a video walkthrough, so there is no 3D room. Its findings are listed alongside.</p><Link className="text-button" href={`/inspections/${current}`}>Open video review ↗</Link></div></div>}
-        {manifest && <p className="room-scene-help"><span className="tone-key"><i className="tone-check" />Needs a look</span><span className="tone-key"><i className="tone-damage" />Damage confirmed</span><span>Drag to orbit · click furniture to see its footage</span></p>}
+        {manifest && <p className="room-scene-help"><span className="tone-key"><i className="tone-check" />Needs a look</span><span className="tone-key"><i className="tone-damage" />Damage confirmed</span><span>Drag to orbit · click furniture to measure it and open that moment</span></p>}
+        {scan?.videoUrl && <div className="room-video-dock"><WalkthroughPlayer src={scan.videoUrl} findings={findings} selectedId={cueId} onSelect={id => setFocusFinding(id)} /></div>}
         {scans && <div className="room-danger under-scene">{confirming ? <div className="room-confirm" role="group" aria-label="Confirm delete"><p>{confirming === "scan" ? `Delete the ${scan ? purpose(scan).toLowerCase() : ""} scan? Its 3D room, photos and findings are removed for good.` : `Delete ${room?.name || "this room"} and all ${scans.length} ${scans.length === 1 ? "scan" : "scans"}? This can't be undone.`}</p><span><button className="button button-danger" disabled={deleting} onClick={() => void remove(confirming)}>{deleting ? "Deleting…" : confirming === "scan" ? "Delete scan" : "Delete room"}</button><button className="text-button" disabled={deleting} onClick={() => setConfirming("")}>Keep it</button></span></div>
           : <>{current && scan?.isOwner!==false && !scan?.virtual && <button className="text-button" onClick={() => setConfirming("scan")}>Delete this scan</button>}{room?.isOwner!==false && <button className="text-button" onClick={() => setConfirming("room")}>Delete room</button>}</>}</div>}
-        {focus && <EvidenceViewer key={`${selected}-${focusFinding}`} title={focus.title} items={focus.items} videoUrl={capture?.capture ? undefined : `/api/inspections/${current}/video`} onClose={() => { setFocusFinding(null); setSelected(null); }} />}
+        {focus && !scan?.videoUrl && <EvidenceViewer key={`${selected}-${focusFinding}`} title={focus.title} items={focus.items} onClose={() => { setFocusFinding(null); setSelected(null); }} />}
       </section>
       <aside className="room-detail-panel" aria-label="What was found">
         <div className="room-summary">
@@ -146,7 +149,7 @@ export default function RoomDetail({ roomId }: { roomId: string }) {
         {manifest && <ol className="room-furniture" onMouseLeave={() => setHovered(null)}>
           {furniture.map(e => { const list = byElement.get(e.id) || [], active = list.filter(d => d.status !== "rejected").length; return <li key={e.id} data-selected={selected === e.id} data-hovered={hovered === e.id}>
             <button type="button" data-tone={tones[e.id] || ""} onMouseEnter={() => setHovered(e.id)} onFocus={() => setHovered(e.id)} onClick={() => { setSelected(s => s === e.id ? null : e.id); setFocusFinding(null); }} aria-expanded={selected === e.id}>
-              <span className="room-furniture-name"><b>{names.get(e.id)}</b><small>{e.dimensions.map(n => n.toFixed(2)).join(" × ")} m</small></span>
+              <span className="room-furniture-name"><b>{names.get(e.id)}</b>{selected === e.id && <small>{e.dimensions.map(n => n.toFixed(2)).join(" × ")} m · width × height × depth</small>}</span>
               <span className={`room-furniture-state ${tones[e.id] ? `has-damage tone-${tones[e.id]}` : ""}`}>{tones[e.id] === "damage" ? `${list.filter(d => d.status === "confirmed").length} confirmed` : active ? `${active} to check` : "No issues noted"}</span>
             </button>
             {selected === e.id && <div className="room-furniture-detail">{list.length ? <ul>{list.map(renderDamage)}</ul> : <p>Nothing was flagged on this piece. That only covers what the scan could see.</p>}</div>}

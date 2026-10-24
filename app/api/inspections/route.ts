@@ -18,7 +18,7 @@ function serializeInspection(doc: Record<string, any>, viewerId: string) {
   return {
     id: String(doc._id), roomId: String(doc.roomId), status: doc.status, type: doc.type || "move-in", isOwner: doc.ownerId===viewerId,
     createdAt: new Date(doc.createdAt).toISOString(),
-    videoUrl: "/api/inspections/" + String(doc._id) + "/video",
+    ...(typeof doc.sourceUrl === "string" ? { videoUrl: "/api/inspections/" + String(doc._id) + "/video" } : {}),
   };
 }
 

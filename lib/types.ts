@@ -2,7 +2,7 @@ export type ReviewStatus = "pending" | "confirmed" | "rejected";
 export interface Finding {
   id: string; kind: "object" | "damage"; label: string; description?: string;
   timestampSeconds?: number; evidenceFrameUrl?: string;
-  point?: { x: number; y: number }; source?: "manual" | "ai"; detectionSource?: "yolo" | "gemini" | "crack-model";
+  point?: { x: number; y: number }; source?: "manual" | "ai"; detectionSource?: "yolo" | "gemini" | "crack-model" | "roomplan";
   boundingBox?: { x: number; y: number; width: number; height: number };
   reviewStatus?: ReviewStatus; uncertain?: boolean; objectId?: string | null; spatialElementId?: string | null; damageType?: string | null; confidence?: number | null; autoApproved?: boolean; verification?: { verdict: string; confidence: number; reason: string } | null;
 }

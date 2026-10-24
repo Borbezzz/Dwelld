@@ -157,7 +157,7 @@ export default function SpatialViewer({ manifest, markers, assetUrl, onPick, sel
         const self = viewer as unknown as { render: () => void; splatRenderReady: boolean; renderer: THREE.WebGLRenderer; camera: THREE.Camera };
         const base = self.render.bind(viewer);
         self.render = () => { base(); if (!self.splatRenderReady) return; group.traverse(o => { if (o.userData.billboard) o.quaternion.copy(self.camera.quaternion); }); const r = self.renderer, saved = r.autoClear; r.autoClear = false; r.render(top, self.camera); r.autoClear = saved; };
-        await viewer.addSplatScene(splatUrl, { format: SceneFormat.Ply, showLoadingUI: false, position: position.toArray(), rotation: orientation.toArray(), scale: scale.toArray() });
+        await viewer.addSplatScene(splatUrl, { format: SceneFormat.Ply, showLoadingUI: false, progressiveLoad: true, position: position.toArray(), rotation: orientation.toArray(), scale: scale.toArray() });
         if (dead) return;
         camera = viewer.camera as THREE.PerspectiveCamera; controls = viewer.controls as typeof controls; canvas = viewer.renderer.domElement;
         render = () => viewer?.forceRenderNextFrame();
@@ -188,11 +188,14 @@ export default function SpatialViewer({ manifest, markers, assetUrl, onPick, sel
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [manifest, mode, splatUrl, compact, aligned]);
 
+  const selectedPiece = !compact && selectedElementId ? manifest.elements.find(e => e.id === selectedElementId && isFurniture(e)) : undefined;
+  const selectedName = selectedPiece ? furnitureNames(manifest.elements.filter(isFurniture)).get(selectedPiece.id) : undefined;
   return <div className={`room-scene ${compact ? "room-scene-compact" : ""} ${className}`}>
     <div ref={root} className="room-scene-canvas" aria-label="3D room: hover furniture to outline it, click to select" />
     {loading && <div className="room-scene-loading is-live"><DotField /><p>Loading your room in 3D…</p></div>}
     {tip && <span className="room-scene-tip" style={{ left: tip.x, top: tip.y }}>{tip.text}</span>}
     {!compact && splat && <div className="room-scene-modes" role="group" aria-label="3D view"><button type="button" aria-pressed={mode === "room"} onClick={() => setMode("room")}>Room</button><button type="button" aria-pressed={mode === "geometry"} onClick={() => setMode("geometry")}>Geometry</button></div>}
+    {selectedPiece && <aside className="room-measure" aria-label="Selected furniture measurements"><b>{selectedName || "Furniture"}</b><dl><dt>Width</dt><dd>{selectedPiece.dimensions[0].toFixed(2)} m</dd><dt>Height</dt><dd>{selectedPiece.dimensions[1].toFixed(2)} m</dd><dt>Depth</dt><dd>{selectedPiece.dimensions[2].toFixed(2)} m</dd></dl><p>Measured from this scan. Shown because this piece is selected.</p></aside>}
     {!compact && mode === "room" && splat && !aligned && <p className="room-scene-note">This reconstruction has no calibration, so furniture outlines are shown in Geometry view only.</p>}
     {error && <p className="room-scene-note" role="alert">{error}</p>}
   </div>;

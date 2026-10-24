@@ -20,7 +20,9 @@ export const PIPELINE_LABELS: Record<string, string> = {
 export const DEFAULT_WEIGHTS: Record<string, number> = { keyword: 1, meaning: 1, photo: 0.8 };
 
 export function searchText(doc: Document) {
-  return [doc.label, doc.damageType && doc.damageType !== doc.label ? doc.damageType : null, doc.description, doc.kind === "object" ? "furniture or fixture" : "damage"]
+  const size = Array.isArray(doc.dimensions) && doc.dimensions.length === 3 && doc.dimensions.every((n: unknown) => typeof n === "number" && Number.isFinite(n))
+    ? `measured ${(doc.dimensions as number[]).map(n => n.toFixed(2)).join(" × ")} m` : null;
+  return [doc.label, doc.damageType && doc.damageType !== doc.label ? doc.damageType : null, doc.description, size, doc.kind === "object" ? "furniture or fixture" : "damage"]
     .filter(Boolean).join(". ").slice(0, 4000);
 }
 

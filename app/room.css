@@ -6,6 +6,8 @@
 .room-scene-tip{position:absolute;z-index:3;transform:translate(14px,-130%);pointer-events:none;background:#fffdf8;color:#2b312b;font-size:11px;padding:5px 9px;border-radius:3px;box-shadow:0 4px 18px #0002;white-space:nowrap}
 .room-scene-modes{position:absolute;z-index:3;top:14px;left:14px;display:flex;background:#fffdf8e6;border-radius:999px;padding:3px;box-shadow:0 2px 12px #0002}.room-scene-modes button{border:0;background:transparent;font-size:11px;padding:6px 13px;border-radius:999px;color:#5f6757;cursor:pointer}.room-scene-modes button[aria-pressed=true]{background:#2f3a2c;color:#fffdf8}
 .room-scene-note{position:absolute;z-index:3;left:14px;right:14px;bottom:12px;margin:0;font-size:11px;line-height:1.5;color:#fffdf8;text-shadow:0 1px 3px #000a}
+.room-measure{position:absolute;z-index:3;top:14px;right:14px;width:min(220px,70%);background:#fffdf8ee;color:#2b312b;padding:12px 14px;border-radius:4px;box-shadow:0 4px 18px #0002}.room-measure b{display:block;font-size:13px;font-weight:500}.room-measure dl{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;margin:8px 0 0}.room-measure dt,.room-measure dd{font-size:11px;margin:0}.room-measure dd{text-align:right;font-variant-numeric:tabular-nums}.room-measure p{font-size:10px;line-height:1.45;color:#6f7766;margin:8px 0 0}
+.room-video-dock{margin-top:14px}
 .room-scene-help{font-size:10px;color:#818775;margin:10px 0 0}
 
 /* Room page */
