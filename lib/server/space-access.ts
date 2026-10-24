@@ -11,6 +11,7 @@ export async function canReadRoom(room:{_id:ObjectId;ownerId:string;spaceId?:Obj
 export async function requireReadableInspection(id:ObjectId,userId:string){
  const db=await getDb(),inspection=await db.collection("inspections").findOne({_id:id});
  if(!inspection)throw new AccessError("Inspection not found",404);
+ if(inspection.ownerId===userId)return inspection;
  const room=await db.collection("rooms").findOne({_id:inspection.roomId});
  if(!room||!await canReadRoom(room as {_id:ObjectId;ownerId:string;spaceId?:ObjectId},userId))throw new AccessError("Inspection not found",404);
  return inspection;
