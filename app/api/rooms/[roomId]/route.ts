@@ -17,7 +17,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ room
     const user = await requireUser(request);
     const room = await (await getDb()).collection("rooms").findOne({ _id: id });
     if (!room || !await canReadRoom(room as never,user.id)) return NextResponse.json({ error: "Room not found" }, { status: 404 });
-    return NextResponse.json({ room: { id: String(room._id), name: room.name, createdAt: new Date(room.createdAt).toISOString(), spaceId: room.spaceId ? String(room.spaceId) : null } });
+    return NextResponse.json({ room: { id: String(room._id), name: room.name, createdAt: new Date(room.createdAt).toISOString(), spaceId: room.spaceId ? String(room.spaceId) : null, isOwner: room.ownerId===user.id } });
   } catch (error) {
     return errorResponse(error, "app/api/rooms/[roomId]/route.ts");
   }
