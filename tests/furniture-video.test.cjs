@@ -102,28 +102,28 @@ test('live worker consumes every queued second chronologically in bounded batche
  const f=nativeWorkerFixture();await f.run();assert.deepEqual(f.calls,[[0,1,2,3,4,5],[6,7]]);assert.equal(f.findings.length,8);assert(f.records.every(fr=>fr.status==='done'));assert(f.findings.every(fr=>fr.reviewStatus==='pending'&&!fr.autoApproved));assert.equal(f.session.furnitureWorker,undefined);
 });
 test('provider spending block stops subsequent live batches and later triggers while preserving queued source frames',async()=>{
- const f=nativeWorkerFixture(true,{count:20});await f.run();await f.run();assert.equal(f.calls.length,2);assert.equal(f.records.filter(fr=>fr.status==='failed').length,12);assert.equal(f.records.filter(fr=>fr.status==='queued').length,8);assert.equal(f.session.analysisIssue.code,'AI_BILLING_BLOCKED');assert.equal(f.session.furnitureWorker,undefined);assert(f.records.every(fr=>fr.ref));
+ const f=nativeWorkerFixture(true,{count:32});await f.run();await f.run();assert.equal(f.calls.length,4);assert.equal(f.records.filter(fr=>fr.status==='failed').length,24);assert.equal(f.records.filter(fr=>fr.status==='queued').length,8);assert.equal(f.session.analysisIssue.code,'AI_BILLING_BLOCKED');assert.equal(f.session.furnitureWorker,undefined);assert(f.records.every(fr=>fr.ref));
 });
 
-test('two native batches run concurrently but reversed completions commit in timestamp order',{timeout:3000},async()=>{
- let active=0,max=0,releaseFirst,secondFinished;const firstGate=new Promise(r=>releaseFirst=r),secondDone=new Promise(r=>secondFinished=r);
- const f=nativeWorkerFixture(false,{count:20,run:async frames=>{active++;max=Math.max(max,active);try{if(frames[0].timestampSeconds===0)await firstGate;if(frames[0].timestampSeconds===6)secondFinished();}finally{active--}}});
- const run=f.run();await secondDone;assert.equal(max,2);assert.equal(f.findings.length,0);releaseFirst();await run;
- assert.deepEqual(f.findings.map(f=>f.timestampSeconds),Array.from({length:20},(_,i)=>i));assert.equal(f.records.filter(f=>f.status==='done').length,20);assert.equal(max,2);
+test('four native batches run concurrently but reversed completions commit in timestamp order',{timeout:3000},async()=>{
+ let active=0,max=0,releaseAll,releaseFirst,allStarted,started=0;const gate=new Promise(r=>releaseAll=r),firstGate=new Promise(r=>releaseFirst=r),ready=new Promise(r=>allStarted=r);
+ const f=nativeWorkerFixture(false,{count:32,run:async frames=>{active++;max=Math.max(max,active);try{if(++started===4)allStarted();await gate;if(frames[0].timestampSeconds===0)await firstGate;}finally{active--}}});
+ const run=f.run();await ready;assert.equal(max,4);assert.equal(f.findings.length,0);releaseAll();await new Promise(setImmediate);assert.equal(f.findings.length,0);releaseFirst();await run;
+ assert.deepEqual(f.findings.map(f=>f.timestampSeconds),Array.from({length:32},(_,i)=>i));assert.equal(f.records.filter(f=>f.status==='done').length,32);assert.equal(max,4);
 });
 test('parallel native results still deduplicate before inserting repeated marks',async()=>{const f=nativeWorkerFixture(false,{count:12,localized:true,run:async frames=>{if(frames[0].timestampSeconds===0)await new Promise(r=>setTimeout(r,5));}});await f.run();assert.equal(f.calls.length,2);assert.equal(f.findings.length,1);assert.equal(f.findings[0].timestampSeconds,0);assert(f.records.every(fr=>fr.status==='done'));});
-test('a billing failure stops new waves without discarding the other in-flight batch',async()=>{const f=nativeWorkerFixture(false,{count:20,run:async frames=>{if(frames[0].timestampSeconds===0)throw Object.assign(new Error('Monthly spending cap exceeded'),{status:429});}});await f.run();assert.equal(f.calls.length,2);assert.equal(f.findings.length,6);assert.equal(f.records.filter(fr=>fr.status==='queued').length,8);assert.equal(f.session.analysisIssue.code,'AI_BILLING_BLOCKED');});
-test('ordinary rate limits pause new waves and impose a cooldown on later triggers',async()=>{const f=nativeWorkerFixture(false,{count:20,run:async()=>{throw Object.assign(new Error('RESOURCE_EXHAUSTED'),{status:429});}});await f.run();await f.run();assert.equal(f.calls.length,2);assert.equal(f.records.filter(fr=>fr.status==='queued').length,8);assert(new Date(f.session.analysisIssue.retryAfter)>new Date());});
-test('saved native scans use two workers, preserve all samples, and save deterministic chronological results',{timeout:3000},async()=>{
- const stored=[],updates=[],calls=[];let active=0,max=0,release,secondFinished;
- const firstGate=new Promise(r=>release=r),secondDone=new Promise(r=>secondFinished=r);
+test('a billing failure stops new waves without discarding other in-flight batches',async()=>{const f=nativeWorkerFixture(false,{count:32,run:async frames=>{if(frames[0].timestampSeconds===0)throw Object.assign(new Error('Monthly spending cap exceeded'),{status:429});}});await f.run();assert.equal(f.calls.length,4);assert.equal(f.findings.length,18);assert.equal(f.records.filter(fr=>fr.status==='queued').length,8);assert.equal(f.session.analysisIssue.code,'AI_BILLING_BLOCKED');});
+test('ordinary rate limits pause new waves and impose a cooldown on later triggers',async()=>{const f=nativeWorkerFixture(false,{count:32,run:async()=>{throw Object.assign(new Error('RESOURCE_EXHAUSTED'),{status:429});}});await f.run();await f.run();assert.equal(f.calls.length,4);assert.equal(f.records.filter(fr=>fr.status==='queued').length,8);assert(new Date(f.session.analysisIssue.retryAfter)>new Date());});
+test('saved native scans use four workers, preserve all samples, and save deterministic chronological results',{timeout:3000},async()=>{
+ const stored=[],updates=[],calls=[];let active=0,max=0,release,allStarted,started=0;
+ const firstGate=new Promise(r=>release=r),ready=new Promise(r=>allStarted=r);
  const {analyzeNativeInspection}=load('lib/server/native-analysis.ts',{
   './db':{getDb:async()=>({collection:name=>({updateOne:async(q,u)=>updates.push(u.$set),insertOne:async f=>{if(name==='findings')stored.push(f)}})})},
   './media':{readMedia:async()=>Buffer.from('photo')},'./search':{indexFindings:async()=>{}},'./object-reconstruction':{prepareObjectReconstructions:async()=>{}},
-  './furniture-video':{oneFramePerSecond:frames=>frames,analyzeFurnitureVideoFrames:async samples=>{calls.push(samples.map(s=>s.timestampSeconds));active++;max=Math.max(max,active);try{if(samples[0].timestampSeconds===0)await firstGate;else secondFinished();return samples.map(frame=>({frame,result:{findings:[{label:'Tear',description:'Visible tear',damageType:'tear',boundingBox:observation.boundingBox,elementId:null,worldPosition:null,reviewStatus:'pending',autoApproved:false,detectionSource:'gemini'}],warnings:[],views:[]}}));}finally{active--}}},
+  './furniture-video':{oneFramePerSecond:frames=>frames,analyzeFurnitureVideoFrames:async samples=>{calls.push(samples.map(s=>s.timestampSeconds));active++;max=Math.max(max,active);try{if(++started===4)allStarted();await firstGate;return samples.map(frame=>({frame,result:{findings:[{label:'Tear',description:'Visible tear',damageType:'tear',boundingBox:observation.boundingBox,elementId:null,worldPosition:null,reviewStatus:'pending',autoApproved:false,detectionSource:'gemini'}],warnings:[],views:[]}}));}finally{active--}}},
  });
- const frames=Array.from({length:18},(_,i)=>({...pose,timestamp:i,image:`frame-${i}.jpg`})),manifest={sessionId:'scan',elements:[],frames,assets:frames.map(f=>({name:f.image,kind:'image',mediaRef:`photo-${f.timestamp}`}))};
+ const frames=Array.from({length:30},(_,i)=>({...pose,timestamp:i,image:`frame-${i}.jpg`})),manifest={sessionId:'scan',elements:[],frames,assets:frames.map(f=>({name:f.image,kind:'image',mediaRef:`photo-${f.timestamp}`}))};
  const run=analyzeNativeInspection({_id:new ObjectId(),ownerId:'owner',roomId:new ObjectId()},manifest,null);
- await secondDone;assert.equal(max,2);assert.equal(stored.length,0);release();await run;
- assert.deepEqual(stored.map(f=>f.timestampSeconds),Array.from({length:18},(_,i)=>i));assert.equal(calls.length,3);assert.equal(updates.at(-1).framesAnalysed,18);assert.equal(updates.at(-1).status,'completed');assert.equal(max,2);
+ await ready;assert.equal(max,4);assert.equal(stored.length,0);release();await run;
+ assert.deepEqual(stored.map(f=>f.timestampSeconds),Array.from({length:30},(_,i)=>i));assert.equal(calls.length,5);assert.equal(updates.at(-1).framesAnalysed,30);assert.equal(updates.at(-1).status,'completed');assert.equal(max,4);
 });

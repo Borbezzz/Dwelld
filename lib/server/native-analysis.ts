@@ -13,11 +13,13 @@ import { prepareObjectReconstructions } from "./object-reconstruction";
 import { furnitureNames, isFurniture } from "../spatial/furniture";
 import type { SpatialManifest, SpatialElement } from "../spatial/types";
 
+const NATIVE_BATCH_CONCURRENCY=4;
+
 /** Live: batch every queued second in order. No per-finding or per-object provider calls. */
 export async function analyzeLiveEvidenceFrame(sessionId: ObjectId, _name: string) {
   const db = await getDb(), frames = db.collection("liveFrames"), sessions = db.collection("liveSessions");
   const lease = randomUUID();
-  // One coordinator owns the queue; two provider calls may run together, with ordered writes.
+  // One coordinator owns the queue; four provider calls may run together, with ordered writes.
   const claimed = await sessions.findOneAndUpdate({ _id: sessionId, $or: [{ 'furnitureWorker.until': { $exists: false } }, { 'furnitureWorker.until': { $lte: new Date() } }] }, { $set: { furnitureWorker: { lease, until: new Date(Date.now() + 295_000) } } });
   if (!claimed) return;
   const deadline = Date.now() + 180_000;
@@ -26,7 +28,7 @@ export async function analyzeLiveEvidenceFrame(sessionId: ObjectId, _name: strin
       const session = await sessions.findOne({ _id: sessionId });
       if (session?.status === 'saved' || session?.analysisIssue?.blocksService || (session?.analysisIssue?.retryAfter && new Date(session.analysisIssue.retryAfter)>new Date())) break;
       const batches: Document[][]=[];
-      for(let slot=0;slot<2;slot++){
+      for(let slot=0;slot<NATIVE_BATCH_CONCURRENCY;slot++){
         const batch:Document[]=[];
         for(let i=0;i<6;i++){
           const frame=await frames.findOneAndUpdate({sessionId,status:'queued'},{$set:{status:'analyzing',startedAt:new Date()}},{sort:{timestampSeconds:1},returnDocument:'after'});
@@ -155,7 +157,7 @@ export async function analyzeNativeInspection(inspection: Document, manifest: Sp
           warnings.push(`Photos at ${batch[0].timestamp.toFixed(1)}s–${batch[batch.length - 1].timestamp.toFixed(1)}s could not be analysed.`); }
       }
     };
-    const workers=await Promise.allSettled([worker(),worker()]);
+    const workers=await Promise.allSettled(Array.from({length:NATIVE_BATCH_CONCURRENCY},()=>worker()));
     const failedWorker=workers.find((r):r is PromiseRejectedResult=>r.status==='rejected');
     if(failedWorker)throw failedWorker.reason;
     if (skipped) warnings.push(`${skipped} photos were not analysed because analysis was unavailable or its time budget ran out.`);
