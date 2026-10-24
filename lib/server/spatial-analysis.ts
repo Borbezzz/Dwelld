@@ -5,6 +5,7 @@ export {normalizeSpatialImage} from './spatial-image';
 import {getDb} from './db';
 import {readMedia} from './media';
 import {detectImageObjects} from './yolo';
+import {autoReviewInspection} from './verify';
 import {analyzeLiveFrame} from './live-analysis';
 import {indexFindings} from './search';
 import {boxDepthPoints,associateElement,objectIdentityKey,insideElement} from '../spatial/identity';
@@ -64,7 +65,9 @@ export async function analyzeSpatialInspection(inspection:Document,manifest:Spat
   }
   if(unresolved)warnings.push(`${unresolved} object observations could not be safely associated with a measured element; these may contain repeated views of the same item. Review before counting unique inventory.`);
   if(!frames.length)warnings.push('No camera frames were captured; only measured geometry is available.');
-  await db.collection('inspections').updateOne({_id:inspection._id},{$set:{status:success===frames.length&&warnings.length===1?'completed':'partial',analysisWarnings:[...new Set(warnings)],completedAt:new Date(),durationSeconds:manifest.frames.at(-1)?.timestamp||0}});
+  // Verification loop: a second, adversarial look at every AI damage finding; confident ones are auto-approved.
+  const review=await autoReviewInspection(inspection._id).catch(()=>null);
+  await db.collection('inspections').updateOne({_id:inspection._id},{$set:{...(review?{autoReview:review}:{}),status:success===frames.length&&warnings.length===1?'completed':'partial',analysisWarnings:[...new Set(warnings)],completedAt:new Date(),durationSeconds:manifest.frames.at(-1)?.timestamp||0}});
   await indexFindings(inspection.ownerId,inspection._id).catch(()=>{});
  }catch{await db.collection('inspections').updateOne({_id:inspection._id},{$set:{status:'partial',analysisWarnings:[...warnings,'Spatial analysis did not finish. Original capture is preserved.']}});}
 }

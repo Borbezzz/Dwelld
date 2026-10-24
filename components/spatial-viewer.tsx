@@ -10,15 +10,16 @@ type Props = {
   onPick?: (point: Vec3, elementId: string | null) => void;
   selectedElementId?: string | null; hoveredElementId?: string | null;
   onSelectElement?: (id: string | null) => void; onHoverElement?: (id: string | null) => void;
-  damagedElementIds?: string[]; compact?: boolean; className?: string;
+  damagedElementIds?: string[]; elementTones?: Record<string, "check" | "damage">; compact?: boolean; className?: string;
 };
-const INK = 0x2f3a2c, ACTIVE = 0xe39a3b, DAMAGE = 0xc4573f;
+// Selection is blue so it never reads as a status. Amber = needs a look, red = damage confirmed.
+const INK = 0x2f3a2c, ACTIVE = 0x3f8fd2, CHECK = 0xe39a3b, DAMAGE = 0xc4573f;
 
 /**
  * One 3D space: the Gaussian splat (when present) with the measured furniture boxes inside it.
  * Hover a box to outline it, click it to select it. Walls and floors are context, never listed.
  */
-export default function SpatialViewer({ manifest, markers, assetUrl, onPick, selectedElementId, hoveredElementId, onSelectElement, onHoverElement, damagedElementIds = [], compact = false, className = "" }: Props) {
+export default function SpatialViewer({ manifest, markers, assetUrl, onPick, selectedElementId, hoveredElementId, onSelectElement, onHoverElement, damagedElementIds = [], elementTones = {}, compact = false, className = "" }: Props) {
   const root = useRef<HTMLDivElement>(null);
   const splat = manifest.assets.find(a => a.kind === "splat");
   const aligned = !!splat && (!!splat.registration || splat.reconstructionMethod === "lidar-initialized");
@@ -26,11 +27,12 @@ export default function SpatialViewer({ manifest, markers, assetUrl, onPick, sel
   const [error, setError] = useState(""), [loading, setLoading] = useState(false);
   const [tip, setTip] = useState<{ text: string; x: number; y: number } | null>(null);
   const callbacks = useRef({ onPick, onSelectElement, onHoverElement }); callbacks.current = { onPick, onSelectElement, onHoverElement };
-  const state = useRef({ selected: selectedElementId ?? null, hovered: hoveredElementId ?? null, localHover: null as string | null, damaged: new Set(damagedElementIds) });
-  state.current.selected = selectedElementId ?? null; state.current.hovered = hoveredElementId ?? null; state.current.damaged = new Set(damagedElementIds);
+  const tones = { ...Object.fromEntries(damagedElementIds.map(id => [id, "check" as const])), ...elementTones };
+  const state = useRef({ selected: selectedElementId ?? null, hovered: hoveredElementId ?? null, localHover: null as string | null, tones });
+  state.current.selected = selectedElementId ?? null; state.current.hovered = hoveredElementId ?? null; state.current.tones = tones;
   const scene = useRef<{ highlight: () => void; focus: (id: string | null) => void } | null>(null);
   const splatUrl = splat ? assetUrl(splat.name) : "";
-  const damagedKey = damagedElementIds.join(",");
+  const damagedKey = JSON.stringify(tones);
 
   useEffect(() => { scene.current?.highlight(); }, [selectedElementId, hoveredElementId, damagedKey]);
   useEffect(() => { scene.current?.focus(selectedElementId ?? null); }, [selectedElementId]);
@@ -78,15 +80,22 @@ export default function SpatialViewer({ manifest, markers, assetUrl, onPick, sel
     let canvas: HTMLCanvasElement | undefined;
     let dead = false, focusFrame = 0;
     const highlight = () => {
-      const { selected, hovered, localHover, damaged } = state.current;
+      const { selected, hovered, localHover, tones } = state.current;
       for (const [id, item] of items) {
-        const active = id === selected || id === hovered || id === localHover;
+        const active = id === selected || id === hovered || id === localHover, tone = tones[id];
+        const toneColor = tone === "damage" ? DAMAGE : tone === "check" ? CHECK : useSplat ? 0xffffff : INK;
         const lineMaterial = item.edges.material as THREE.LineBasicMaterial, fillMaterial = item.fill.material as THREE.MeshBasicMaterial;
-        lineMaterial.color.set(active ? ACTIVE : damaged.has(id) ? DAMAGE : useSplat ? 0xffffff : INK);
-        lineMaterial.opacity = active ? 1 : damaged.has(id) ? .95 : useSplat ? .55 : .75;
-        fillMaterial.color.set(damaged.has(id) && !active ? DAMAGE : ACTIVE);
-        fillMaterial.opacity = active ? (id === selected ? .22 : .14) : damaged.has(id) ? .08 : 0;
+        lineMaterial.color.set(active ? ACTIVE : toneColor);
+        lineMaterial.opacity = active ? 1 : tone ? .95 : useSplat ? .55 : .75;
+        fillMaterial.color.set(active ? ACTIVE : toneColor);
+        fillMaterial.opacity = active ? (id === selected ? .24 : .16) : tone === "damage" ? .16 : tone ? .1 : 0;
       }
+      // Hovering a row in the list labels the same piece in the room.
+      const external = !localHover && (hovered || null);
+      if (external && camera && canvas) {
+        const at = items.get(external)?.center.clone().project(camera), rect = canvas.getBoundingClientRect(), host = element.getBoundingClientRect();
+        if (at && at.z < 1) setTip({ text: names.get(external) || "Furniture", x: (at.x + 1) / 2 * rect.width + rect.left - host.left, y: (1 - at.y) / 2 * rect.height + rect.top - host.top }); else setTip(null);
+      } else if (!localHover) setTip(null);
       render();
     };
     const focus = (id: string | null) => {

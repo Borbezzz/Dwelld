@@ -7,6 +7,7 @@ import { parseMediaId, getMediaFile } from "@/lib/server/media";
 import { after, NextResponse } from "next/server";
 import { getDb, ensureIndexes, parseObjectId } from "@/lib/server/db";
 import { analyzeVideo, validateDetectionFrames } from "@/lib/server/inspection";
+import { autoReviewInspection } from "@/lib/server/verify";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -86,8 +87,9 @@ export async function POST(request: Request) {
           source: "ai", reviewStatus: "pending", reviewHistory: [], createdAt: new Date(),
         }));
         if (docs.length) await db.collection("findings").insertMany(docs);
+        const review = await autoReviewInspection(inspectionId).catch(() => null);
         await indexFindings(user.id,inspectionId).catch(()=>{});
-        await inspections.updateOne({ _id: inspectionId }, { $set: { status: result.warnings.length ? "partial" : "completed", analysisWarnings: result.warnings, durationSeconds: result.durationSeconds, completedAt: new Date() } });
+        await inspections.updateOne({ _id: inspectionId }, { $set: { ...(review ? { autoReview: review } : {}), status: result.warnings.length ? "partial" : "completed", analysisWarnings: result.warnings, durationSeconds: result.durationSeconds, completedAt: new Date() } });
       } catch (error) {
         const failure = reportError(error, "inspection.analyze");
         const message = `${failure.error} Request ID: ${failure.requestId}`;

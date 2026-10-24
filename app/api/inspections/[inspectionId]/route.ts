@@ -22,7 +22,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ insp
       timestampSeconds: f.timestampSeconds, evidenceFrameUrl: f.evidenceFrameUrl,
       detectionSource: f.detectionSource === "yolo" || f.detectionSource === "gemini" || f.detectionSource === "crack-model" ? f.detectionSource : undefined,
       boundingBox: f.boundingBox ?? null, point: f.point ?? null, source: f.source ?? "ai", damageType: f.damageType ?? null, reviewStatus: f.reviewStatus, uncertain: !f.boundingBox && !f.point,
-      objectId: f.objectId ? String(f.objectId) : null, objectLabel: f.objectLabel ?? null, spatialElementId: f.spatialElementId ?? null,
+      objectId: f.objectId ? String(f.objectId) : null, objectLabel: f.objectLabel ?? null, spatialElementId: f.spatialElementId ?? null, confidence: typeof f.confidence === "number" ? f.confidence : null, autoApproved: !!f.autoApproved, verification: f.verification ? { verdict: f.verification.verdict, confidence: f.verification.confidence, reason: f.verification.reason } : null,
     }));
     return NextResponse.json({
       inspection: {
