@@ -1,0 +1,15 @@
+/* Brand refresh: retain the existing warm editorial surfaces and layout. */
+.dwelld-logo-link{display:inline-flex;align-items:center;flex:0 0 auto;text-decoration:none;color:#364b40}
+.dwelld-logo{display:inline-flex;align-items:center;gap:.48em;color:#364b40;white-space:nowrap;line-height:1}
+.dwelld-logo__symbol{width:1.12em;height:1.12em;display:block;overflow:visible;flex:none}
+.dwelld-logo__door{fill:#92a48a}
+.dwelld-logo__type{font-family:Manrope,'DM Sans',sans-serif;font-weight:800;letter-spacing:-.075em;font-size:1em;line-height:1.1}
+.dwelld-logo__period{color:#92a48a}
+.landing-header .dwelld-logo,.landing-footer .dwelld-logo{font-size:32px}
+.landing-footer .dwelld-logo{font-size:25px}
+.dwelld-logo--compact{font-size:24px}
+.landing a:focus-visible,.landing button:focus-visible,.landing summary:focus-visible,.editorial-page a:focus-visible,.ask-records button:focus-visible,.ask-composer:focus-within{outline:2px solid #526f57;outline-offset:4px}
+.landing-header nav a{transition:color .18s ease}
+.landing-header nav a:hover{color:#364b40}
+@media(max-width:600px){.landing-header .dwelld-logo{font-size:25px}.landing-footer .dwelld-logo{font-size:23px}.landing-header nav{gap:16px}}
+@media(prefers-reduced-motion:reduce){.landing-header nav a{transition:none}}
