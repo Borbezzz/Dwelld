@@ -2,13 +2,16 @@
 
 **Your room remembers.**
 
-Dwelld helps renters create a timestamped, reviewable record of a room's visible condition. It combines uploaded video or native LiDAR capture, object detection, AI damage observations, saved evidence, and comparisons between move-in and move-out inspections. Users can review observations, add manual evidence, search their records, and export reports.
+Moving into a place? Give it a quick scan so you have a record of what was already there. Moving out? Pull up the earlier inspection and compare. Dwelld keeps room walkthroughs, visible damage, furniture and supporting evidence together, so you can check and correct what the AI found instead of relying on memory.
 
-This README describes the source and current working tree inspected on **23 October 2026**. Some documents in `docs/` describe earlier designs and verification snapshots; current code takes precedence where they conflict.
+You can upload a video or pair a LiDAR-capable iPhone for a measured 3D room. Dwelld then helps you review observations, place or move damage markers, search your records, and export a report. **You stay in charge of confirming findings:** AI can miss things and an inspection alone cannot decide who caused damage.
+
+This README reflects the source as of **24 October 2026**. Some older `docs/` files record earlier designs or one-off tests; when they differ, current code takes precedence.
 
 ## Contents
 
 - [Features and limitations](#features-and-limitations)
+- [3D loading and performance](#3d-loading-and-performance)
 - [System architecture](#system-architecture)
 - [Repository layout](#repository-layout)
 - [Requirements and setup](#requirements-and-setup)
@@ -41,6 +44,12 @@ This README describes the source and current working tree inspected on **23 Octo
 AI observations require review. A missing detection or completed analysis does not establish absence of damage. A confirmed finding records a user's review decision; it does not determine liability, structural safety, or repair cost. Independent RoomPlan scans have independent origins and are not automatically registered.
 
 The repository retains browser WebRTC capture/signalling infrastructure, but the **current public QR pages open the native LiDAR companion only**. They no longer expose the earlier browser-phone recording fallback. Uploaded video remains a separate web capture option.
+
+## 3D loading and performance
+
+The dashboard now checks possible captures in parallel batches of three, rather than waiting for each inspection in turn. Its small room preview starts with lightweight measured geometry, so it does **not** need to download and decode the larger Gaussian PLY just to show a room. Open an inspection's spatial page to see the full reconstruction or switch to geometry. That page also requests the capture and inspection details in parallel.
+
+These changes shorten avoidable wait paths; they are **not** a measured end-to-end speed claim. Full PLY loading still depends on file size, network speed, decoding and the device's GPU. Private spatial files are served through authenticated GridFS routes with byte-range support and `no-store` caching. For outstanding work, benchmarks and the Encode partner/submission review, see [the performance and hackathon audit](docs/hackathon-performance-audit-2026.md).
 
 ## System architecture
 
@@ -271,16 +280,16 @@ Live image analysis accepts at most three objects and a 3 MiB image, allows one 
 ## Persistence and media
 
 ```mermaid
-erDiagram
-    USER ||--o{ ROOM : owns
-    ROOM ||--o{ INSPECTION : contains
-    INSPECTION ||--o{ FINDING : records
-    FINDING o|--o{ FINDING : object_damage_link
-    INSPECTION ||--o| SPATIAL_CAPTURE : has
-    INSPECTION ||--o{ SPATIAL_MARKER : anchors
-    ROOM ||--o{ LIVE_SESSION : starts
-    ROOM ||--o{ COMPARISON : compares
-    COMPARISON ||--o{ CORRESPONDENCE : reviews
+flowchart TD
+    User["User"] -->|owns| Room["Room"]
+    Room -->|contains| Inspection["Inspection"]
+    Inspection -->|records| Finding["Finding"]
+    Finding -.->|optional object/damage link| Finding
+    Inspection -->|optional| Capture["Spatial capture"]
+    Inspection -->|anchors| Marker["Spatial marker"]
+    Room -->|starts| Session["Live session"]
+    Room -->|compares inspections| Comparison["Comparison"]
+    Comparison -->|reviews| Correspondence["Correspondence"]
 ```
 
 These are logical relationships, enforced by application validation rather than relational foreign keys.
@@ -462,6 +471,7 @@ Native docs record compilation, while actual capture quality, compact-upload lat
 | Stuck `processing` | Inspect logs and hosting termination/time budgets; no durable retry queue exists. |
 | Upload 409 | Ensure sequential parts, identical retry bytes, and completed finalization. |
 | QR cannot open app | Install through Xcode or retry a fresh pairing QR; installer URL is unset. |
+| Slow 3D preview | Dashboard shows measured geometry first. Open the inspection for the full splat; check PLY size, asset network timing, GPU support and console errors. |
 | Misaligned splats/markers | Check registration, image dimensions/intrinsics, sensor tracking and coordinate conventions. |
 | Retained WebRTC fails | Check connection diagnostics and compatible TURN setup. |
 | Report images missing | Maintain authentication and wait for evidence loading before print. |
@@ -485,3 +495,4 @@ YOLO-related materials carry AGPL-3.0 terms, including network-use obligations d
 | [Live protocol](docs/live/session-protocol.md) | Capability/signalling/lease details; older unauthenticated/browser-fallback statements are superseded. |
 | [Spatial research](docs/research/lidar-roomplan.md) | Sensor/reconstruction background. |
 | [Verification records](docs/testing) | Individual checks and their limitations. |
+| [Performance and hackathon audit](docs/hackathon-performance-audit-2026.md) | 3D loading path, remaining benchmarks, partner requirements and demo checklist. |
