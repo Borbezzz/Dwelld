@@ -40,13 +40,37 @@ function locate(f: LiveFinding, pose: NativePose, points: Float32Array | null): 
 }
 
 export type StreamChunk = { seq: number; points: string };
+type BaseManifest = { elements: { id: string; category: string; dimensions: [number, number, number]; transform: number[] }[]; assets: { name: string; kind: string; registration?: { transform: number[] } }[] };
+/** Earlier scan's LiDAR splat (binary little-endian float PLY) as plain coloured points. */
+function parsePly(buffer: ArrayBuffer, registration?: number[]) {
+  const head = new TextDecoder().decode(new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 4096)));
+  const end = head.indexOf("end_header\n"), vertex = /element vertex (\d+)/.exec(head);
+  if (end < 0 || !vertex || !head.includes("binary_little_endian")) return null;
+  const props = [...head.slice(0, end).matchAll(/property float (\w+)/g)].map(m => m[1]);
+  if (/property (?!float)/.test(head.slice(0, end))) return null;
+  const at = (n: string) => props.indexOf(n), stride = props.length * 4, start = new TextEncoder().encode(head.slice(0, end + 11)).length;
+  const count = Math.min(Number(vertex[1]), Math.floor((buffer.byteLength - start) / stride));
+  const [x, y, z, r, g, b] = ["x", "y", "z", "f_dc_0", "f_dc_1", "f_dc_2"].map(at);
+  if ([x, y, z].some(i => i < 0)) return null;
+  const view = new DataView(buffer, start), positions = new Float32Array(count * 3), colors = new Float32Array(count * 3);
+  const m = registration ? new THREE.Matrix4().fromArray(registration) : null, p = new THREE.Vector3();
+  const colour = (i: number, o: number) => i < 0 ? .6 : Math.min(1, Math.max(0, .5 + .2820948 * view.getFloat32(o + i * 4, true)));
+  for (let i = 0; i < count; i++) {
+    const o = i * stride; p.set(view.getFloat32(o + x * 4, true), view.getFloat32(o + y * 4, true), view.getFloat32(o + z * 4, true)); if (m) p.applyMatrix4(m);
+    positions.set([p.x, p.y, p.z], i * 3);
+    // Muted so the part being scanned now stands out against the earlier room.
+    colors.set([colour(r, o) * .55 + .1, colour(g, o) * .55 + .1, colour(b, o) * .55 + .1], i * 3);
+  }
+  return { positions, colors, count };
+}
 const CAPACITY = 250_000;
-export default function LiveRoomView({ live, stream = [], findings, selected, onSelect }: { live?: NativeLive; stream?: StreamChunk[]; findings: LiveFinding[]; selected?: string; onSelect?: (id: string) => void }) {
+export default function LiveRoomView({ live, stream = [], findings, selected, onSelect, baseInspectionId }: { live?: NativeLive; stream?: StreamChunk[]; findings: LiveFinding[]; selected?: string; onSelect?: (id: string) => void; baseInspectionId?: string }) {
   const root = useRef<HTMLDivElement>(null);
-  const world = useRef<{ points: THREE.Points; fresh: THREE.Points; freshAt: number; boxes: THREE.Group; markers: THREE.Group; fit: (box: THREE.Box3) => void; render: () => void; positions: Float32Array | null } | null>(null);
+  const world = useRef<{ base: THREE.Group; points: THREE.Points; fresh: THREE.Points; freshAt: number; boxes: THREE.Group; markers: THREE.Group; fit: (box: THREE.Box3) => void; render: () => void; positions: Float32Array | null } | null>(null);
   const streamed = useRef({ seq: 0, count: 0, positions: new Float32Array(CAPACITY * 3), colors: new Float32Array(CAPACITY * 3), box: new THREE.Box3() });
   const seen = useRef(new Map<string, number>());
-  const [count, setCount] = useState(0);
+  const [count, setCount] = useState(0), [baseCount, setBaseCount] = useState(0);
+  const baseBox = useRef(new THREE.Box3());
   const select = useRef(onSelect); select.current = onSelect;
 
   useEffect(() => {
@@ -59,7 +83,7 @@ export default function LiveRoomView({ live, stream = [], findings, selected, on
     const points = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial({ size: .03, vertexColors: true, sizeAttenuation: true, transparent: true, opacity: .95 }));
     // The newest points flash brighter and larger, then settle into the room: you can watch it being scanned.
     const fresh = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial({ size: .05, color: 0xf0c27a, sizeAttenuation: true, transparent: true, opacity: 0, depthWrite: false }));
-    const boxes = new THREE.Group(), markers = new THREE.Group(); scene.add(points, fresh, boxes, markers);
+    const boxes = new THREE.Group(), markers = new THREE.Group(), base = new THREE.Group(); scene.add(base, points, fresh, boxes, markers);
     const grid = new THREE.GridHelper(8, 16, 0x3a443a, 0x262d27); grid.position.y = -1.4; scene.add(grid);
     const goal = { target: new THREE.Vector3(), distance: 4.5 };
     const fit = (box: THREE.Box3) => { if (box.isEmpty()) return; goal.target.copy(box.getCenter(new THREE.Vector3())); goal.distance = Math.max(2.4, box.getSize(new THREE.Vector3()).length() * .9); grid.position.y = box.min.y - .01; };
@@ -76,7 +100,7 @@ export default function LiveRoomView({ live, stream = [], findings, selected, on
     const ray = new THREE.Raycaster(); ray.params.Points = { threshold: .05 };
     const click = (e: MouseEvent) => { const r = renderer.domElement.getBoundingClientRect(); ray.setFromCamera(new THREE.Vector2((e.clientX - r.left) / r.width * 2 - 1, -(e.clientY - r.top) / r.height * 2 + 1), camera); const hit = ray.intersectObjects(markers.children, false)[0]; if (hit) select.current?.(hit.object.userData.id); };
     renderer.domElement.addEventListener("click", click);
-    world.current = { points, fresh, freshAt: 0, boxes, markers, fit, render: () => {}, positions: null };
+    world.current = { base, points, fresh, freshAt: 0, boxes, markers, fit, render: () => {}, positions: null };
     return () => { renderer.domElement.removeEventListener("click", click); resize.disconnect(); renderer.setAnimationLoop(null); controls.dispose(); scene.traverse(o => { if (o instanceof THREE.Mesh || o instanceof THREE.Points || o instanceof THREE.LineSegments) { o.geometry.dispose(); (o.material as THREE.Material).dispose(); } }); renderer.dispose(); element.replaceChildren(); world.current = null; };
   }, []);
 
@@ -94,8 +118,38 @@ export default function LiveRoomView({ live, stream = [], findings, selected, on
     }
     const g = w.points.geometry; (g.getAttribute("position") as THREE.BufferAttribute).needsUpdate = true; (g.getAttribute("color") as THREE.BufferAttribute).needsUpdate = true; g.setDrawRange(0, acc.count); g.computeBoundingSphere();
     const latest = new THREE.BufferGeometry(); latest.setAttribute("position", new THREE.BufferAttribute(acc.positions.slice(start * 3, acc.count * 3), 3)); w.fresh.geometry.dispose(); w.fresh.geometry = latest; w.freshAt = performance.now() / 1000;
-    w.positions = acc.positions.subarray(0, acc.count * 3); setCount(acc.count); w.fit(acc.box);
+    w.positions = acc.positions.subarray(0, acc.count * 3); setCount(acc.count); w.fit(acc.box.clone().union(baseBox.current));
   }, [stream]);
+
+  // Continuing a scan: the earlier room sits underneath, and the new part fills in on top of it.
+  useEffect(() => {
+    if (!baseInspectionId) return;
+    const controller = new AbortController();
+    (async () => {
+      const r = await fetch(`/api/inspections/${baseInspectionId}/spatial`, { signal: controller.signal }); if (!r.ok) return;
+      const manifest = (await r.json()).capture?.manifest as BaseManifest | undefined, w = world.current; if (!manifest || !w) return;
+      for (const e of manifest.elements) {
+        if (!isFurniture(e)) continue;
+        const geometry = new THREE.BoxGeometry(...e.dimensions.map(n => Math.max(n, .01)) as [number, number, number]);
+        const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geometry), new THREE.LineBasicMaterial({ color: 0x9aa394, transparent: true, opacity: .45 }));
+        edges.applyMatrix4(new THREE.Matrix4().fromArray(e.transform)); w.base.add(edges); geometry.dispose();
+        baseBox.current.expandByPoint(new THREE.Vector3(e.transform[12], e.transform[13], e.transform[14]));
+      }
+      const splat = manifest.assets.find(a => a.kind === "splat");
+      if (splat) {
+        const res = await fetch(`/api/inspections/${baseInspectionId}/spatial/assets/${encodeURIComponent(splat.name)}`, { signal: controller.signal });
+        const parsed = res.ok ? parsePly(await res.arrayBuffer(), splat.registration?.transform) : null;
+        if (parsed && world.current === w) {
+          const geometry = new THREE.BufferGeometry(); geometry.setAttribute("position", new THREE.BufferAttribute(parsed.positions, 3)); geometry.setAttribute("color", new THREE.BufferAttribute(parsed.colors, 3));
+          geometry.computeBoundingBox(); if (geometry.boundingBox) baseBox.current.union(geometry.boundingBox);
+          w.base.add(new THREE.Points(geometry, new THREE.PointsMaterial({ size: .025, vertexColors: true, sizeAttenuation: true, transparent: true, opacity: .55, depthWrite: false })));
+          setBaseCount(parsed.count);
+        }
+      }
+      if (world.current === w) w.fit(streamed.current.box.clone().union(baseBox.current));
+    })().catch(() => {});
+    return () => controller.abort();
+  }, [baseInspectionId]);
 
   // Older phone builds send a whole-room sample instead of a stream.
   useEffect(() => {
@@ -138,8 +192,8 @@ export default function LiveRoomView({ live, stream = [], findings, selected, on
   const furniture = (live?.elements || []).filter(isFurniture), names = furnitureNames(furniture);
   return <div className="live-room-view">
     <div ref={root} className="live-room-canvas" aria-label="Your room building in 3D as the phone scans" />
-    <div className="live-room-legend"><span><i className="dot-splat" />{count ? `${count.toLocaleString()} points` : "Waiting for depth"}</span><span><i className="dot-furniture" />{furniture.length} furniture</span><span><i className="dot-damage" />{findings.filter(f => (f.pose || f.worldPosition) && f.reviewStatus !== "rejected").length} pinned</span></div>
-    {!count && <div className="live-room-empty"><p>Your room builds here as you scan.</p></div>}
+    <div className="live-room-legend">{baseCount > 0 && <span><i className="dot-base" />Earlier scan</span>}<span><i className="dot-splat" />{count ? `${count.toLocaleString()} ${baseCount ? "new " : ""}points` : baseCount ? "Find a part you already scanned" : "Waiting for depth"}</span><span><i className="dot-furniture" />{furniture.length} furniture</span><span><i className="dot-damage" />{findings.filter(f => (f.pose || f.worldPosition) && f.reviewStatus !== "rejected").length} pinned</span></div>
+    {!count && !baseCount && <div className="live-room-empty"><p>Your room builds here as you scan.</p></div>}
     {furniture.length > 0 && <ul className="live-room-tags">{furniture.slice(0, 6).map(e => <li key={e.id}>{names.get(e.id)}</li>)}</ul>}
   </div>;
 }

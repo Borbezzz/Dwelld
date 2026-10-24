@@ -82,9 +82,10 @@ struct CaptureScreen: View {
         if model.uploadComplete { return "Saved to your laptop." }
         if model.uploading { return "Sending your room." }
         if model.processing { return "Measuring your room." }
+        if model.relocalizing { return "Find where you left off." }
         if model.scanning { return "Let your room tell its story." }
         if model.ready { return "Ready to send." }
-        return "Ready when you are."
+        return model.continueFrom.isEmpty ? "Ready when you are." : "Continue your room."
     }
     var body: some View {
         ScrollView {
@@ -100,7 +101,7 @@ struct CaptureScreen: View {
                 Rectangle().fill(Dwelld.rule).frame(height: 1)
                 VStack(alignment: .leading, spacing: 8) {
                     Text(title).font(Dwelld.serif(30)).foregroundStyle(Dwelld.ink).fixedSize(horizontal: false, vertical: true)
-                    Text(model.pairedSession.isEmpty ? "Start an inspection on the website, scan its QR code with your iPhone camera, then tap Open Dwelld Capture." : "Move slowly. Keep the details in view. Your laptop shows the room building as you go.")
+                    Text(model.pairedSession.isEmpty ? "Start an inspection on the website, scan its QR code with your iPhone camera, then tap Open Dwelld Capture." : (model.relocalizing || (!model.continueFrom.isEmpty && !model.scanning && !model.ready && !model.uploadComplete)) ? "Stand where you scanned before and point at something you already captured. Once the phone recognises it, scan the new part." : "Move slowly. Keep the details in view. Your laptop shows the room building as you go.")
                         .font(.system(size: 13)).foregroundStyle(Dwelld.muted).fixedSize(horizontal: false, vertical: true)
                 }
                 if model.pairing { LineLoader(label: "Connecting securely") }
@@ -131,6 +132,14 @@ struct CaptureScreen: View {
                                     .background(Capsule().fill(Dwelld.paper.opacity(0.94))).foregroundStyle(Dwelld.ink)
                             }.accessibilityHint("Marks what is under the crosshair without stopping the scan")
                         }.frame(maxWidth: .infinity).padding(.bottom, 14)
+                    }
+                    if model.relocalizing {
+                        VStack(spacing: 10) {
+                            ProgressView().tint(.white)
+                            Text("Point at a part you already scanned").font(Dwelld.serif(17)).foregroundStyle(.white)
+                            Text(model.tracking).font(.system(size: 11)).foregroundStyle(.white.opacity(0.85))
+                        }.padding(16).background(Color.black.opacity(0.45)).clipShape(RoundedRectangle(cornerRadius: 3))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity).allowsHitTesting(false)
                     }
                     if model.scanning {
                         VStack(alignment: .leading, spacing: 4) {
@@ -165,8 +174,10 @@ struct CaptureScreen: View {
                 if model.processing { LineLoader(label: "Building your measured room") }
                 if model.uploading { LineLoader(label: "Sending to your laptop", progress: model.uploadProgress) }
                 VStack(spacing: 10) {
-                    if !model.ready && !model.uploadComplete {
-                        Button(model.scanning ? "Finish & save" : "Start scan") { if model.scanning { model.stop() } else { model.start() } }
+                    if model.relocalizing {
+                        Button("Stop looking") { model.cancelRelocalizing() }.buttonStyle(DwelldButtonStyle(filled: false))
+                    } else if !model.ready && !model.uploadComplete {
+                        Button(model.scanning ? "Finish & save" : (model.continueFrom.isEmpty ? "Start scan" : "Continue scan")) { if model.scanning { model.stop() } else { model.start() } }
                             .buttonStyle(DwelldButtonStyle())
                             .disabled(model.pairedSession.isEmpty || model.pairing || model.uploading || model.processing)
                     }

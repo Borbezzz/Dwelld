@@ -67,7 +67,7 @@ function ownerFor(f: { elementId?: string | null; worldPosition?: number[] | nul
  * done during the scan reuse their verified findings, the rest are analysed now. Each piece of
  * furniture gets its best photo as an "object" finding so the room page can show where it was seen.
  */
-export async function analyzeNativeInspection(inspection: Document, manifest: SpatialManifest, sessionId: ObjectId | null) {
+export async function analyzeNativeInspection(inspection: Document, manifest: SpatialManifest, sessionId: ObjectId | null, options: { objectElementIds?: string[] } = {}) {
   const db = await getDb(), warnings: string[] = ["Photos and LiDAR geometry do not cover every surface. Damage checks inspect visible furniture, fixtures and room surfaces."];
   const deadline = Date.now() + 240_000;
   try {
@@ -126,7 +126,8 @@ export async function analyzeNativeInspection(inspection: Document, manifest: Sp
     }
     // Where each piece of furniture was seen best.
     const furniture = elements.filter(isFurniture), names = furnitureNames(furniture);
-    for (const e of furniture) {
+    // A continued scan only adds views for furniture it newly measured.
+    for (const e of furniture.filter(e => !options.objectElementIds || options.objectElementIds.includes(e.id))) {
       let best: { box: { x: number; y: number; width: number; height: number }; area: number; ref: string; t: number } | null = null;
       for (const fr of manifest.frames) { const ref = imageRef(fr.image); if (!ref) continue; const v = elementInView(e as RoomElement, fr as FramePose); if (v && (!best || v.area > best.area)) best = { box: v.box, area: v.area, ref, t: fr.timestamp }; }
       if (best) await db.collection("findings").insertOne({ ...base, kind: "object", label: names.get(e.id) || e.category, spatialElementId: e.id, evidenceFrameUrl: best.ref, boundingBox: best.box, timestampSeconds: best.t, source: "ai", detectionSource: "roomplan", reviewStatus: "confirmed", reviewHistory: [], createdAt: new Date() });

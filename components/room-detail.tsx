@@ -121,7 +121,7 @@ export default function RoomDetail({ roomId }: { roomId: string }) {
       <div><Link href="/" className="back-link"><ArrowLeft size={14} aria-hidden="true" /> Your spaces</Link>
         {room ? <h1>{room.name}</h1> : <span className="skeleton" style={{ display: "block", width: 260, height: 44, margin: "12px 0 10px" }} />}
         <p>{scan ? `${purpose(scan)} scan · ${when(scan.createdAt)}` : scans && !scans.length ? "No scans yet." : " "}</p></div>
-      <div className="room-detail-actions">{compareHref && <Link className="button button-outline" href={compareHref}>What changed</Link>}{scans && <Link className="button button-dark" href={next.href}>{next.label} <ArrowUpRight size={16} aria-hidden="true" /></Link>}</div>
+      <div className="room-detail-actions">{current && manifest?.assets.some(a => a.kind === "worldmap") && <Link className="button button-outline" href={`/live?room=${roomId}&continue=${current}`}>Continue this scan</Link>}{compareHref && <Link className="button button-outline" href={compareHref}>What changed</Link>}{scans && <Link className="button button-dark" href={next.href}>{next.label} <ArrowUpRight size={16} aria-hidden="true" /></Link>}</div>
     </div>
     {error && <div role="alert" className="notice error-notice">{error}<button onClick={() => setError("")} aria-label="Dismiss message"><X size={16} /></button></div>}
     {scans && scans.length > 1 && <nav className="room-scans" aria-label="Scans of this room">{scans.map(i => <button key={i.id} aria-pressed={i.id === current} onClick={() => setCurrent(i.id)}><b>{purpose(i)}</b><span>{ready(i) ? when(i.createdAt) : i.status === "failed" ? "Failed" : "Analysing…"}</span></button>)}</nav>}

@@ -34,6 +34,9 @@ struct PhoneFinding: Decodable, Identifiable {
     @Published var status = "Start an inspection on your laptop, then scan its QR code to connect this phone."
     @Published var pairedSession = ""
     @Published var pairing = false
+    /// Set when the laptop session continues an earlier scan: the phone relocalizes into it first.
+    @Published var continueFrom = ""
+    @Published var relocalizing = false
     @Published var uploadComplete = false
     @Published var uploadProgress: Double = 0
     private var connection: CaptureConnection?
@@ -67,7 +70,9 @@ struct PhoneFinding: Decodable, Identifiable {
             if let expiry = remote?["expiresAt"] as? String { let formatter = ISO8601DateFormatter(); formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; claim.expiresAt = formatter.date(from: expiry) ?? claim.expiresAt }
             if remote?["status"] as? String == "saved" { claim.completed = true }
             if changesSession { resetCaptureState() }
+            claim.continueFrom = remote?["continueFrom"] as? String
             try CaptureConnectionStore.save(claim); connection = claim
+            continueFrom = claim.continueFrom ?? ""
             phoneToken = claim.phone; pairedSession = session; uploadComplete = claim.completed
             if !ready { inspectionId = "" }
             status = uploadComplete ? "Inspection already saved. Start a new inspection on your laptop for another scan." : "Connected. Finish & save sends your scan to the laptop automatically."
@@ -77,7 +82,7 @@ struct PhoneFinding: Decodable, Identifiable {
     private func restoreConnection() {
         guard let saved = CaptureConnectionStore.load() else { return }
         if saved.completed { try? CaptureConnectionStore.clear(); return }
-        connection = saved; uploadComplete = saved.completed
+        connection = saved; uploadComplete = saved.completed; continueFrom = saved.continueFrom ?? ""
         if saved.paired { pairedSession = saved.session; phoneToken = saved.phone }
         if let folder = saved.captureFolder, UUID(uuidString: folder) != nil {
             let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(folder)
@@ -172,10 +177,8 @@ struct PhoneFinding: Decodable, Identifiable {
         connectionGeneration = UUID()
         timer?.invalidate(); timer = nil
         preUploadTask?.cancel(); preUploadTask = nil; pendingEvidence = nil
-        view.delegate = nil; view.captureSession.delegate = nil; view.captureSession.arSession.pause()
-        view = RoomCaptureView(frame: .zero)
-        view.delegate = self; view.captureSession.delegate = self; view.isModelEnabled = false
-        captureViewID = UUID()
+        replaceCaptureView()
+        relocalizing = false
         scanning = false; processing = false; ready = false; uploading = false
         manifest = nil; directory = nil; frames = []; assets = []; inspectionId = ""
         startTime = nil; lastTimestamp = -1; frameCount = 0; depthCount = 0; featureCount = 0
@@ -194,13 +197,73 @@ struct PhoneFinding: Decodable, Identifiable {
         do { try CaptureConnectionStore.clear() }
         catch { status = "Could not prepare a new inspection. Retry after unlocking the phone."; return }
         resetCaptureState()
-        connection = nil; pairedSession = ""; phoneToken = ""
+        connection = nil; pairedSession = ""; phoneToken = ""; continueFrom = ""
         status = "Start a new inspection on your laptop, then scan its QR code."
     }
+    /// A fresh RoomPlan view. Pass an ARSession to run RoomPlan on it, keeping that session's coordinates.
+    private func replaceCaptureView(arSession: ARSession? = nil) {
+        view.delegate = nil; view.captureSession.delegate = nil; view.captureSession.arSession.pause()
+        if let arSession { view = RoomCaptureView(frame: .zero, arSession: arSession) } else { view = RoomCaptureView(frame: .zero) }
+        view.delegate = self; view.captureSession.delegate = self; view.isModelEnabled = false
+        captureViewID = UUID()
+    }
     func start() {
-        guard !scanning, !pairing, !uploading, !processing, !ready, !uploadComplete else { return }
+        guard !scanning, !relocalizing, !pairing, !uploading, !processing, !ready, !uploadComplete else { return }
         guard let connection, connection.paired, !connection.completed, connection.expiresAt > Date() else { status = "Scan a new inspection QR on your laptop first. No phone sign-in is required."; return }
         guard RoomCaptureSession.isSupported else { status = "RoomPlan requires a supported LiDAR iPhone or iPad."; return }
+        if continueFrom.isEmpty { beginCapture() } else { Task { await relocalizeThenCapture() } }
+    }
+    func cancelRelocalizing() {
+        guard relocalizing else { return }
+        relocalizing = false; view.captureSession.arSession.pause(); tracking = "Camera idle"
+        status = "Stopped looking. Tap Continue scan to try again."
+    }
+    /// Load the earlier scan's ARWorldMap and wait until ARKit recognises the room.
+    /// RoomPlan then runs on the same ARSession, so everything new lands in the original coordinates.
+    private func relocalizeThenCapture() async {
+        let generation = connectionGeneration
+        relocalizing = true
+        defer { if generation == connectionGeneration { relocalizing = false } }
+        status = "Loading the earlier scan…"
+        let map: ARWorldMap
+        do {
+            var request = URLRequest(url: pairedBase.appendingPathComponent("api/live/\(pairedSession)/worldmap")); request.timeoutInterval = 60
+            request.setValue("Bearer \(phoneToken)", forHTTPHeaderField: "Authorization")
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { throw httpFailure(response, data: data) }
+            guard let decoded = try NSKeyedUnarchiver.unarchivedObject(ofClass: ARWorldMap.self, from: data) else { throw CocoaError(.fileReadCorruptFile) }
+            map = decoded
+        } catch { status = "Couldn't load the earlier scan. \(error.localizedDescription)"; return }
+        guard generation == connectionGeneration, relocalizing else { return }
+        let session = ARSession()
+        replaceCaptureView(arSession: session)
+        let configuration = ARWorldTrackingConfiguration()
+        configuration.initialWorldMap = map
+        if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) { configuration.frameSemantics.insert(.sceneDepth) }
+        session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
+        status = "Point your phone at a part of the room you already scanned and move slowly."
+        let deadline = Date().addingTimeInterval(90)
+        while Date() < deadline {
+            do { try await Task.sleep(for: .milliseconds(400)) } catch { return }
+            guard generation == connectionGeneration, relocalizing else { return }
+            guard let frame = session.currentFrame else { continue }
+            switch frame.camera.trackingState {
+            case .normal:
+                // ARKit only reports normal tracking with an initial world map once it has relocalized.
+                relocalizing = false
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+                beginCapture()
+                if scanning { status = "Found your room. Scan the new part; it joins the earlier scan on your laptop." }
+                return
+            case .limited(.relocalizing): tracking = "Looking for the part you scanned before…"
+            case .limited(let reason): tracking = "Tracking limited: \(String(describing: reason))"
+            case .notAvailable: tracking = "Camera starting…"
+            }
+        }
+        session.pause(); tracking = "Camera idle"
+        status = "Couldn't recognise the earlier scan. Stand where you scanned before, in similar light, and tap Continue scan again."
+    }
+    private func beginCapture() {
         do {
             let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(UUID().uuidString)
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -395,7 +458,29 @@ struct PhoneFinding: Decodable, Identifiable {
         guard let ref = done?["url"] as? String else { throw CocoaError(.fileWriteUnknown) }
         return ref
     }
-    func stop() { timer?.invalidate(); timer = nil; scanning = false; processing = true; view.captureSession.stop(); status = "Processing measured room geometry…" }
+    func stop() {
+        guard scanning else { return }
+        timer?.invalidate(); timer = nil; scanning = false; processing = true
+        status = "Saving where everything is, so you can continue this scan later…"
+        let capture = view.captureSession
+        Task { @MainActor in
+            await saveWorldMap(from: capture.arSession)
+            capture.stop()
+            if processing { status = "Processing measured room geometry…" }
+        }
+    }
+    /// ARKit's map of the room. A later scan relocalizes into it to continue in the same coordinates.
+    private func saveWorldMap(from session: ARSession) async {
+        guard let dir = directory else { return }
+        let map: ARWorldMap? = await withCheckedContinuation { continuation in
+            session.getCurrentWorldMap { map, _ in continuation.resume(returning: map) }
+        }
+        guard let map else { return }
+        do {
+            let data = try NSKeyedArchiver.archivedData(withRootObject: map, requiringSecureCoding: true)
+            try data.write(to: dir.appendingPathComponent("room.arworldmap"), options: .atomic)
+        } catch { /* The scan still saves; it just can't be continued later. */ }
+    }
     private func recordFrame() {
         guard scanning, let frame = view.captureSession.arSession.currentFrame, let dir = directory, frame.timestamp != lastTimestamp else { return }
         switch frame.camera.trackingState {
@@ -472,6 +557,9 @@ struct PhoneFinding: Decodable, Identifiable {
             let indices = Array(Set(sentKeys + fallback)).sorted()
             var evidence: [FrameRecord] = []
             var cloudAssets = assets.filter { $0.kind == "splat" }
+            if FileManager.default.fileExists(atPath: dir.appendingPathComponent("room.arworldmap").path) {
+                cloudAssets.append(Asset(name: "room.arworldmap", mediaRef: "", kind: "worldmap"))
+            }
             for i in indices {
                 let f = frames[i]
                 let sampled = try liveEvidence[i] ?? makeEvidence(f, dir: dir)
@@ -756,6 +844,7 @@ private struct CaptureConnection: Codable {
     var expiresAt = Date().addingTimeInterval(2 * 60 * 60)
     var captureFolder: String?
     var completed = false
+    var continueFrom: String?
 }
 private enum CaptureConnectionStore {
     private static var query: [String: Any] { [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "com.dwelld.capture.pairing", kSecAttrAccount as String: "current-inspection"] }
