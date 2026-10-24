@@ -1,7 +1,8 @@
 import {readJsonBody} from "@/lib/server/request-body";
 import {createHash,randomUUID} from "node:crypto";
 import { NextResponse } from "next/server";
-import { getDb } from "@/lib/server/db";
+import {requireReadableInspection,canReadRoom} from "@/lib/server/space-access";
+import { getDb,parseObjectId } from "@/lib/server/db";
 import { requireUser, requireOwnedRoom, requireOwnedInspection } from "@/lib/server/access";
 import { errorResponse } from "@/lib/server/api-error";
 import { deleteMedia } from "@/lib/server/media";
@@ -9,11 +10,12 @@ import { compareInspections } from "@/lib/server/comparison";
 export const runtime="nodejs";
 export const dynamic="force-dynamic";
 export const maxDuration=300;
-export async function GET(request:Request){try{const user=await requireUser(request);const roomId=new URL(request.url).searchParams.get("roomId")||"";const room=await requireOwnedRoom(roomId,user.id);const rows=await(await getDb()).collection("comparisons").find({roomId:room._id,ownerId:user.id},{projection:{roomId:1,baselineInspectionId:1,currentInspectionId:1,createdAt:1}}).sort({createdAt:-1}).limit(50).toArray();return NextResponse.json({comparisons:rows.map(({_id,...r})=>({...r,id:String(_id)}))});}catch(e){return errorResponse(e,"comparison.list");}}
+export async function GET(request:Request){try{const user=await requireUser(request);const roomId=new URL(request.url).searchParams.get("roomId")||"";const id=parseObjectId(roomId),db=await getDb(),room=id?await db.collection("rooms").findOne({_id:id}):null;if(!room||!await canReadRoom(room as never,user.id))return NextResponse.json({error:"Room not found"},{status:404});const rows=await db.collection("comparisons").find({roomId:room._id},{projection:{roomId:1,baselineInspectionId:1,currentInspectionId:1,createdAt:1}}).sort({createdAt:-1}).limit(50).toArray();return NextResponse.json({comparisons:rows.map(({_id,...r})=>({...r,id:String(_id)}))});}catch(e){return errorResponse(e,"comparison.list");}}
 export async function POST(request:Request){try{
  const user=await requireUser(request);const body=await readJsonBody(request);
  if(typeof body.baselineInspectionId!=="string"||typeof body.currentInspectionId!=="string"||body.baselineInspectionId===body.currentInspectionId)return NextResponse.json({error:"Choose two distinct inspections."},{status:400});
- const [baseline,current]=await Promise.all([requireOwnedInspection(body.baselineInspectionId,user.id),requireOwnedInspection(body.currentInspectionId,user.id)]);
+ if(!parseObjectId(body.baselineInspectionId)||!parseObjectId(body.currentInspectionId))return NextResponse.json({error:"Invalid inspection IDs"},{status:400});
+ const [baseline,current]=await Promise.all([requireReadableInspection(parseObjectId(body.baselineInspectionId)!,user.id),requireReadableInspection(parseObjectId(body.currentInspectionId)!,user.id)]);
  if(String(baseline.roomId)!==String(current.roomId))return NextResponse.json({error:"Inspections must belong to the same room."},{status:400});
  if(![baseline,current].every(i=>["completed","partial"].includes(i.status))||new Date(baseline.createdAt)>=new Date(current.createdAt))return NextResponse.json({error:"Choose an earlier completed baseline and a later completed inspection."},{status:400});
  const db=await getDb();const key=createHash("sha256").update(`${user.id}:${baseline.roomId}`).digest("hex"),leaseId=randomUUID();
