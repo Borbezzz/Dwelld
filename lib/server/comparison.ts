@@ -35,8 +35,8 @@ export async function compareInspections(baseline:Document,current:Document){
    let video:Awaited<ReturnType<typeof openVideoFrames>>|undefined;
    try{
     video=await openVideoFrames(await readMedia(inspection.sourceUrl,100*1024*1024));
-    const requested=missing.length?missing:[.25,.5,.75].map((ratio,index)=>({id:`recorded-view-${inspection._id}-${index}`,kind:"frame",label:"Recorded room view (not a detection)",timestampSeconds:ratio*video!.durationSeconds}));
-    const times=[...new Set(requested.map(f=>f.timestampSeconds!).filter(t=>t>=0&&t<video!.durationSeconds))].slice(0,6);
+    const requested=missing.length?missing:[.25,.5,.75].map((ratio,index)=>({id:`recorded-view-${inspection._id}-${index}`,kind:"frame",label:"Recorded room view (not a detection)",timestampSeconds:typeof inspection.segmentStartTime==="number"?inspection.segmentStartTime+ratio*(Math.min(inspection.segmentEndTime,video!.durationSeconds)-inspection.segmentStartTime):ratio*video!.durationSeconds}));
+    const times=[...new Set(requested.map(f=>f.timestampSeconds!).filter(t=>t>=0&&t<video!.durationSeconds&&(typeof inspection.segmentStartTime!=="number"||(t>=inspection.segmentStartTime&&t<inspection.segmentEndTime)))].slice(0,6);
     for(const time of times){const frame=await video.extract(time);const ref=await writeMedia(frame,`comparison-${inspection._id}-${time}.png`,"image/png",{ownerId:inspection.ownerId,inspectionId:String(inspection._id)});generatedRefs.push(ref);
      for(const finding of requested.filter(f=>f.timestampSeconds===time)){const original=evidence[side].find(f=>f.id===finding.id);if(original)original.evidenceFrameUrl=ref;else evidence[side].push({...finding,evidenceFrameUrl:ref});}
     }
