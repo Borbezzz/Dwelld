@@ -8,6 +8,7 @@ import { indexFindings } from "./search";
 import type { DepthPatch } from "./crack-check";
 import { elementInView, localizeDamageBox, type FrameFinding, type FramePose, type RoomElement } from "./frame-analysis";
 import { insideElement } from "../spatial/identity";
+import { prepareObjectReconstructions } from "./object-reconstruction";
 import { furnitureNames, isFurniture } from "../spatial/furniture";
 import type { SpatialManifest, SpatialElement } from "../spatial/types";
 
@@ -155,6 +156,7 @@ export async function analyzeNativeInspection(inspection: Document, manifest: Sp
       for (const fr of manifest.frames) { const ref = imageRef(fr.image); if (!ref) continue; const v = elementInView(e as RoomElement, fr as FramePose); if (v && (!best || v.area > best.area)) best = { box: v.box, area: v.area, ref, t: fr.timestamp }; }
       if (best) await db.collection("findings").insertOne({ ...base, kind: "object", label: names.get(e.id) || e.category, description: `Measured ${e.dimensions.map(n => Number(n).toFixed(2)).join(" × ")} m from this scan.`, dimensions: e.dimensions, spatialElementId: e.id, evidenceFrameUrl: best.ref, boundingBox: best.box, timestampSeconds: best.t, source: "ai", detectionSource: "roomplan", reviewStatus: "confirmed", reviewHistory: [], createdAt: new Date() });
     }
+    await prepareObjectReconstructions(inspection, manifest).catch(() => {});
     const approved = collected.filter(f => f.autoApproved).length;
     await db.collection("inspections").updateOne({ _id: inspection._id }, { $set: { status: skipped || warnings.length > 1 ? "partial" : "completed", analysisWarnings: [...new Set(warnings)], autoReview: { checked: collected.filter(f => f.verification).length, approved }, framesAnalysed: analysed, completedAt: new Date(), durationSeconds: manifest.frames.at(-1)?.timestamp || 0 } });
     await indexFindings(inspection.ownerId, inspection._id).catch(() => {});
