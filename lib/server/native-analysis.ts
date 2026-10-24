@@ -1,63 +1,58 @@
 import {analysisFailure} from "./analysis-failure";
-import { inspectVideoDamageBatch } from "./damage";
+import { analyzeFurnitureVideoFrames, oneFramePerSecond } from "./furniture-video";
 import { ObjectId, type Document } from "mongodb";
 import { randomUUID } from "node:crypto";
 import { getDb } from "./db";
 import { readMedia } from "./media";
 import { indexFindings } from "./search";
 import type { DepthPatch } from "./crack-check";
-import { analyzeEvidenceFrame, elementInView, type FrameFinding, type FramePose, type RoomElement } from "./frame-analysis";
+import { elementInView, localizeDamageBox, type FrameFinding, type FramePose, type RoomElement } from "./frame-analysis";
 import { insideElement } from "../spatial/identity";
 import { furnitureNames, isFurniture } from "../spatial/furniture";
 import type { SpatialManifest, SpatialElement } from "../spatial/types";
 
-/** Live: analyse one uploaded evidence photo and publish its findings to the laptop as they are verified. */
+/** Live: batch every queued second in order. No per-finding or per-object provider calls. */
 export async function analyzeLiveEvidenceFrame(sessionId: ObjectId, _name: string) {
   const db = await getDb(), frames = db.collection("liveFrames"), sessions = db.collection("liveSessions");
-  // Database leases bound provider concurrency across separate serverless invocations.
   const lease = randomUUID();
-  let slot = -1;
-  for (let i = 0; i < 2; i++) {
-    const claimed = await sessions.findOneAndUpdate({ _id: sessionId, $or: [{ [`frameWorkers.${i}.until`]: { $exists: false } }, { [`frameWorkers.${i}.until`]: { $lte: new Date() } }] }, { $set: { [`frameWorkers.${i}`]: { lease, until: new Date(Date.now() + 295_000) } } });
-    if (claimed) { slot = i; break; }
-  }
-  if (slot < 0) return;
+  // A single session worker avoids duplicate batch reasoning and out-of-order completion.
+  const claimed = await sessions.findOneAndUpdate({ _id: sessionId, $or: [{ 'furnitureWorker.until': { $exists: false } }, { 'furnitureWorker.until': { $lte: new Date() } }] }, { $set: { furnitureWorker: { lease, until: new Date(Date.now() + 295_000) } } });
+  if (!claimed) return;
   const deadline = Date.now() + 180_000;
   try {
     while (Date.now() < deadline) {
-      // Prioritize the newest view while recording. Older queued photos are retained for the saved pass.
-      if ((await sessions.findOne({ _id: sessionId }, { projection: { status: 1 } }))?.status === 'saved') break;
-      const frame = await frames.findOneAndUpdate({ sessionId, status: "queued" }, { $set: { status: "analyzing", startedAt: new Date() } }, { sort: { timestampSeconds: -1 }, returnDocument: "after" });
-      if (!frame) break;
-      const ids = new Map<FrameFinding, string>();
+      const session = await sessions.findOne({ _id: sessionId });
+      if (session?.status === 'saved' || session?.analysisIssue?.blocksService) break;
+      const batch: Document[] = [];
+      for (let i = 0; i < 6; i++) {
+        const frame = await frames.findOneAndUpdate({ sessionId, status: 'queued' }, { $set: { status: 'analyzing', startedAt: new Date() } }, { sort: { timestampSeconds: 1 }, returnDocument: 'after' });
+        if (!frame) break;
+        batch.push(frame);
+      }
+      if (!batch.length) break;
       try {
-        const session = await sessions.findOne({ _id: sessionId });
-        const image = await readMedia(frame.ref, 12 * 1024 * 1024);
-        const result = await analyzeEvidenceFrame(image, frame.pose as FramePose, (session?.nativeLive?.elements || []) as RoomElement[], { walls: true, onCandidates: async findings => {
-          await db.collection("liveEvidence").updateOne({ sessionId, observationId: `frame-${frame.name}` }, { $setOnInsert: { sessionId, observationId: `frame-${frame.name}`, ref: frame.ref, createdAt: new Date() } }, { upsert: true });
-          for (const f of findings) {
-            if (ids.has(f)) continue;
-            // Match only measured points of the same damage type on the same element.
-            const previous = f.worldPosition && f.elementId ? await db.collection("liveFindings").findOne({ sessionId, damageType: f.damageType, elementId: f.elementId, worldPosition: { $exists: true }, reviewStatus: { $ne: 'rejected' } }) : null;
-            if (previous?.worldPosition && Math.hypot(...f.worldPosition!.map((n, i) => n - previous.worldPosition[i])) < .12) continue;
-            const id = randomUUID(); ids.set(f, id);
-            await db.collection("liveFindings").insertOne({ ...f, id, sessionId, kind: 'damage', source: 'ai', frameName: frame.name, evidenceFrameRef: frame.ref, timestampSeconds: frame.timestampSeconds, pose: frame.pose, createdAt: new Date(), reviewHistory: [] });
+        const images = await Promise.all(batch.map(async frame => ({ ...frame, _id: frame._id, name: frame.name as string, ref: frame.ref as string, image: await readMedia(frame.ref, 12 * 1024 * 1024), timestampSeconds: frame.timestampSeconds as number, pose: frame.pose as FramePose })));
+        const assessed = await analyzeFurnitureVideoFrames(images, (session?.nativeLive?.elements || []) as RoomElement[]);
+        for (const { frame, result } of assessed) {
+          await db.collection('liveEvidence').updateOne({ sessionId, observationId: `frame-${frame.name}` }, { $setOnInsert: { sessionId, observationId: `frame-${frame.name}`, ref: frame.ref, createdAt: new Date() } }, { upsert: true });
+          for (const f of result.findings) {
+            const previous = f.worldPosition && f.elementId ? await db.collection('liveFindings').find({ sessionId, damageType: f.damageType, elementId: f.elementId, worldPosition: { $exists: true }, reviewStatus: { $ne: 'rejected' } }).toArray() : [];
+            if (previous.some(p => p.worldPosition && Math.hypot(...f.worldPosition!.map((n, i) => n - p.worldPosition[i])) < .12)) continue;
+            // Frame id + index also prevents a retry from duplicating this same observation.
+            const id = `${frame._id}-${result.findings.indexOf(f)}`;
+            await db.collection('liveFindings').updateOne({ sessionId, id }, { $setOnInsert: { ...f, id, sessionId, kind: 'damage', source: 'ai', frameName: frame.name, evidenceFrameRef: frame.ref, timestampSeconds: frame.timestampSeconds, pose: frame.pose, createdAt: new Date(), reviewHistory: [] } }, { upsert: true });
           }
-        } });
-        for (const [f, id] of ids) {
-          const rejected = !result.findings.includes(f);
-          await db.collection('liveFindings').updateOne({ sessionId, id, reviewStatus: 'pending' }, { $set: { ...(f.verification ? { verification: f.verification, confidence: f.confidence } : {}), reviewStatus: rejected ? 'rejected' : f.reviewStatus, autoApproved: !rejected && f.autoApproved, ...(rejected ? { rejectedBy: 'auto-verifier' } : {}) } });
+          await frames.updateOne({ _id: frame._id }, { $set: { status: 'done', views: result.views, findings: result.findings.length, warnings: result.warnings, finishedAt: new Date() } });
         }
-        if(result.warnings.length)await sessions.updateOne({_id:sessionId},{$set:{analysisIssue:{code:'ANALYSIS_INCOMPLETE',message:result.warnings.join(' '),at:new Date().toISOString()}}});
-        await frames.updateOne({ _id: frame._id }, { $set: { status: 'done', views: result.views, findings: result.findings.length, warnings: result.warnings, dropped: result.dropped, finishedAt: new Date() } });
       } catch (error) {
         const failure = analysisFailure(error);
-        await frames.updateOne({ _id: frame._id }, { $set: { status: 'failed', error: failure.message, errorCode: failure.code, finishedAt: new Date() } });
-        await sessions.updateOne({_id:sessionId},{$set:{analysisIssue:{...failure,at:new Date().toISOString()}}});
+        await frames.updateMany({ _id: { $in: batch.map(f => f._id) }, status: 'analyzing' }, { $set: { status: 'failed', error: failure.message, errorCode: failure.code, finishedAt: new Date() } });
+        await sessions.updateOne({ _id: sessionId }, { $set: { analysisIssue: { ...failure, at: new Date().toISOString() } } });
+        if (failure.blocksService) break;
       }
     }
   } finally {
-    await sessions.updateOne({ _id: sessionId, [`frameWorkers.${slot}.lease`]: lease }, { $unset: { [`frameWorkers.${slot}`]: '' } });
+    await sessions.updateOne({ _id: sessionId, 'furnitureWorker.lease': lease }, { $unset: { furnitureWorker: '' } });
   }
 }
 
@@ -70,11 +65,11 @@ function ownerFor(f: { elementId?: string | null; worldPosition?: number[] | nul
 
 /**
  * Saved LiDAR scan. Every evidence photo is analysed against the final measured room: photos already
- * done during the scan reuse their verified findings, the rest are analysed now. Each piece of
+ * done during the scan reuse their findings without further model calls, the rest are analysed now. Each piece of
  * furniture gets its best photo as an "object" finding so the room page can show where it was seen.
  */
 export async function analyzeNativeInspection(inspection: Document, manifest: SpatialManifest, sessionId: ObjectId | null, options: { objectElementIds?: string[] } = {}) {
-  const db = await getDb(), warnings: string[] = ["Photos and LiDAR geometry do not cover every surface. Damage checks inspect visible furniture, fixtures and room surfaces."];
+  const db = await getDb(), warnings: string[] = ["Photos and LiDAR geometry do not cover every surface. Damage checks inspect obvious damage on visible basic furniture only."];
   const deadline = Date.now() + 240_000;
   try {
     await db.collection("inspections").updateOne({ _id: inspection._id }, { $set: { status: "processing" } });
@@ -100,37 +95,46 @@ export async function analyzeNativeInspection(inspection: Document, manifest: Sp
     const liveFindings = sessionId ? await db.collection("liveFindings").find({ sessionId, source: "ai", frameName: { $in: liveFrames.map(f => f.name) } }).toArray() : [];
     const collected: (FrameFinding & { ref: string; timestampSeconds: number; liveId?: string })[] = [];
     // Reuse what the scan already found.
-    for (const f of liveFindings) if (f.reviewStatus !== "rejected") collected.push({ ...(f as unknown as FrameFinding), ref: f.evidenceFrameRef, timestampSeconds: f.timestampSeconds, liveId: f.id, reviewStatus: f.reviewStatus });
+    for (const f of liveFindings) if (f.reviewStatus !== "rejected") {
+      // RoomPlan may not have recognized this furniture when the live photo was first checked.
+      // Reproject using THAT photo's calibrated pose against the final room, without another AI call.
+      const located = f.pose ? localizeDamageBox(f.boundingBox, f.pose, elements as RoomElement[], true) : null;
+      collected.push({ ...(f as unknown as FrameFinding), ...(located ? { elementId: located.owner?.id ?? null, elementCategory: located.owner?.category ?? 'unassigned', worldPosition: located.worldPosition } : {}), ref: f.evidenceFrameRef, timestampSeconds: f.timestampSeconds, liveId: f.id, reviewStatus: f.reviewStatus });
+    }
     // Check all remaining evidence in timestamped batches, rather than running separate calls per crop.
-    const todo = manifest.frames.filter(fr => !liveFrames.some(l => l.ref === imageRef(fr.image)) && imageRef(fr.image));
+    const sampled = oneFramePerSecond(manifest.frames.map(fr => ({ ...fr, timestampSeconds: fr.timestamp })));
+    const todo = sampled.filter(fr => !liveFrames.some(l => l.ref === imageRef(fr.image) || Math.floor(l.timestampSeconds) === Math.floor(fr.timestamp)) && imageRef(fr.image));
+    let blocked = sessionId ? (await db.collection('liveSessions').findOne({ _id: sessionId }))?.analysisIssue : null;
+    if (!blocked?.blocksService) blocked = null;
+    if (blocked) warnings.push(blocked.message);
     warnings.push(...liveFrames.flatMap(f => f.warnings || []));
     let analysed = liveFrames.length, skipped = 0, cursor = 0;
     const worker = async () => {
       while (cursor < todo.length) {
         const batch = todo.slice(cursor, cursor += 6);
-        if (Date.now() > deadline - 65_000) {
+        if (blocked || Date.now() > deadline - 65_000) {
           skipped += batch.length;
-          if (sessionId) await db.collection('liveFrames').updateMany({sessionId,name:{$in:batch.map(fr=>fr.image)},status:'queued'},{$set:{status:'failed',error:'Analysis time budget reached. Photo retained.'}});
+          if (sessionId) await db.collection('liveFrames').updateMany({sessionId,name:{$in:batch.map(fr=>fr.image)},status:'queued'},{$set:{status:'failed',error:blocked?.message || 'Analysis time budget reached. Photo retained.'}});
           continue;
         }
         try {
           const images = await Promise.all(batch.map(async fr => ({ image: await readMedia(imageRef(fr.image)!, 12 * 1024 * 1024), timestampSeconds: fr.timestamp, fr })));
-          let batchIssue: string | undefined;
-          const observations = await inspectVideoDamageBatch(images).catch(error=>{batchIssue=analysisFailure(error).message;warnings.push(batchIssue);return new Map();});
-          for (const { image, fr } of images) {
-            const result = await analyzeEvidenceFrame(image, fr, elements as RoomElement[], { walls: true, observations: observations.get(fr.timestamp) ?? [], verify: false, depth: await depthFor(fr).catch(() => null) });
-            if(batchIssue)result.warnings.push(batchIssue);
+          const assessed = await analyzeFurnitureVideoFrames(await Promise.all(images.map(async f => ({ ...f, pose: f.fr, depth: await depthFor(f.fr).catch(() => null) }))), elements as RoomElement[]);
+          for (const { frame: { fr }, result } of assessed) {
             result.findings.forEach(f => collected.push({ ...f, ref: imageRef(fr.image)!, timestampSeconds: fr.timestamp })); analysed++;
             warnings.push(...result.warnings);
-            if (sessionId) await db.collection('liveFrames').updateOne({sessionId,name:fr.image},{$set:{status:'done',finishedAt:new Date(),warnings:result.warnings}});
+            if (sessionId) await db.collection('liveFrames').updateOne({sessionId,name:fr.image},{$set:{status:'done',ref:imageRef(fr.image),timestampSeconds:fr.timestamp,finishedAt:new Date(),warnings:result.warnings}},{upsert:true});
           }
-        } catch {
+        } catch (error) {
+          const failure = analysisFailure(error);
+          if (failure.blocksService) blocked = failure;
+          warnings.push(failure.message);
           if (sessionId) await db.collection('liveFrames').updateMany({sessionId,name:{$in:batch.map(fr=>fr.image)},status:{$ne:'done'}},{$set:{status:'failed',error:'Saved damage check failed. Photo retained.'}});
           warnings.push(`Photos at ${batch[0].timestamp.toFixed(1)}s–${batch[batch.length - 1].timestamp.toFixed(1)}s could not be analysed.`); }
       }
     };
-    await Promise.all([worker(), worker(), worker()]);
-    if (skipped) warnings.push(`${skipped} photos were not analysed because the time budget ran out.`);
+    await worker();
+    if (skipped) warnings.push(`${skipped} photos were not analysed because analysis was unavailable or its time budget ran out.`);
     // Repeated views of the same measured mark are a single finding, not new damage each second.
     const unique: typeof collected = [];
     for (const f of collected) {

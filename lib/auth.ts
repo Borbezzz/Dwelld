@@ -1,3 +1,4 @@
+import { authBaseURL } from "./auth-origins";
 import { betterAuth } from "better-auth";
 import { mongodbAdapter } from "@better-auth/mongo-adapter";
 import { nextCookies } from "better-auth/next-js";
@@ -16,7 +17,7 @@ async function createAuth() {
   ]);
   return betterAuth({
     appName: "Dwelld", secret: process.env.BETTER_AUTH_SECRET,
-    baseURL: process.env.BETTER_AUTH_URL,
+    baseURL: authBaseURL(),
     database: mongodbAdapter(db, { client }),
     emailAndPassword: { enabled: true, minPasswordLength: 1, maxPasswordLength: 128 },
     rateLimit: { enabled: true, storage: "database", window: 60, max: 50 },

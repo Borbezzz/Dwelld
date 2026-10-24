@@ -126,3 +126,41 @@ that transition. Evidence inspection now leaves the video element visible, and t
 is retained independently of element mounting. A browser regression check confirms playback time
 continues to advance while the selected source-photo inset is open. Production frame checks from
 that scan also confirmed `AI_BILLING_BLOCKED`; the specialist still published candidates.
+
+## Furniture-only sampled video (24 October 2026)
+
+The native phone scan now selects one RGB evidence photo per captured second. JPEG uploads go
+through a single authenticated, bounded `/api/live/[sessionId]/frame` request carrying the
+calibrated pose as backend-only metadata. The legacy uploaded-reference request remains supported.
+A unique session/second key prevents upload retries or overlapping samples from creating extra
+checks. Unsent evidence remains in the saved capture; stopping does not wait for the entire live
+upload backlog. Display video continues independently over WebRTC.
+
+A single leased worker consumes queued photos chronologically in batches of up to six. Argon
+receives only JPEG pixels, timestamps, a furniture-only prompt and the output schema. No depth,
+LiDAR points, room geometry, camera transforms, or detector boxes enter the provider request.
+The prompt asks for obvious scratches, cracks, stains, dents, tears, chips and broken components
+on chairs, sofas, beds, tables/desks and storage furniture. Tiny specks, texture, shadows, normal
+seams, bedding and non-furniture room surfaces are excluded. Temporal context is limited to the
+short batch; this is not a persistent Live API conversation or a raw video upload.
+
+Structured results are validated against every source timestamp and projected on the backend
+using the exact source photo's intrinsics and camera transform. The nearest measured surface
+must be furniture to receive the mark; otherwise the source-photo box remains unassigned rather
+than forcing a match through an occluding wall. On saving, existing live findings are reprojected
+against the final room without another model request. Completed seconds are reused; remaining
+seconds are checked within the function time budget. Missing checks remain explicitly unassessed.
+
+This native path no longer runs the crack specialist or automatic per-finding Gemini verification.
+The existing edge/depth check can still screen returned crack boxes locally; its geometry never enters the Argon payload. Candidates remain pending human review. Manual marking remains available. Legacy browser/video
+paths still have their separate specialist and verification stages; the shared Argon batch prompt
+is furniture-only. Provider billing/access blocks stop subsequent native calls, including the
+saved pass, while retaining evidence. Safe batch logs record counts of input, output and reasoning
+tokens when supplied by the provider; they contain no photos, keys or geometry.
+
+Validation: provider-payload, source-pose association, non-furniture occlusion, one-second sampling,
+upload idempotency, session ownership and image/pose dimension checks have regression coverage.
+The signed native build and embedded-framework verification pass. A real two-photo provider probe
+still returned `AI_BILLING_BLOCKED`; inference quality and sustained physical scan throughput
+cannot be verified until that service block is resolved. One sampled frame per second is the
+input target, not a promise of one completed model result per second.
