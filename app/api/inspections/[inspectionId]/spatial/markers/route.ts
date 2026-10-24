@@ -7,7 +7,7 @@ import { errorResponse } from "@/lib/server/api-error";
 import { vector } from "@/lib/server/spatial";
 import { readMedia } from "@/lib/server/media";
 import { describeAtPoint } from "@/lib/server/damage";
-import { projectPoint } from "@/lib/server/frame-analysis";
+import { projectPoint } from "@/lib/server/projection";
 import type { SpatialManifest } from "@/lib/spatial/types";
 export const runtime = "nodejs";
 export const maxDuration = 60;

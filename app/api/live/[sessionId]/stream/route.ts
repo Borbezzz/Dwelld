@@ -1,7 +1,7 @@
 import { Binary } from "mongodb";
 import { authenticateLive, liveCollections, liveFailure, LiveError } from "@/lib/server/live-sessions";
 import { readJsonBody } from "@/lib/server/request-body";
-import { validElements } from "@/lib/server/native-live";
+import { validElements } from "@/lib/server/native-validate";
 export const runtime = "nodejs"; export const dynamic = "force-dynamic";
 type Context = { params: Promise<{ sessionId: string }> };
 
