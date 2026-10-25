@@ -31,10 +31,9 @@
   "include": [
     "**/*.ts",
     "**/*.tsx",
-    ".next-hackathon/types/**/*.ts",
     ".next/types/**/*.ts",
     "next-env.d.ts",
-    ".next-check/types/**/*.ts"
+    ".next-hackathon/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"
