@@ -48,7 +48,6 @@ test('native detection works without RoomPlan categories and publishes before ve
   let published = false, verified = false;
   const { analyzeEvidenceFrame } = load('lib/server/frame-analysis.ts', {
     './damage': {inspectVisibleDamage:async()=>[observation], scopeForName},
-    './crack-detector': {inspectCracks:async()=>[]},
     './verify': {autoApproveThreshold:()=>.85, reviewDecision, verifyFinding:async()=>{assert(published);verified=true;return {verdict:'damage',confidence:.9,reason:'Visible mark'};}},
   });
   const result = await analyzeEvidenceFrame(await image(), pose, [], {walls:true,onCandidates:async candidates=>{
@@ -61,7 +60,6 @@ test('native marks are projected onto the nearest real surface and false positiv
   let candidate;
   const { analyzeEvidenceFrame } = load('lib/server/frame-analysis.ts', {
     './damage': {inspectVisibleDamage:async()=>[observation], scopeForName},
-    './crack-detector': {inspectCracks:async()=>[]},
     './verify': {autoApproveThreshold:()=>.85, reviewDecision, verifyFinding:async()=>({verdict:'not_damage',confidence:.9,reason:'Seam'})},
   });
   const wall = {id:'wall1',category:'wall',dimensions:[4,4,.05],transform:[1,0,0,0,0,1,0,0,0,0,1,0,0,0,-2,1]};
@@ -72,7 +70,7 @@ test('native marks are projected onto the nearest real surface and false positiv
 test('damage service failures propagate instead of reporting an empty clean photo', async () => {
   const { analyzeEvidenceFrame } = load('lib/server/frame-analysis.ts', {
     './damage': {inspectVisibleDamage:async()=>{throw new Error('unavailable')}},
-    './crack-detector': {inspectCracks:async()=>[]}, './verify': {},
+    './verify': {},
   });
   await assert.rejects(analyzeEvidenceFrame(await image(), pose, [], {walls:true}), /unavailable/);
 });
@@ -84,7 +82,6 @@ test('video batches cover legacy sparse uploads and retain source timestamps wit
       await new Promise(resolve=>setTimeout(resolve,5));active--;
       return new Map(frames.map(f=>[f.timestampSeconds,[observation]]));
     }},
-    './crack-detector': {inspectCracks:async()=>[],CRACK_MODEL:'test'},
     './media': {parseMediaId:()=>true,readMedia:async()=>Buffer.from('video'),writeMedia:async()=> 'gridfs:test',deleteMedia:async()=>{}},
     './video-frames': {openVideoFrames:async()=>({durationSeconds:15,extract:async t=>Buffer.from(`photo-${t}`),close:async()=>{}})},
   });
@@ -106,11 +103,10 @@ test('billing caps and invalid keys are permanent blocks, distinct from transien
   assert.equal(analysisFailure({status:429}).retryable,true);
   assert.equal(analysisFailure({status:503}).retryable,true);
 });
-function videoWithServices(damage, furniture=async()=>[], cracks=async()=>[]) {
+function videoWithServices(damage, furniture=async()=>[]) {
   const saved=[],deleted=[];
   const mod=load('lib/server/inspection.ts',{
     './damage':{validBox:b=>b,inspectVideoDamageBatch:damage,inspectUnsupportedFurniture:furniture},
-    './crack-detector':{inspectCracks:cracks,CRACK_MODEL:'test'},
     './media':{parseMediaId:()=>true,readMedia:async()=>Buffer.from('video'),writeMedia:async()=>{const ref=`gridfs:evidence-${saved.length}`;saved.push(ref);return ref;},deleteMedia:async ref=>{deleted.push(ref)}},
     './video-frames':{openVideoFrames:async()=>({durationSeconds:15,extract:async t=>Buffer.from(`frame-${t}`),close:async()=>{}})},
   });
@@ -118,7 +114,7 @@ function videoWithServices(damage, furniture=async()=>[], cracks=async()=>[]) {
 }
 test('failed damage batches retain every evidence image, real objects and independent furniture without invoking the removed crack model',async()=>{
   const furniture={label:'desk',description:'Visible desk',boundingBox:observation.boundingBox};
-  const service=videoWithServices(async()=>{throw new Error('malformed secret response')},async()=>[furniture],async()=>[{boundingBox:observation.boundingBox,confidence:.8}]);
+  const service=videoWithServices(async()=>{throw new Error('malformed secret response')},async()=>[furniture]);
   const result=await service.analyzeVideo('gridfs:video','video/mp4',[{timestampSeconds:0,detections:[{objectId:'chair1',label:'chair',boundingBox:observation.boundingBox}]}]);
   assert.equal(result.findings.filter(f=>f.detectionSource==='yolo').length,1);
   assert.equal(result.findings.filter(f=>f.kind==='object'&&f.label==='desk').length,3);
@@ -157,13 +153,11 @@ test('checkpoint failure keeps already published evidence readable',async()=>{
  await assert.rejects(service.analyzeVideo('gridfs:video','video/mp4',[{timestampSeconds:0,detections:[]}],async point=>{if(point.evidenceFrames.length)throw new Error('checkpoint unavailable')}),/checkpoint unavailable/);
  assert(service.saved.length>0);assert.deepEqual(service.deleted,[]);
 });
-test('Argon billing failures remain unassessed and never invoke retired crack or edge detectors',async()=>{
- let specialistCalls=0,published=false;
+test('Argon billing failures remain unassessed and publish nothing',async()=>{
+ let published=false;
  const {analyzeEvidenceFrame}=load('lib/server/frame-analysis.ts',{
   './damage':{inspectVisibleDamage:async()=>{throw Object.assign(new Error('Monthly spending cap exceeded'),{status:429})}},
-  './crack-detector':{inspectCracks:async()=>{specialistCalls++;return [{boundingBox:observation.boundingBox,confidence:.8}]}},
-  './crack-check':{checkCrack:async()=>{specialistCalls++;throw new Error('Retired edge check')}},
  });
  await assert.rejects(analyzeEvidenceFrame(await image(),pose,[],{walls:true,onCandidates:async()=>{published=true}}),/spending cap/);
- assert.equal(specialistCalls,0);assert.equal(published,false);
+ assert.equal(published,false);
 });

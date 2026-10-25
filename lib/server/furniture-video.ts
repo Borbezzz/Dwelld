@@ -1,5 +1,5 @@
 import {damageViewSignature,damageCropSignature} from './damage-signature';
-import type { DepthPatch } from './crack-check';
+import type { DepthPatch } from './depth-patch';
 import { inspectVideoDamageBatch } from './damage';
 import { analyzeEvidenceFrame, type FramePose, type RoomElement } from './frame-analysis';
 

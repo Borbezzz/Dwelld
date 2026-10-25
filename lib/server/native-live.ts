@@ -1,37 +1,9 @@
-import { randomUUID } from "node:crypto";
 import { ObjectId } from "mongodb";
 import type { SessionDoc } from "./live-sessions";
-import { liveCollections, recordLiveAnalysis } from "./live-sessions";
-import { analyzeLiveFrame } from "./live-analysis";
-import { detectImageObjects } from "./yolo";
-import type { LiveFinding } from "../live/types";
+import { liveCollections } from "./live-sessions";
 
 export { validPose, validElements, validSplat, type NativePose, type NativeElement } from "./native-validate";
-import { FURNITURE_CLASSES, type NativePose } from "./native-validate";
-
-/**
- * Damage check on the phone's latest preview while it is still scanning.
- * Furniture found by YOLO is checked by Gemini; with no furniture in view, room surfaces are checked instead.
- * Each finding keeps the camera pose so the laptop can pin it inside the live 3D room.
- */
-export async function analyzeNativePreview(session: SessionDoc, preview: string, pose: NativePose | undefined, timestampSeconds: number) {
-  const { sessions } = await liveCollections();
-  const now = new Date();
-  const lock = await sessions.findOneAndUpdate({ _id: session._id, inspectionId: { $exists: false }, status: { $ne: "saved" }, $or: [{ analysisAfter: { $exists: false } }, { analysisAfter: { $lte: now } }] }, { $set: { analysisAfter: new Date(+now + 180_000), analysisInFlight: true } }, { returnDocument: "after" });
-  if (!lock) return;
-  try {
-    const image = Buffer.from(preview.slice(preview.indexOf(",") + 1), "base64");
-    const detections = await detectImageObjects(image).catch(() => []);
-    const furniture = detections.filter(d => FURNITURE_CLASSES.has(d.classId)).sort((a, b) => b.confidence - a.confidence).slice(0, 2)
-      .map((d, i) => ({ objectId: `native-${Date.now()}-${i}`, label: d.label, classId: d.classId, boundingBox: d.boundingBox }));
-    const observationId = randomUUID();
-    const result = await analyzeLiveFrame(image, { sessionId: String(session._id), observationId, timestampSeconds, objects: furniture, includeSurfaces: !furniture.length });
-    const findings: LiveFinding[] = result.findings.map(f => ({ ...f, kind: "damage" as const, boundingBox: f.boundingBox ?? undefined, ...(pose ? { pose } : {}) }));
-    if (result.analysisWarnings?.length) await sessions.updateOne({ _id: session._id }, { $addToSet: { analysisWarnings: { $each: result.analysisWarnings } } });
-    await recordLiveAnalysis(session, observationId, { evidenceFrameRef: result.evidenceFrameRef, findings });
-  } catch (error) { console.error("native live analysis failed", error instanceof Error ? error.message : error); }
-  finally { await sessions.updateOne({ _id: session._id }, { $set: { analysisAfter: new Date(Date.now() + 8_000), analysisInFlight: false } }); }
-}
+import type { NativePose } from "./native-validate";
 
 /** Furniture the point sits on or in (with a small margin), else the nearest piece within 40 cm. */
 function elementAt(position: number[], elements: { id: string; category: string; dimensions: number[]; transform: number[] }[]) {

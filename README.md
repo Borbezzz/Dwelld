@@ -228,7 +228,7 @@ lib/
   live/                          Session and analysis contracts
   spatial/                       Manifest types, room boundaries, identity, reconstruction
 ios/                             Xcode project and SwiftUI LiDAR companion (DwelldCapture)
-public/models/                   yolo11n.onnx and other ONNX weights, provenance, licenses
+public/models/                   yolo11n.onnx (YOLO11n weights), provenance, license
 public/onnx/                     Browser ONNX runtime assets and notices
 scripts/
   setup-search-indexes.cjs       Submit the four Atlas Search / Vector Search indexes
@@ -677,7 +677,7 @@ npm test
 npm run build
 ```
 
-`lint` runs TypeScript checking (`tsc --noEmit`), not ESLint. Tests use Node's built-in runner on `tests/*.test.cjs`. Coverage includes detector geometry/decoding, crack candidates, crop coordinates, furniture parsing, partial analysis, frame extraction, spatial validation/identity, comparisons, live tracking/signalling/session invariants, request bounds, and error/database diagnostics.
+`lint` runs TypeScript checking (`tsc --noEmit`), not ESLint. Tests use Node's built-in runner on `tests/*.test.cjs`. Coverage includes detector geometry/decoding, crop coordinates, furniture parsing, partial analysis, frame extraction, spatial validation/identity, comparisons, live tracking/signalling/session invariants, request bounds, and error/database diagnostics.
 
 Tests do not establish model accuracy, physical LiDAR quality, or cross-network connectivity. [Historical verification records](docs/testing) document real Atlas/Gemini/browser probes in specific environments; some predate authentication or native-only handoff and are not fresh production certification.
 
@@ -702,14 +702,13 @@ Native docs record compilation, while actual capture quality, compact-upload lat
 
 ## Models, licensing, and documentation
 
-YOLO11n is vendored with provenance and notices; it names furniture in uploaded videos (browser) and in direct capture imports (server). A YOLOv8n-seg crack model and a LiDAR edge/depth crack check are also in the repository with tests, but the current analysis pipeline does not call them.
+YOLO11n is vendored with provenance and notices; it names furniture in uploaded videos (browser) and in direct capture imports (server).
 
 YOLO-related materials carry AGPL-3.0 terms, including network-use obligations described in their notices; no proprietary model licence is documented. Preserve applicable model/runtime notices. The offline guide documents separate gsplat/COLMAP/Three.js/GaussianSplats3D licensing. A repository-wide application license is not present.
 
 | Guide | Contents |
 | --- | --- |
 | [Object model](public/models/README.md) | Export, checksum, classes, browser inference evidence, licensing. |
-| [Crack model](public/models/CRACK-MODEL.md) | Source revision/checksum, outputs, thresholds, limitations. |
 | [ONNX runtime](public/onnx/README.md) | Browser runtime assets and notices. |
 | [Native companion](ios/README.md) | Xcode setup, capture, privacy. Read alongside newer compact/handoff guides. |
 | [Compact LiDAR upload](docs/lidar-compact-upload.md) | Current preview, selected uploads, local originals, Metal display. |

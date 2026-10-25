@@ -12,7 +12,7 @@ function load(damage) {
   const helperPath=path.resolve('lib/server/analysis-failure.ts');
   const helper=new Module(helperPath,module);helper.filename=helperPath;helper.paths=module.paths;
   helper._compile(ts.transpileModule(fs.readFileSync(helperPath,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText,helperPath);
-  mod.require = (id) => id === './damage-signature' ? {} : id === './analysis-failure' ? helper.exports : id === '../video-sampling' ? {videoSampleTimes:()=>[]} : id === './crack-detector' ? {inspectCracks:async()=>[],CRACK_MODEL:'unit-test-stub'} : id === './damage' ? { validBox: (box) => box, ...damage } : id === './media' || id === './video-frames' ? {} : original(id);
+  mod.require = (id) => id === './damage-signature' ? {} : id === './analysis-failure' ? helper.exports : id === '../video-sampling' ? {videoSampleTimes:()=>[]} :  id === './damage' ? { validBox: (box) => box, ...damage } : id === './media' || id === './video-frames' ? {} : original(id);
   mod._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS, esModuleInterop: true } }).outputText, filename);
   return mod.exports;
 }

@@ -1,7 +1,7 @@
 import {analysisFailure, logAIFailure} from "./analysis-failure";
 import sharp from "sharp";
 import { isFurniture } from "../spatial/furniture";
-import type {DepthPatch} from "./crack-check";
+import type {DepthPatch} from "./depth-patch";
 import { inspectVisibleDamage, scopeForName, type DamageObservation, type Box } from "./damage";
 import { verifyFinding, autoApproveThreshold, reviewDecision, type Verdict } from "./verify";
 

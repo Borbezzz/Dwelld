@@ -37,7 +37,6 @@ test('returned boxes use their own camera pose, without crack or verification ca
  let calls=0;
  const {analyzeFurnitureVideoFrames}=load('lib/server/furniture-video.ts',{
   './damage':{scopeForName:()=>null,inspectVideoDamageBatch:async frames=>{calls++;return new Map(frames.map(f=>[f.timestampSeconds,[observation]]));}},
-  './crack-detector':{inspectCracks:()=>{throw new Error('Unrequested crack inference');}},
   './verify':{autoApproveThreshold:()=>.85,reviewDecision:()=>{throw new Error('Unrequested verification');},verifyFinding:()=>{throw new Error('Unrequested provider call');}},
  });
  const chair={id:'chair',category:'chair',dimensions:[1,1,.2],transform:[...pose.transform.slice(0,14),-2,1]};

@@ -10,7 +10,7 @@ import { randomUUID } from "node:crypto";
 import { getDb } from "./db";
 import { readMedia } from "./media";
 import { indexFindings } from "./search";
-import type { DepthPatch } from "./crack-check";
+import type { DepthPatch } from "./depth-patch";
 import { elementInView, localizeDamageBox, type FrameFinding, type FramePose, type RoomElement } from "./frame-analysis";
 import { insideElement } from "../spatial/identity";
 import { prepareObjectReconstructions } from "./object-reconstruction";
