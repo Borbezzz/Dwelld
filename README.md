@@ -39,7 +39,7 @@ This README reflects the source as of **25 October 2026**. Some older `docs/` fi
 | Native capture | SwiftUI companion uses RoomPlan/ARKit for measured elements, calibrated imagery, and available scene depth/confidence. |
 | Pairing | A signed-in owner creates a laptop session; a QR handoff opens the native companion. |
 | Spatial review | Three.js measured geometry, Gaussian preview/reconstruction, evidence-linked markers, and marker editing. |
-| Verification | A second, adversarial Gemini 4 Argon pass tries to reject every finding (auto-confirm at 85%, auto-dismiss "not damage" at 60%); a LiDAR depth + edge check rejects false cracks. |
+| Verification | A second, adversarial Gemini 4 Argon pass tries to reject every finding: auto-confirm at 85%, auto-dismiss "not damage" at 60%, everything else waits for a person. |
 | Human review | Confirm/reject/reset observations, preserve review history, and add manual damage evidence. |
 | Continue a scan | The phone saves an ARWorldMap; "Continue this scan" relocalizes into it, so new frames land in the original coordinates. |
 | Comparison | Review candidate correspondences and visible changes between earlier and later inspections of the same room. |
@@ -113,7 +113,7 @@ flowchart TD
 
     subgraph checks [Checking a room]
         Detect["Gemini 4 Argon finds damage on each photo"]
-        Crack["Crack model + LiDAR depth/edge check"]
+        Pin["Project each box into 3D with LiDAR depth and camera pose"]
         Verify["Second Argon pass argues against each finding"]
     end
 
@@ -127,8 +127,8 @@ flowchart TD
     Web --> Yolo --> API
     Web --> API
     Phone -->|photos, depth, manifest, progress| API
-    API --> Detect --> Crack --> Verify
-    Verify --> DB
+    API --> Detect --> Verify --> Pin
+    Pin --> DB
     API --> Media
     API --> Seal --> DB
     API --> Search --> DB
@@ -140,9 +140,9 @@ flowchart TD
 
 How to read it:
 
-- An uploaded video is sampled every second in the browser, up to 121 frames. YOLO names the furniture. The server extracts those same seconds with FFmpeg. Gemini 4 Argon checks each photo for damage, and the crack model adds its own candidates.
-- A paired iPhone scan sends the measured room, photos and LiDAR depth during the walk. Argon and the crack model inspect each photo, then a second Argon pass (`thinking_level` medium) tries to reject each suggestion. Two database leases keep that work to two photos at a time.
-- A capture manifest saved without the live session is the path that runs YOLO on the server. It samples the first, middle, and last frame, then Argon and the crack model.
+- An uploaded video is sampled every second in the browser, up to 121 frames. YOLO names the furniture. The server extracts those same seconds with FFmpeg. Gemini 4 Argon checks each photo for damage.
+- A paired iPhone scan sends the measured room, photos and LiDAR depth during the walk. Argon inspects each photo, then a second Argon pass (`thinking_level` medium) tries to reject each suggestion. Two database leases keep that work to two photos at a time.
+- A capture manifest saved without the live session is the path that runs YOLO on the server. It samples the first, middle, and last frame, then Argon.
 - When a scan is saved, every evidence file is fingerprinted and the inspection is sealed into the signed ledger (`lib/server/ledger.ts`).
 - Argon also compares two inspections (`thinking_level` high, in parallel batches), answers questions in Ask Records and the per-scan chat, and describes damage a person marks by hand. Embeddings come from Atlas Automated Embedding (Voyage `voyage-4`), Voyage `voyage-multimodal-3.5` for photos, and `gemini-embedding-001` as a fallback. The dotted line is a manual export to a separate computer, not a service the app calls. QR pairing opens the iPhone app; retained browser WebRTC is not how a scan is uploaded.
 
@@ -158,7 +158,7 @@ Chairs, sofas and beds use the same damage rules as tables, cabinets and doors. 
 | Authentication | Better Auth + MongoDB adapter | Password accounts and cookie sessions. |
 | Storage | MongoDB driver 7, Atlas, GridFS | Structured records and private original/evidence bytes. |
 | Browser inference | YOLO11n, ONNX Runtime Web | Object detection for an uploaded video, in the browser, on CPU/WASM. |
-| Server processing | FFmpeg, Sharp, ONNX Runtime Node | Video frame extraction, image crops, server YOLO for a direct capture import, and the crack model on every photo check. |
+| Server processing | FFmpeg, Sharp, ONNX Runtime Node | Video frame extraction, image crops, server YOLO for a direct capture import. |
 | Generative AI | `@google/genai` | Damage observations, supplemental furniture, comparison, embeddings, answers. |
 | Spatial display | Three.js, GaussianSplats3D | Measured room geometry, splats, spatial annotations. |
 | Native app | SwiftUI, RoomPlan, ARKit, Metal | LiDAR capture, calibrated evidence, depth-based Gaussian preview, upload. |
@@ -183,7 +183,7 @@ flowchart TD
     Handler -->|video saved, or a scan manifest saved| Later["Analysis continues after the response"]
     Handler -->|compare, search, or ask| Now["Gemini runs inside this request"]
     Later --> Gemini["Gemini"]
-    Later --> Onnx["Crack model, and server YOLO on a direct import"]
+    Later --> Onnx["Server YOLO on a direct import"]
     Later --> Store
     Now --> Store
 ```
@@ -223,12 +223,12 @@ lib/
   comparison*.ts, damage-identity.ts, inspection-timeline.ts, processing-workflow.ts,
   scan-recovery.ts, video-sampling.ts        Shared logic used by client and server
   client/                        Browser YOLO, tracking, chunked uploads, signalling, playback
-  server/                        Database, media, analysis, verification, crack check,
+  server/                        Database, media, analysis, verification,
                                  comparison batches, search pipelines, Voyage, ledger, access
   live/                          Session and analysis contracts
   spatial/                       Manifest types, room boundaries, identity, reconstruction
 ios/                             Xcode project and SwiftUI LiDAR companion (DwelldCapture)
-public/models/                   yolo11n.onnx, crack-seg.onnx, provenance, licenses
+public/models/                   yolo11n.onnx and other ONNX weights, provenance, licenses
 public/onnx/                     Browser ONNX runtime assets and notices
 scripts/
   setup-search-indexes.cjs       Submit the four Atlas Search / Vector Search indexes
@@ -320,10 +320,8 @@ flowchart TD
     Extract --> Batch["Two workers, six photos per Gemini call"]
     Batch --> Damage["Gemini: damage on every photo in the batch"]
     Batch --> Extra["Gemini: extra furniture YOLO cannot name, first photo only"]
-    Batch --> Crack["Crack model on each photo"]
     Damage --> Store["Findings saved as pending"]
     Extra --> Store
-    Crack --> Store
     Store --> Second["A second Gemini look can auto-confirm"]
     Second --> Embed["Embed findings for search"]
     Embed --> Review["You confirm, dismiss, or add a mark"]
@@ -333,7 +331,7 @@ flowchart TD
 2. YOLO applies 640×640 letterboxing and class-aware non-maximum suppression, then maps boxes to normalized source coordinates. Browser detections are validated; this path does not independently rerun server YOLO against the uploaded recording.
 3. The server independently selects one-second timestamps, including for older clients that submitted only three frames. FFmpeg extracts original-resolution PNGs using accurate input seeking. Byte-identical photos are deduplicated by hash.
 4. Gemini checks every selected photo for damage on all visible furniture, fixtures and room surfaces. Requests contain up to six timestamped photos, with at most two batches in flight. Missing, duplicated or invented response timestamps fail validation. Each box belongs to its exact source photo.
-5. A specialized crack model adds separately attributed candidate boxes. YOLO supplies the main video inventory. One supplementary furniture check per batch preserves Gemini-assisted observations for categories YOLO does not support.
+5. YOLO supplies the main video inventory. One supplementary furniture check per batch preserves Gemini-assisted observations for categories YOLO does not support.
 6. Findings and evidence are saved with review status `pending`; a bounded second look can auto-confirm findings. Embeddings are indexed in a bounded batch; failed indexing can be resumed separately.
 
 The working analysis budget is approximately 240 seconds within a route declaring `maxDuration=300`. Batch requests have 60-second timeouts. Unchecked batches or failed services produce explicit warnings and `partial` status; a partial inspection is not evidence that unassessed views are undamaged.
@@ -347,7 +345,7 @@ flowchart TD
     Scan["Phone scans with RoomPlan and ARKit"] --> Preview["On-device LiDAR splat preview"]
     Scan --> Photos["About one evidence photo per second"]
     Photos --> Live["Two leased workers"]
-    Live --> Check["Gemini and the crack model"]
+    Live --> Check["Gemini 4 Argon detect and verify"]
     Check --> Laptop["Laptop shows candidates during the scan"]
     Scan --> Manifest["Final manifest upload"]
     Manifest --> Rest["Photos not checked yet, in batches of six"]
@@ -362,7 +360,7 @@ The companion can scan locally before sign-in. Direct upload uses a web-account 
 2. The compact path builds an **untrained LiDAR-initialized Gaussian preview** from measured high-confidence depth. Samples deduplicate into 2.5 cm world voxels with a 150,000-splat cap. An on-device Metal preview renders up to 40,000 accumulated samples.
 3. Paired compact upload sends the preview PLY, roughly one resized RGB evidence photo per second plus up to sixteen extra coverage views, sparse depth/confidence assets, and a manifest. Up to four assets upload concurrently, each with sequential chunks; completed references persist for retry.
 4. The backend validates the manifest and asset ownership. Paired assets must also belong to the session. Reposting the same saved manifest is idempotent; replacing it with a different scan is rejected.
-5. Paired native analysis inspects whole photos even before RoomPlan recognizes furniture, publishes candidates before verification, and checks them with Gemini plus the specialist crack model. Two database-leased live workers prioritize recent queued views. Saving reuses completed live checks and analyses remaining photos in batches of six, with explicit warnings for failed/unassessed photos. The older standalone spatial-import service still samples first/middle/last frames.
+5. Paired native analysis inspects whole photos even before RoomPlan recognizes furniture, publishes candidates before verification, and checks them with a second, adversarial Argon pass. Two database-leased live workers prioritize recent queued views. Saving reuses completed live checks and analyses remaining photos in batches of six, with explicit warnings for failed/unassessed photos. The older standalone spatial-import service still samples first/middle/last frames.
 6. High-confidence depth projects evidence into world coordinates. Compatible RoomPlan elements can group object observations within the scan; unresolved identity stays explicit. Marker creation preserves existing user edits.
 
 World coordinates are ARKit right-handed, Y-up, in metres; matrices are column-major. Depth is little-endian float32 metres and confidence is uint8 0–2. Camera intrinsics must match encoded image dimensions. Stored registration does not itself prove good alignment.
@@ -704,7 +702,7 @@ Native docs record compilation, while actual capture quality, compact-upload lat
 
 ## Models, licensing, and documentation
 
-YOLO11n and a specialized YOLOv8n-seg crack model are vendored with provenance/notices. Crack inference uses bounding-box candidates, not segmentation masks or structural severity. High-resolution crack checks include overlapping crops mapped back to source coordinates. Scores are model outputs, not calibrated certainty.
+YOLO11n is vendored with provenance and notices; it names furniture in uploaded videos (browser) and in direct capture imports (server). A YOLOv8n-seg crack model and a LiDAR edge/depth crack check are also in the repository with tests, but the current analysis pipeline does not call them.
 
 YOLO-related materials carry AGPL-3.0 terms, including network-use obligations described in their notices; no proprietary model licence is documented. Preserve applicable model/runtime notices. The offline guide documents separate gsplat/COLMAP/Three.js/GaussianSplats3D licensing. A repository-wide application license is not present.
 

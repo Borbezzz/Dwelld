@@ -18,7 +18,7 @@ Move-in inventories today are paper checklists and a handful of phone photos wit
 1. **The problem:** one in five renters say their deposit was cut unfairly, and only 4% challenge it, because they have no proof.
 2. **The promise:** "Scan your room on day one. Dwelld builds it in 3D, finds and pins every mark, and remembers it."
 3. **Capture:** the iPhone LiDAR scan builds the room live on the laptop.
-4. **Understand:** Gemini 4 Argon flags candidates. A second Argon pass argues against each one. A geometric check rejects fake "cracks" (board edges, door gaps). Anything the AI missed, you tap, and Argon describes it in context.
+4. **Understand:** Gemini 4 Argon flags candidates. A second Argon pass argues against each one. Anything the AI missed, you tap, and Argon describes it in context.
 5. **Remember:** every finding is in MongoDB Atlas, pinned to a 3D position with its source photo, and searchable by keywords, by meaning and by **what the photo looks like**.
 6. **Prove:** at move-out, scan again (or continue the earlier scan; it relocalizes into the same coordinates). Argon compares both inspections side by side: same cabinet, same chip, already there at move-in.
 7. **Close:** "Dwelld doesn't pretend to find everything. It makes every claim checkable: who saw it, where, when, and how sure we are."
@@ -31,7 +31,7 @@ We don't claim fully automatic damage detection. What we built instead lines up 
 
 | Criterion (weight) | What we show | Where in code |
 | --- | --- | --- |
-| **Working live demo (50%)**: real inputs, under 3 min, Argon used effectively, **real verification loop** | A live LiDAR scan of a real room on stage. Argon checks each evidence photo as it arrives. **Two verification loops with concrete pass/fail signals:** (1) a second, adversarial Argon pass (`thinking_level: medium`) tries to reject every finding; ≥0.85 confidence auto-approves, "not damage" ≥0.6 drops it. (2) A deterministic edge + LiDAR-depth test accepts or rejects every crack: a depth step of 1.2 cm or more, or a brightness step across the line, means it's an object edge. | `lib/server/frame-analysis.ts`, `lib/server/verify.ts`, `lib/server/crack-check.ts` |
+| **Working live demo (50%)**: real inputs, under 3 min, Argon used effectively, **real verification loop** | A live LiDAR scan of a real room on stage. Argon checks each evidence photo as it arrives. **A verification loop with a concrete pass/fail signal:** a second, adversarial Argon pass (`thinking_level: medium`) tries to reject every finding; ≥0.85 confidence auto-approves, "not damage" ≥0.6 drops it. Everything in between stays amber for a person. | `lib/server/frame-analysis.ts`, `lib/server/verify.ts` |
 | **Problem and usefulness (25%)**: a real user, could become a product | Students and renters disputing deposit deductions. Product path: renters and students first, then letting agents and universities who run thousands of check-ins and check-outs. | — |
 | **Needs Argon (15%)** | See "Why Gemini 4 Argon" below. **People stay in control:** nothing is final until a person confirms it. Rejections are visible, not hidden. No action leaves the app without the user. | `components/room-detail.tsx` (review), `app/api/inspections/[id]/findings` |
 | **Clarity (10%)**: user and product clear in 3 min, no slides | The live demo uses the product only, with no slides. | — |
@@ -80,12 +80,12 @@ Setup on the deployed app: set `VOYAGE_API_KEY` in Vercel, open `/search`, click
 | Criterion | What we show |
 | --- | --- |
 | **Real-world usefulness** | Deposit disputes at the end of every tenancy. Renters, students and the people who check them in and out. |
-| **How well it reads the world**, incl. messy inputs | Real LiDAR + RGB from an iPhone. Motion-aware frame picking (the steadier of each pair of frames). Depth-confidence filtering (LiDAR confidence 2 only, 0.2–6 m). Coverage warnings ("photos and LiDAR geometry do not cover every surface"). The crack check rejects board edges and door gaps using depth. Duplicate findings are merged by 3D position. A scan can be **resumed later** by relocalizing with ARKit into the same coordinates. |
+| **How well it reads the world**, incl. messy inputs | Real LiDAR + RGB from an iPhone. Motion-aware frame picking (the steadier of each pair of frames). Depth-confidence filtering (LiDAR confidence 2 only, 0.2–6 m). Coverage warnings ("photos and LiDAR geometry do not cover every surface"). Duplicate findings are merged by 3D position. A scan can be **resumed later** by relocalizing with ARKit into the same coordinates. |
 | **Technical execution** | End to end: phone scan → live 3D on the laptop → Gemini + YOLO + geometry checks → Atlas → search → move-out comparison → report. |
 | **Responsibility: privacy** | Full-resolution originals **stay on the phone**. Only sampled evidence photos and a compact point cloud are uploaded. Dwelld is meant for **empty rooms** at move-in and move-out. Every record and media file is owner-scoped and served `private, no-store`. Room scans aren't public. We don't detect or blur faces; the empty-room rule is the safeguard, and we say so. |
-| **Responsibility: honesty about uncertainty** | Every AI finding starts **amber (needs a look)** until a person confirms it, unless the verifier is at least 85% sure (the threshold is configurable). The verifier's verdict and confidence are stored and shown. Rejected crack candidates are reported, not silently dropped. Search shows which index answered and when a fallback was used. The comparison states that "unseen areas cannot establish absence". A missing detection is never presented as "no damage". |
+| **Responsibility: honesty about uncertainty** | Every AI finding starts **amber (needs a look)** until a person confirms it, unless the verifier is at least 85% sure (the threshold is configurable). The verifier's verdict and confidence are stored and shown. Dismissed findings stay visible and can be undone. Search shows which index answered and when a fallback was used. The comparison states that "unseen areas cannot establish absence". A missing detection is never presented as "no damage". |
 
-**Models and data sources:** Gemini 4 Argon (detection, verification, describe-at-point, comparison, Q&A). gemini-embedding-001. Voyage voyage-4 (via Atlas Automated Embedding), voyage-multimodal-3.5 and rerank-3. YOLO11n (Ultralytics, AGPL-3.0, ONNX in the browser) for object detection on uploaded walkthrough videos. A YOLOv8n-seg crack model (`public/models/CRACK-MODEL.md`) as a crack candidate source, screened by our edge + depth check. Apple RoomPlan (furniture and wall geometry) and ARKit (LiDAR depth, camera poses, world-map relocalization). **Data:** only the user's own phone captures (RGB, LiDAR depth, camera poses). No third-party or open datasets.
+**Models and data sources:** Gemini 4 Argon (detection, verification, describe-at-point, comparison, Q&A). gemini-embedding-001. Voyage voyage-4 (via Atlas Automated Embedding), voyage-multimodal-3.5 and rerank-3. YOLO11n (Ultralytics, AGPL-3.0, ONNX in the browser) for object detection on uploaded walkthrough videos. Apple RoomPlan (furniture and wall geometry) and ARKit (LiDAR depth, camera poses, world-map relocalization). **Data:** only the user's own phone captures (RGB, LiDAR depth, camera poses). No third-party or open datasets.
 
 ### Proving when: the evidence seal
 
@@ -95,7 +95,7 @@ The obvious question is "how do I know this was taken at move-in?" Dwelld seals 
 
 - **Phone:** SwiftUI app (`ios/DwelldCapture`, iOS 17), RoomPlan, ARKit (LiDAR `sceneDepth`, `ARWorldMap` save and relocalize), Metal live splat renderer, Keychain QR pairing.
 - **Web:** Next.js 15, React 19, TypeScript, Three.js, `@mkkellogg/gaussian-splats-3d` (LiDAR-initialized Gaussian splats), WebRTC with TURN, deployed on Vercel.
-- **AI:** Gemini 4 Argon and gemini-embedding-001 via `@google/genai`; Voyage AI (voyage-4, voyage-multimodal-3.5, rerank-3) via the Atlas Embedding API; YOLO11n and the crack model via onnxruntime; our own crack edge + depth check (`sharp`, Sobel, Hough transform, plane-plus-step depth fit).
+- **AI:** Gemini 4 Argon and gemini-embedding-001 via `@google/genai`; Voyage AI (voyage-4, voyage-multimodal-3.5, rerank-3) via the Atlas Embedding API; YOLO11n via onnxruntime.
 - **Data:** MongoDB Atlas (M0) with GridFS, Atlas Search, Vector Search, Automated Embedding, `$rankFusion` hybrid search. Better Auth with the MongoDB adapter.
 - **Media:** sharp, ffmpeg-static.
 
