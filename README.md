@@ -6,7 +6,7 @@ Moving into a place? Give it a quick scan so you have a record of what was alrea
 
 You can upload a video or pair a LiDAR-capable iPhone for a measured 3D room. Dwelld then helps you review observations, place or move damage markers, search your records, and export a report. **You stay in charge of confirming findings:** AI can miss things and an inspection alone cannot decide who caused damage.
 
-This README reflects the source as of **24 October 2026**. Some older `docs/` files record earlier designs or one-off tests; when they differ, current code takes precedence.
+This README reflects the source as of **25 October 2026**. Some older `docs/` files record earlier designs or one-off tests; when they differ, current code takes precedence.
 
 ## Contents
 
@@ -33,14 +33,19 @@ This README reflects the source as of **24 October 2026**. Some older `docs/` fi
 | Area | Implemented behavior |
 | --- | --- |
 | Accounts | Better Auth email/password accounts and owner-scoped records. |
+| Spaces and sharing | Group rooms under a Space (a property). Invite a tenant or landlord with an email-bound, seven-day, one-use link; members get read access to shared rooms and can run their own inspections. |
 | Rooms | Create/rename rooms and reopen inspection history. |
 | Video inspection | Upload recordings, detect furniture/fixtures on sampled frames, and save damage observations with timestamped evidence. |
 | Native capture | SwiftUI companion uses RoomPlan/ARKit for measured elements, calibrated imagery, and available scene depth/confidence. |
 | Pairing | A signed-in owner creates a laptop session; a QR handoff opens the native companion. |
 | Spatial review | Three.js measured geometry, Gaussian preview/reconstruction, evidence-linked markers, and marker editing. |
+| Verification | A second, adversarial Gemini 4 Argon pass tries to reject every finding (auto-confirm at 85%, auto-dismiss "not damage" at 60%); a LiDAR depth + edge check rejects false cracks. |
 | Human review | Confirm/reject/reset observations, preserve review history, and add manual damage evidence. |
+| Continue a scan | The phone saves an ARWorldMap; "Continue this scan" relocalizes into it, so new frames land in the original coordinates. |
 | Comparison | Review candidate correspondences and visible changes between earlier and later inspections of the same room. |
-| Retrieval | Atlas text, semantic, and hybrid search; source-cited answers about saved records. |
+| Evidence seal | Every saved scan's files are SHA-256 fingerprinted into a hash chain signed with Ed25519; reports re-verify it live. |
+| Retrieval | Atlas Search, Automated Embedding, Voyage photo vectors and `$rankFusion` hybrid search; source-cited answers about saved records. |
+| Argon chat | A movable per-scan chat answers questions about a room and its findings with inline evidence and video timestamps, and can explain or retry a stuck scan. |
 | Export | Structured JSON and browser print/save-to-PDF reports. |
 
 ```mermaid
@@ -57,7 +62,7 @@ flowchart LR
     Review --> Report["Export a report"]
 ```
 
-AI observations require review. A missing detection or completed analysis does not establish absence of damage. A confirmed finding records a user's review decision; it does not determine liability, structural safety, or repair cost. Independent RoomPlan scans have independent origins and are not automatically registered.
+AI observations require review. A missing detection or completed analysis does not establish absence of damage. A confirmed finding records a user's review decision; it does not determine liability, structural safety, or repair cost. A brand-new RoomPlan scan has its own origin and is not automatically registered to an older one; use **Continue this scan** to relocalize into the earlier scan's coordinates.
 
 The repository retains browser WebRTC capture/signalling infrastructure, but the **current public QR pages open the native LiDAR companion only**. They no longer expose the earlier browser-phone recording fallback. Uploaded video remains a separate web capture option.
 
@@ -101,47 +106,45 @@ The web application is a **Next.js App Router application** with React client in
 
 ```mermaid
 flowchart TD
-    Web["Web app: review, search, 3D room"]
-    Phone["iPhone app: RoomPlan and LiDAR"]
-    Yolo["Browser YOLO, video uploads only"]
-    API["Next.js API: sign-in, uploads, review"]
+    Web["Web app: review, 3D room, search, Argon chat"]
+    Phone["iPhone app: RoomPlan, ARKit LiDAR, world map"]
+    Yolo["Browser YOLO11n, video uploads only"]
+    API["Next.js API: auth, uploads, review, sharing"]
 
-    subgraph checks [Three ways a room is checked]
-        Video["Uploaded video: FFmpeg, Gemini, crack model"]
-        Paired["Paired scan: Gemini and crack model on each photo"]
-        Direct["Direct import: server YOLO, then Gemini and crack model"]
+    subgraph checks [Checking a room]
+        Detect["Gemini 4 Argon finds damage on each photo"]
+        Crack["Crack model + LiDAR depth/edge check"]
+        Verify["Second Argon pass argues against each finding"]
     end
 
-    Gemini["Gemini: damage, compare, embed, answer"]
-    DB[("MongoDB Atlas: records, accounts, live session")]
-    Media[("GridFS: video, photos, splats")]
-    Search["Atlas text and vector search"]
+    Seal["Evidence seal: SHA-256 hash chain, Ed25519 signature"]
+    DB[("MongoDB Atlas: rooms, inspections, findings, spaces, sessions, accounts")]
+    Media[("GridFS: video, photos, depth, splats, world maps")]
+    Search["Atlas Search + Automated Embedding + Voyage photo vectors, fused by $rankFusion, Voyage rerank-3"]
+    Argon["Gemini 4 Argon: compare scans, answer questions"]
     GPU["Optional CUDA machine: COLMAP and gsplat"]
 
     Web --> Yolo --> API
     Web --> API
-    Phone -->|photos, manifest, progress| API
-    API --> DB
+    Phone -->|photos, depth, manifest, progress| API
+    API --> Detect --> Crack --> Verify
+    Verify --> DB
     API --> Media
-    API --> Video
-    API --> Paired
-    API --> Direct
-    Video --> Gemini
-    Paired --> Gemini
-    Direct --> Gemini
-    API -->|questions and comparisons| Gemini
-    API --> Search
-    Search --> DB
+    API --> Seal --> DB
+    API --> Search --> DB
+    API --> Argon
+    Search --> Argon
     Phone -.->|export the capture folder| GPU
     GPU -.->|import a trained PLY| API
 ```
 
 How to read it:
 
-- An uploaded video is sampled every second in the browser, up to 121 frames. YOLO names the furniture. The server extracts those same seconds with FFmpeg. Gemini checks each photo for damage, and the crack model adds its own candidates.
-- A paired iPhone scan sends the measured room and photos during the walk. Gemini and the crack model inspect each photo, then a second Gemini pass checks the suggestions. Two database leases keep that work to two photos at a time.
-- A capture manifest saved without the live session is the path that runs YOLO on the server. It samples the first, middle, and last frame, then Gemini and the crack model.
-- Gemini also compares two inspections, embeds findings, and answers questions about saved records. Atlas Search queries those records. The dotted line is a manual export to a separate computer, not a service the app calls. QR pairing opens the iPhone app; retained browser WebRTC is not how a scan is uploaded.
+- An uploaded video is sampled every second in the browser, up to 121 frames. YOLO names the furniture. The server extracts those same seconds with FFmpeg. Gemini 4 Argon checks each photo for damage, and the crack model adds its own candidates.
+- A paired iPhone scan sends the measured room, photos and LiDAR depth during the walk. Argon and the crack model inspect each photo, then a second Argon pass (`thinking_level` medium) tries to reject each suggestion. Two database leases keep that work to two photos at a time.
+- A capture manifest saved without the live session is the path that runs YOLO on the server. It samples the first, middle, and last frame, then Argon and the crack model.
+- When a scan is saved, every evidence file is fingerprinted and the inspection is sealed into the signed ledger (`lib/server/ledger.ts`).
+- Argon also compares two inspections (`thinking_level` high, in parallel batches), answers questions in Ask Records and the per-scan chat, and describes damage a person marks by hand. Embeddings come from Atlas Automated Embedding (Voyage `voyage-4`), Voyage `voyage-multimodal-3.5` for photos, and `gemini-embedding-001` as a fallback. The dotted line is a manual export to a separate computer, not a service the app calls. QR pairing opens the iPhone app; retained browser WebRTC is not how a scan is uploaded.
 
 Chairs, sofas and beds use the same damage rules as tables, cabinets and doors. Cushion creases, fabric weave and bedding are left out. A direct import checks up to four detected objects, one kind first. A not-damage verdict at 60 percent verifier confidence or more is dismissed and can be undone. Clear damage still auto-approves at 85 percent.
 
@@ -192,38 +195,48 @@ A video inspection and a saved scan return their id first, then keep analysing i
 ```text
 app/
   api/
-    auth/[...all]/             Better Auth handler
-    rooms/                     Owned rooms and correspondence history
-    inspections/               Findings, video, reports, spatial capture
-    spatial/inspections/       Create native-only inspection
-    live/                      Pairing, signals, events, uploads, analysis
-    comparisons/               Comparison generation and review
-    uploads/, media/           Chunked upload and private streaming
-    search/, ask/              Retrieval and cited answers
-  rooms/[roomId]/              Room history and comparison pages
-  inspections/[inspectionId]/  Inspection, spatial, and report pages
-  live/                       Capture workspace and session page
-  connect/, scan/              Native QR handoff (scan is a legacy URL)
-  sign-in/, profile/          Account UI
-components/                   Dashboard, capture, review, search, spatial UI
-  live/                       Session workspace and feed
+    auth/[...all]/               Better Auth handler
+    spaces/, invites/            Spaces (properties), members, invitation links
+    rooms/                       Rooms and confirmed correspondences
+    inspections/                 Findings, video, report, seal, retries, room boundaries, spatial capture
+    spatial/inspections/         Create a native-only inspection
+    live/                        Pairing, signals, events, frames, marks, uploads, world map, analysis
+    comparisons/                 Move-in vs move-out comparison and review
+    uploads/, media/             Chunked upload and private GridFS streaming (byte ranges)
+    search/                      Search, index setup/prepare, vector-space explorer
+    ask/, scan-chat/             Ask Records and the per-scan Argon chat
+    scan-recovery/               Find and resume unfinished scans
+    ledger/key/                  Public Ed25519 key for seal verification
+    diagnostics/ai/              Model reachability check
+  spaces/[spaceId]/              Space overview
+  rooms/[roomId]/                Room history; compare/ for move-in vs move-out
+  inspections/[inspectionId]/    Inspection review; spatial/ and report/ pages
+  live/                          Capture workspace and session page
+  search/                        Atlas search lab
+  connect/, scan/                Native QR handoff (scan is a legacy URL)
+  invite/, sign-in/, profile/    Invitation acceptance and account UI
+components/                      Dashboard, capture, review, comparison, search, spatial, chat UI
+  live/                          Live scan workspace, feed and batches
 lib/
-  auth.ts, auth-client.ts     Server/client auth configuration
-  api.ts, types.ts            API client and record contracts
-  client/                    Browser inference, tracking, upload, signalling
-  server/                    Database, media, analysis, search, access
-  live/                      Session and analysis contracts
-  spatial/                   Manifest types, projection, identity association
-  native-distribution.ts     Apple installation URL, currently unset
-ios/                         Xcode project and native companion
-public/models/               ONNX weights, provenance, licenses
-public/onnx/                 Browser runtime assets and notices
+  auth.ts, auth-client.ts, auth-origins.ts   Server/client auth configuration
+  api.ts, types.ts               API client and record contracts
+  comparison*.ts, damage-identity.ts, inspection-timeline.ts, processing-workflow.ts,
+  scan-recovery.ts, video-sampling.ts        Shared logic used by client and server
+  client/                        Browser YOLO, tracking, chunked uploads, signalling, playback
+  server/                        Database, media, analysis, verification, crack check,
+                                 comparison batches, search pipelines, Voyage, ledger, access
+  live/                          Session and analysis contracts
+  spatial/                       Manifest types, room boundaries, identity, reconstruction
+ios/                             Xcode project and SwiftUI LiDAR companion (DwelldCapture)
+public/models/                   yolo11n.onnx, crack-seg.onnx, provenance, licenses
+public/onnx/                     Browser ONNX runtime assets and notices
 scripts/
-  setup-search-indexes.cjs    Submit Atlas text/vector indexes
-  assign-legacy-owner.cjs     Audited legacy ownership migration
-  spatial/                   Offline reconstruction wrapper
-tests/                       Node regression suite
-docs/                        Feature guides and historical verification
+  setup-search-indexes.cjs       Submit the four Atlas Search / Vector Search indexes
+  assign-legacy-owner.cjs        Audited legacy ownership migration
+  spatial/                       Offline reconstruction wrapper
+  vercel/, verify-*.{py,sh}      Build skipping and native-build checks
+tests/                           Node regression suite (node --test)
+docs/                            Feature guides, audits and historical verification
 ```
 
 ## Requirements and setup
@@ -267,7 +280,7 @@ npm run start -- --port 3001
    node --env-file=.env.local scripts/setup-search-indexes.cjs
    ```
 
-5. Wait until `findings_search` and `findings_vector` are queryable in Atlas. Index submission and propagation are asynchronous.
+5. Wait until all four indexes (`findings_search`, `findings_auto`, `findings_vector`, `findings_image`) are queryable in Atlas. Index submission and propagation are asynchronous. The **Create or update indexes** button on `/search` does the same thing.
 
 Use the setup script as the current index definition, including ownership filters; older search documents may describe previous mappings.
 
@@ -285,6 +298,8 @@ Keep secrets in ignored environment files or deployment configuration. Gemini/Mo
 | `VOYAGE_API_KEY` | Photo search, rerank | Voyage AI by MongoDB model API key (Atlas UI → AI Models). Used against `https://ai.mongodb.com/v1` (`VOYAGE_BASE_URL` to change). Automated Embedding needs no key here. |
 | `LEDGER_SECRET` | Optional | Secret for the evidence seal's Ed25519 signing key (32+ characters). Defaults to `BETTER_AUTH_SECRET`; changing it means new seals use a new key. |
 | `ATLAS_AUTO_EMBED_MODEL` | Optional | Model for the `findings_auto` autoEmbed index, default `voyage-4`. |
+| `GEMINI_VERIFY_MODEL` | Optional override | Model for the adversarial verification pass; defaults to `GEMINI_MODEL`. |
+| `AUTO_APPROVE_THRESHOLD` | Optional | Verifier confidence that auto-confirms a finding, default `0.85`. |
 | `GEMINI_MODEL` | Optional override | Generation model; source/example default is `gemini-4-argon`. Verify access in your project; a configured identifier does not establish availability. |
 | `TURN_URLS` | Optional WebRTC path | Comma-separated `turn:`/`turns:` endpoints. |
 | `TURN_SHARED_SECRET` | Optional WebRTC path | TURN REST HMAC secret for a compatible provider. |
@@ -558,8 +573,9 @@ Implementation: [ledger core](lib/server/ledger-core.ts), [GridFS hashing and ve
 flowchart TD
     Earlier["Earlier scan"] --> Lease["One comparison at a time for this room"]
     Later["Later scan"] --> Lease
-    Lease --> Evidence["Up to 100 findings and 6 photos each side"]
-    Evidence --> Gemini["Gemini proposes what changed"]
+    Lease --> Evidence["Up to 100 findings and 16 photos each side"]
+    Evidence --> Batches["Up to 4 parallel Argon batches, each sees both scans"]
+    Batches --> Gemini["Gemini 4 Argon proposes what changed"]
     Gemini --> You{"Your review"}
     You -->|confirm a pair| Link["Correspondence saved"]
     You -->|reject or reset| Off["Link removed, originals kept"]
@@ -569,7 +585,7 @@ flowchart TD
 
 The API requires distinct owned inspections of the same room, an earlier baseline, a later current inspection, and `completed`/`partial` status. The intended workflow is move-in/move-out review; validation checks chronology rather than requiring specific type labels.
 
-Comparison considers up to 100 non-rejected observations and six distinct evidence frames per side. Missing evidence can be supplemented from original recordings/native RGB frames, labelled as views rather than detections. Source and model-image hashes are retained.
+Comparison considers up to 100 non-rejected observations and 16 distinct evidence frames per side (`COMPARE_IMAGES_PER_SIDE` in `lib/server/comparison.ts`). The targets are split into up to four batches that run in parallel with `thinking_level` high; every batch receives both scans' full image context but only reports on its own targets, and results are merged and de-duplicated by damage identity. Progress is shown per batch. Missing evidence can be supplemented from original recordings/native RGB frames, labelled as views rather than detections. Source and model-image hashes are retained.
 
 Gemini proposes `pre_existing`, `potentially_new`, `missing_or_changed`, `no_longer_visible`, `uncertain`, or `unchanged` candidates. Parsing constrains finding IDs and comparable-view claims. Review history is appended; confirming a two-sided candidate activates a correspondence, while rejection/reset deactivates it transactionally. Originals remain separate. Visual comparison does not register independent scan coordinates or establish legal responsibility.
 
